@@ -63,10 +63,8 @@ CommandLineHandler.prototype = {
       appPath = cmdLine.getArgument(0);
     } catch (e) {
       if (e.result == Cr.NS_ERROR_INVALID_ARG) {
-        dump("error: no app provided\n");
-        Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
-        return;
-      } else {
+        appPath = Services.prefs.getCharPref("app.chromeURL");
+       } else {
         throw e;
       }
     }
