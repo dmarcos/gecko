@@ -1,4 +1,5 @@
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Components.utils.import("resource:///modules/SitePermissions.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
   "resource://gre/modules/Promise.jsm");
@@ -7,7 +8,7 @@ const PREF_PERMISSION_FAKE = "media.navigator.permission.fake";
 const CONTENT_SCRIPT_HELPER = getRootDirectory(gTestPath) + "get_user_media_content_script.js";
 
 function waitForCondition(condition, nextTest, errorMsg, retryTimes) {
-  retryTimes = typeof retryTimes !== 'undefined' ?  retryTimes : 30;
+  retryTimes = typeof retryTimes !== 'undefined' ? retryTimes : 30;
   var tries = 0;
   var interval = setInterval(function() {
     if (tries >= retryTimes) {
@@ -125,7 +126,7 @@ function* assertWebRTCIndicatorStatus(expected) {
               win.removeEventListener("unload", listener);
               resolve();
             }
-          }, false);
+          });
         });
       }
     }

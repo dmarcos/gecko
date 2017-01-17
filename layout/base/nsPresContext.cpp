@@ -77,6 +77,7 @@
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/ServoRestyleManagerInlines.h"
+#include "mozilla/Telemetry.h"
 
 #if defined(MOZ_WIDGET_GTK)
 #include "gfxPlatformGtk.h" // xxx - for UseFcFontList
@@ -259,6 +260,8 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   NS_ASSERTION(mDocument, "Null document");
 
   mCounterStylesDirty = true;
+
+  mInteractionTimeEnabled = true;
 
   // if text perf logging enabled, init stats struct
   if (MOZ_LOG_TEST(gfxPlatform::GetLog(eGfxLog_textperf), LogLevel::Warning)) {
@@ -1365,15 +1368,6 @@ static nsIContent*
 GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
                                         ScrollbarStyles *aStyles)
 {
-  // Set default
-  *aStyles = ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO);
-
-  // We never mess with the viewport scroll state
-  // when printing or in print preview
-  if (aPresContext->IsPaginated()) {
-    return nullptr;
-  }
-
   nsIDocument* document = aPresContext->Document();
   Element* docElement = document->GetRootElement();
 
@@ -1386,7 +1380,6 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
   StyleSetHandle styleSet = aPresContext->StyleSet();
   RefPtr<nsStyleContext> rootStyle;
   rootStyle = styleSet->ResolveStyleFor(docElement, nullptr,
-                                        ConsumeStyleBehavior::DontConsume,
                                         LazyComputeBehavior::Allow);
   if (CheckOverflow(rootStyle->StyleDisplay(), aStyles)) {
     // tell caller we stole the overflow style from the root element
@@ -1416,7 +1409,6 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
 
   RefPtr<nsStyleContext> bodyStyle;
   bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle,
-                                        ConsumeStyleBehavior::DontConsume,
                                         LazyComputeBehavior::Allow);
 
   if (CheckOverflow(bodyStyle->StyleDisplay(), aStyles)) {
@@ -1430,8 +1422,15 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
 nsIContent*
 nsPresContext::UpdateViewportScrollbarStylesOverride()
 {
-  nsIContent* propagatedFrom =
-    GetPropagatedScrollbarStylesForViewport(this, &mViewportStyleScrollbar);
+  // Start off with our default styles, and then update them as needed.
+  mViewportStyleScrollbar = ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO,
+                                            NS_STYLE_OVERFLOW_AUTO);
+  nsIContent* propagatedFrom = nullptr;
+  // Don't propagate the scrollbar state in printing or print preview.
+  if (!IsPaginated()) {
+    propagatedFrom =
+      GetPropagatedScrollbarStylesForViewport(this, &mViewportStyleScrollbar);
+  }
 
   nsIDocument* document = Document();
   if (Element* fullscreenElement = document->GetFullscreenElement()) {
@@ -1448,6 +1447,24 @@ nsPresContext::UpdateViewportScrollbarStylesOverride()
   }
 
   return propagatedFrom;
+}
+
+bool
+nsPresContext::ElementWouldPropagateScrollbarStyles(Element* aElement)
+{
+  MOZ_ASSERT(IsPaginated(), "Should only be called on paginated contexts");
+  if (aElement->GetParent() && !aElement->IsHTMLElement(nsGkAtoms::body)) {
+    // We certainly won't be propagating from this element.
+    return false;
+  }
+
+  // Go ahead and just call GetPropagatedScrollbarStylesForViewport, but update
+  // a dummy ScrollbarStyles we don't care about.  It'll do a bit of extra work,
+  // but saves us having to have more complicated code or more code duplication;
+  // in practice we will make this call quite rarely, because we checked for all
+  // the common cases above.
+  ScrollbarStyles dummy(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO);
+  return GetPropagatedScrollbarStylesForViewport(this, &dummy) == aElement;
 }
 
 void
@@ -1581,6 +1598,71 @@ nsPresContext::IsTopLevelWindowInactive()
   nsCOMPtr<nsPIDOMWindowOuter> domWindow = rootItem->GetWindow();
 
   return domWindow && !domWindow->IsActive();
+}
+
+void
+nsPresContext::RecordInteractionTime(InteractionType aType)
+{
+  if (!mInteractionTimeEnabled) {
+    return;
+  }
+
+  // Array of references to the member variable of each time stamp
+  // for the different interaction types, keyed by InteractionType.
+  TimeStamp nsPresContext::*interactionTimes[] = {
+    &nsPresContext::mFirstClickTime,
+    &nsPresContext::mFirstKeyTime,
+    &nsPresContext::mFirstMouseMoveTime,
+    &nsPresContext::mFirstScrollTime
+  };
+
+  // Array of histogram IDs for the different interaction types,
+  // keyed by InteractionType.
+  Telemetry::ID histogramIds[] = {
+    Telemetry::TIME_TO_FIRST_CLICK,
+    Telemetry::TIME_TO_FIRST_KEY_INPUT,
+    Telemetry::TIME_TO_FIRST_MOUSE_MOVE,
+    Telemetry::TIME_TO_FIRST_SCROLL
+  };
+
+  TimeStamp& interactionTime = this->*(
+    interactionTimes[static_cast<uint32_t>(aType)]);
+  if (!interactionTime.IsNull()) {
+    // We have already recorded an interaction time.
+    return;
+  }
+
+  // Record the interaction time if it occurs after the first paint
+  // of the top level content document.
+  nsPresContext* topContentPresContext =
+    GetToplevelContentDocumentPresContext();
+
+  if (!topContentPresContext) {
+    // There is no top content pres context so we don't care
+    // about the interaction time. Record a value anyways to avoid
+    // trying to find the top content pres context in future interactions.
+    interactionTime = TimeStamp::Now();
+    return;
+  }
+
+  if (topContentPresContext->mFirstPaintTime.IsNull()) {
+    // Top content pres context has not painted yet, so don't record
+    // interaction time.
+    return;
+  }
+
+  interactionTime = TimeStamp::Now();
+  // Only the top level content pres context reports first interaction
+  // time to telemetry (if it hasn't already done so).
+  if (this == topContentPresContext) {
+    if (Telemetry::CanRecordExtended()) {
+       double millis = (interactionTime - mFirstPaintTime).ToMilliseconds();
+       Telemetry::Accumulate(histogramIds[static_cast<uint32_t>(aType)],
+                             millis);
+    }
+  } else {
+    topContentPresContext->RecordInteractionTime(aType);
+  }
 }
 
 nsITheme*
@@ -2471,6 +2553,10 @@ nsPresContext::NotifyDidPaintForSubtree(uint32_t aFlags, uint64_t aTransactionId
       new DelayedFireDOMPaintEvent(this, &mUndeliveredInvalidateRequestsBeforeLastPaint,
                                    aTransactionId);
     nsContentUtils::AddScriptRunner(ev);
+
+    if (mFirstPaintTime.IsNull()) {
+      mFirstPaintTime = TimeStamp::Now();
+    }
   }
 
   NotifyDidPaintSubdocumentCallbackClosure closure = { aFlags, aTransactionId, false };

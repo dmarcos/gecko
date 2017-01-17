@@ -32,9 +32,7 @@
 #include "mozilla/Telemetry.h"
 #include "BatteryManager.h"
 #include "mozilla/dom/DeviceStorageAreaListener.h"
-#ifdef MOZ_GAMEPAD
 #include "mozilla/dom/GamepadServiceTest.h"
-#endif
 #include "mozilla/dom/PowerManager.h"
 #include "mozilla/dom/WakeLock.h"
 #include "mozilla/dom/power/PowerManagerService.h"
@@ -46,6 +44,7 @@
 #include "mozilla/dom/StorageManager.h"
 #include "mozilla/dom/TCPSocket.h"
 #include "mozilla/dom/VRDisplay.h"
+#include "mozilla/dom/WebAuthentication.h"
 #include "mozilla/dom/workers/RuntimeService.h"
 #include "mozilla/Hal.h"
 #include "nsISiteSpecificUserAgent.h"
@@ -206,6 +205,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPowerManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConnection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStorageManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAuthentication)
 #ifdef MOZ_AUDIO_CHANNEL_MANAGER
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioChannelManager)
 #endif
@@ -217,11 +217,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaKeySystemAccessManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDeviceStorageAreaListener)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPresentation)
-#ifdef MOZ_GAMEPAD
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGamepadServiceTest)
-#endif
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVRGetDisplaysPromises)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(Navigator)
@@ -307,12 +304,10 @@ Navigator::Invalidate()
     mDeviceStorageAreaListener = nullptr;
   }
 
-#ifdef MOZ_GAMEPAD
   if (mGamepadServiceTest) {
     mGamepadServiceTest->Shutdown();
     mGamepadServiceTest = nullptr;
   }
-#endif
 
   mVRGetDisplaysPromises.Clear();
 }
@@ -713,7 +708,7 @@ Navigator::GetDoNotTrack(nsAString &aResult)
 }
 
 bool
-Navigator::JavaEnabled(ErrorResult& aRv)
+Navigator::JavaEnabled(CallerType aCallerType, ErrorResult& aRv)
 {
   Telemetry::AutoTimer<Telemetry::CHECK_JAVA_ENABLED> telemetryTimer;
 
@@ -731,7 +726,7 @@ Navigator::JavaEnabled(ErrorResult& aRv)
 
   RefreshMIMEArray();
 
-  nsMimeType *mimeType = mMimeTypes->NamedItem(javaMIME);
+  nsMimeType *mimeType = mMimeTypes->NamedItem(javaMIME, aCallerType);
 
   return mimeType && mimeType->GetEnabledPlugin();
 }
@@ -1605,7 +1600,6 @@ Navigator::MozTCPSocket()
   return socket.forget();
 }
 
-#ifdef MOZ_GAMEPAD
 void
 Navigator::GetGamepads(nsTArray<RefPtr<Gamepad> >& aGamepads,
                        ErrorResult& aRv)
@@ -1628,7 +1622,6 @@ Navigator::RequestGamepadServiceTest()
   }
   return mGamepadServiceTest;
 }
-#endif
 
 already_AddRefed<Promise>
 Navigator::GetVRDisplays(ErrorResult& aRv)
@@ -2189,6 +2182,15 @@ Navigator::GetPresentation(ErrorResult& aRv)
   }
 
   return mPresentation;
+}
+
+WebAuthentication*
+Navigator::Authentication()
+{
+  if (!mAuthentication) {
+    mAuthentication = new WebAuthentication(GetWindow());
+  }
+  return mAuthentication;
 }
 
 } // namespace dom

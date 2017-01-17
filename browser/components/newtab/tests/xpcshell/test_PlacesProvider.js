@@ -59,13 +59,13 @@ function makeVisit(index, daysAgo, isTyped, domain = TEST_URL) {
 add_task(function test_LinkChecker_securityCheck() {
 
   let urls = [
-    {url: "file://home/file/image.png", expected: false},
-    {url: "resource:///modules/PlacesProvider.jsm", expected: false},
     {url: "javascript:alert('hello')", expected: false}, // jshint ignore:line
     {url: "data:image/png;base64,XXX", expected: false},
     {url: "about:newtab", expected: true},
     {url: "https://example.com", expected: true},
     {url: "ftp://example.com", expected: true},
+    {url: "file://home/file/image.png", expected: true},
+    {url: "resource:///modules/PlacesProvider.jsm", expected: true},
   ];
   for (let {url, expected} of urls) {
     let observed = PlacesProvider.LinkChecker.checkLoadURI(url);
@@ -338,16 +338,14 @@ add_task(function* test_Links_execute_query() {
   try {
     yield provider.executePlacesQuery("select from moz");
     do_throw("bad sql should've thrown");
-  }
-  catch (e) {
+  } catch (e) {
     do_check_true("expected failure - bad sql");
   }
   // missing bindings
   try {
     yield provider.executePlacesQuery("select * from moz_places limit :limit");
     do_throw("bad sql should've thrown");
-  }
-  catch (e) {
+  } catch (e) {
     do_check_true("expected failure - missing bidning");
   }
   // non-existent column name
@@ -355,8 +353,7 @@ add_task(function* test_Links_execute_query() {
     yield provider.executePlacesQuery("select * from moz_places limit :limit",
                                      {columns: ["no-such-column"], params: {limit: 4}});
     do_throw("bad sql should've thrown");
-  }
-  catch (e) {
+  } catch (e) {
     do_check_true("expected failure - wrong column name");
   }
 

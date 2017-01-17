@@ -6,9 +6,9 @@ function doc() {
 
 function setHandlerFunc(aResultFunc) {
   gBrowser.addEventListener("DOMLinkAdded", function(event) {
-    gBrowser.removeEventListener("DOMLinkAdded", arguments.callee, false);
+    gBrowser.removeEventListener("DOMLinkAdded", arguments.callee);
     executeSoon(aResultFunc);
-  }, false);
+  });
 }
 
 function test() {
@@ -100,8 +100,7 @@ function runSearchDiscoveryTest() {
                                        (browser.engines[0].title == title);
     ok(hasEngine, testCase.text);
     browser.engines = null;
-  }
-  else
+  } else
     ok(!testCase.pass, testCase.text);
 
   searchDiscoveryTests.shift();

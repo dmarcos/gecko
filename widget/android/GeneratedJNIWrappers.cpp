@@ -1780,6 +1780,36 @@ auto ViewTransform::Y(float a0) const -> void
     return mozilla::jni::Field<Y_t>::Set(ViewTransform::mCtx, nullptr, a0);
 }
 
+const char VsyncSource::name[] =
+        "org/mozilla/gecko/gfx/VsyncSource";
+
+constexpr char VsyncSource::GetRefreshRate_t::name[];
+constexpr char VsyncSource::GetRefreshRate_t::signature[];
+
+auto VsyncSource::GetRefreshRate() const -> float
+{
+    return mozilla::jni::Method<GetRefreshRate_t>::Call(VsyncSource::mCtx, nullptr);
+}
+
+constexpr char VsyncSource::NotifyVsync_t::name[];
+constexpr char VsyncSource::NotifyVsync_t::signature[];
+
+constexpr char VsyncSource::ObserveVsync_t::name[];
+constexpr char VsyncSource::ObserveVsync_t::signature[];
+
+auto VsyncSource::ObserveVsync(bool a0) const -> bool
+{
+    return mozilla::jni::Method<ObserveVsync_t>::Call(VsyncSource::mCtx, nullptr, a0);
+}
+
+constexpr char VsyncSource::INSTANCE_t::name[];
+constexpr char VsyncSource::INSTANCE_t::signature[];
+
+auto VsyncSource::INSTANCE() -> VsyncSource::LocalRef
+{
+    return mozilla::jni::Field<INSTANCE_t>::Get(VsyncSource::Context(), nullptr);
+}
+
 const char Clipboard::name[] =
         "org/mozilla/gecko/util/Clipboard";
 

@@ -73,6 +73,7 @@ using mozilla::Unused;
 
 #include "AndroidBridge.h"
 #include "AndroidBridgeUtilities.h"
+#include "AndroidUiThread.h"
 #include "android_npapi.h"
 #include "FennecJNINatives.h"
 #include "GeneratedJNINatives.h"
@@ -414,12 +415,16 @@ private:
     void AddIMETextChange(const IMETextChange& aChange);
 
     enum FlushChangesFlag {
+        // Not retrying.
         FLUSH_FLAG_NONE,
-        FLUSH_FLAG_RETRY
+        // Retrying due to IME text changes during flush.
+        FLUSH_FLAG_RETRY,
+        // Retrying due to IME sync exceptions during flush.
+        FLUSH_FLAG_RECOVER
     };
     void PostFlushIMEChanges();
     void FlushIMEChanges(FlushChangesFlag aFlags = FLUSH_FLAG_NONE);
-    void FlushIMEText();
+    void FlushIMEText(FlushChangesFlag aFlags = FLUSH_FLAG_NONE);
     void AsyncNotifyIME(int32_t aNotification);
     void UpdateCompositionRects();
 
@@ -477,6 +482,50 @@ class nsWindow::NPZCSupport final
     WindowPtr<NPZCSupport> mWindow;
     NativePanZoomController::GlobalRef mNPZC;
     int mPreviousButtons;
+
+    template<typename Lambda>
+    class InputEvent final : public nsAppShell::Event
+    {
+        NativePanZoomController::GlobalRef mNPZC;
+        Lambda mLambda;
+
+    public:
+        InputEvent(const NPZCSupport* aNPZCSupport, Lambda&& aLambda)
+            : mNPZC(aNPZCSupport->mNPZC)
+            , mLambda(mozilla::Move(aLambda))
+        {}
+
+        void Run() override
+        {
+            MOZ_ASSERT(NS_IsMainThread());
+
+            JNIEnv* const env = jni::GetGeckoThreadEnv();
+            NPZCSupport* npzcSupport = GetNative(
+                    NativePanZoomController::LocalRef(env, mNPZC));
+
+            if (!npzcSupport || !npzcSupport->mWindow) {
+                // We already shut down.
+                env->ExceptionClear();
+                return;
+            }
+
+            nsWindow* const window = npzcSupport->mWindow;
+            window->UserActivity();
+            return mLambda(window);
+        }
+
+        nsAppShell::Event::Type ActivityType() const override
+        {
+            return nsAppShell::Event::Type::kUIActivity;
+        }
+    };
+
+    template<typename Lambda>
+    void PostInputEvent(Lambda&& aLambda)
+    {
+        nsAppShell::PostEvent(MakeUnique<InputEvent<Lambda>>(
+                this, mozilla::Move(aLambda)));
+    }
 
 public:
     typedef NativePanZoomController::Natives<NPZCSupport> Base;
@@ -604,22 +653,7 @@ public:
             return true;
         }
 
-        NativePanZoomController::GlobalRef npzc = mNPZC;
-        nsAppShell::PostEvent([npzc, input, guid, blockId, status] {
-            MOZ_ASSERT(NS_IsMainThread());
-
-            JNIEnv* const env = jni::GetGeckoThreadEnv();
-            NPZCSupport* npzcSupport = GetNative(
-                    NativePanZoomController::LocalRef(env, npzc));
-
-            if (!npzcSupport || !npzcSupport->mWindow) {
-                // We already shut down.
-                env->ExceptionClear();
-                return;
-            }
-
-            nsWindow* const window = npzcSupport->mWindow;
-            window->UserActivity();
+        PostInputEvent([input, guid, blockId, status] (nsWindow* window) {
             WidgetWheelEvent wheelEvent = input.ToWidgetWheelEvent(window);
             window->ProcessUntransformedAPZEvent(&wheelEvent, guid,
                                                  blockId, status);
@@ -733,22 +767,7 @@ public:
             return true;
         }
 
-        NativePanZoomController::GlobalRef npzc = mNPZC;
-        nsAppShell::PostEvent([npzc, input, guid, blockId, status] {
-            MOZ_ASSERT(NS_IsMainThread());
-
-            JNIEnv* const env = jni::GetGeckoThreadEnv();
-            NPZCSupport* npzcSupport = GetNative(
-                    NativePanZoomController::LocalRef(env, npzc));
-
-            if (!npzcSupport || !npzcSupport->mWindow) {
-                // We already shut down.
-                env->ExceptionClear();
-                return;
-            }
-
-            nsWindow* const window = npzcSupport->mWindow;
-            window->UserActivity();
+        PostInputEvent([input, guid, blockId, status] (nsWindow* window) {
             WidgetMouseEvent mouseEvent = input.ToWidgetMouseEvent(window);
             window->ProcessUntransformedAPZEvent(&mouseEvent, guid,
                                                  blockId, status);
@@ -871,22 +890,7 @@ public:
         }
 
         // Dispatch APZ input event on Gecko thread.
-        NativePanZoomController::GlobalRef npzc = mNPZC;
-        nsAppShell::PostEvent([npzc, input, guid, blockId, status] {
-            MOZ_ASSERT(NS_IsMainThread());
-
-            JNIEnv* const env = jni::GetGeckoThreadEnv();
-            NPZCSupport* npzcSupport = GetNative(
-                    NativePanZoomController::LocalRef(env, npzc));
-
-            if (!npzcSupport || !npzcSupport->mWindow) {
-                // We already shut down.
-                env->ExceptionClear();
-                return;
-            }
-
-            nsWindow* const window = npzcSupport->mWindow;
-            window->UserActivity();
+        PostInputEvent([input, guid, blockId, status] (nsWindow* window) {
             WidgetTouchEvent touchEvent = input.ToWidgetTouchEvent(window);
             window->ProcessUntransformedAPZEvent(&touchEvent, guid,
                                                  blockId, status);
@@ -1607,7 +1611,7 @@ nsWindow::Destroy()
 #endif
 }
 
-NS_IMETHODIMP
+nsresult
 nsWindow::ConfigureChildren(const nsTArray<nsIWidget::Configuration>& config)
 {
     for (uint32_t i = 0; i < config.Length(); ++i) {
@@ -1632,11 +1636,11 @@ nsWindow::RedrawAll()
     }
 }
 
-NS_IMETHODIMP
+void
 nsWindow::SetParent(nsIWidget *aNewParent)
 {
     if ((nsIWidget*)mParent == aNewParent)
-        return NS_OK;
+        return;
 
     // If we had a parent before, remove ourselves from its list of
     // children.
@@ -1651,8 +1655,6 @@ nsWindow::SetParent(nsIWidget *aNewParent)
     // if we are now in the toplevel window's hierarchy, schedule a redraw
     if (FindTopLevel() == nsWindow::TopWindow())
         RedrawAll();
-
-    return NS_OK;
 }
 
 nsIWidget*
@@ -1679,18 +1681,18 @@ nsWindow::GetDefaultScaleInternal()
     return screenAndroid->GetDensity();
 }
 
-NS_IMETHODIMP
+void
 nsWindow::Show(bool aState)
 {
     ALOG("nsWindow[%p]::Show %d", (void*)this, aState);
 
     if (mWindowType == eWindowType_invisible) {
         ALOG("trying to show invisible window! ignoring..");
-        return NS_ERROR_FAILURE;
+        return;
     }
 
     if (aState == mIsVisible)
-        return NS_OK;
+        return;
 
     mIsVisible = aState;
 
@@ -1726,8 +1728,6 @@ nsWindow::Show(bool aState)
 #ifdef DEBUG_ANDROID_WIDGET
     DumpWindows();
 #endif
-
-    return NS_OK;
 }
 
 bool
@@ -1750,33 +1750,33 @@ nsWindow::ConstrainPosition(bool aAllowSlop,
     }
 }
 
-NS_IMETHODIMP
+void
 nsWindow::Move(double aX,
                double aY)
 {
     if (IsTopLevel())
-        return NS_OK;
+        return;
 
-    return Resize(aX,
-                  aY,
-                  mBounds.width,
-                  mBounds.height,
-                  true);
+    Resize(aX,
+           aY,
+           mBounds.width,
+           mBounds.height,
+           true);
 }
 
-NS_IMETHODIMP
+void
 nsWindow::Resize(double aWidth,
                  double aHeight,
                  bool aRepaint)
 {
-    return Resize(mBounds.x,
-                  mBounds.y,
-                  aWidth,
-                  aHeight,
-                  aRepaint);
+    Resize(mBounds.x,
+           mBounds.y,
+           aWidth,
+           aHeight,
+           aRepaint);
 }
 
-NS_IMETHODIMP
+void
 nsWindow::Resize(double aX,
                  double aY,
                  double aWidth,
@@ -1802,11 +1802,9 @@ nsWindow::Resize(double aX,
 
     nsIWidgetListener* listener = GetWidgetListener();
     if (mAwaitingFullScreen && listener) {
-      listener->FullscreenChanged(mIsFullScreen);
-      mAwaitingFullScreen = false;
+        listener->FullscreenChanged(mIsFullScreen);
+        mAwaitingFullScreen = false;
     }
-
-    return NS_OK;
 }
 
 void
@@ -1830,11 +1828,10 @@ nsWindow::SetSizeMode(nsSizeMode aMode)
     }
 }
 
-NS_IMETHODIMP
+void
 nsWindow::Enable(bool aState)
 {
     ALOG("nsWindow[%p]::Enable %d ignored", (void*)this, aState);
-    return NS_OK;
 }
 
 bool
@@ -1843,10 +1840,9 @@ nsWindow::IsEnabled() const
     return true;
 }
 
-NS_IMETHODIMP
+void
 nsWindow::Invalidate(const LayoutDeviceIntRect& aRect)
 {
-    return NS_OK;
 }
 
 nsWindow*
@@ -1864,7 +1860,7 @@ nsWindow::FindTopLevel()
     return this;
 }
 
-NS_IMETHODIMP
+nsresult
 nsWindow::SetFocus(bool aRaise)
 {
     nsWindow *top = FindTopLevel();
@@ -1937,7 +1933,7 @@ nsWindow::WidgetToScreenOffset()
     return p;
 }
 
-NS_IMETHODIMP
+nsresult
 nsWindow::DispatchEvent(WidgetGUIEvent* aEvent,
                         nsEventStatus& aStatus)
 {
@@ -2758,7 +2754,7 @@ nsWindow::GeckoViewSupport::FlushIMEChanges(FlushChangesFlag aFlags)
         // A query event could have triggered more text changes to come in, as
         // indicated by our flag. If that happens, try flushing IME changes
         // again.
-        if (aFlags != FLUSH_FLAG_RETRY) {
+        if (aFlags == FLUSH_FLAG_NONE) {
             FlushIMEChanges(FLUSH_FLAG_RETRY);
         } else {
             // Don't retry if already retrying, to avoid infinite loops.
@@ -2813,22 +2809,44 @@ nsWindow::GeckoViewSupport::FlushIMEChanges(FlushChangesFlag aFlags)
         selEnd = int32_t(event.GetSelectionEnd());
     }
 
+    JNIEnv* const env = jni::GetGeckoThreadEnv();
+    auto flushOnException = [=] () -> bool {
+        if (!env->ExceptionCheck()) {
+            return false;
+        }
+        if (aFlags != FLUSH_FLAG_RECOVER) {
+            // First time seeing an exception; try flushing text.
+            env->ExceptionClear();
+            __android_log_print(ANDROID_LOG_WARN, "GeckoViewSupport",
+                    "Recovering from IME exception");
+            FlushIMEText(FLUSH_FLAG_RECOVER);
+        } else {
+            // Give up because we've already tried.
+            MOZ_CATCH_JNI_EXCEPTION(env);
+        }
+        return true;
+    };
+
     // Commit the text change and selection change transaction.
     mIMETextChanges.Clear();
 
     for (const TextRecord& record : textTransaction) {
         mEditable->OnTextChange(record.text, record.start,
                                 record.oldEnd, record.newEnd);
+        if (flushOnException()) {
+            return;
+        }
     }
 
     if (mIMESelectionChanged) {
         mIMESelectionChanged = false;
         mEditable->OnSelectionChange(selStart, selEnd);
+        flushOnException();
     }
 }
 
 void
-nsWindow::GeckoViewSupport::FlushIMEText()
+nsWindow::GeckoViewSupport::FlushIMEText(FlushChangesFlag aFlags)
 {
     // Notify Java of the newly focused content
     mIMETextChanges.Clear();
@@ -2843,7 +2861,7 @@ nsWindow::GeckoViewSupport::FlushIMEText()
     notification.mTextChangeData.mAddedEndOffset = INT32_MAX / 2;
     NotifyIME(notification);
 
-    FlushIMEChanges();
+    FlushIMEChanges(aFlags);
 }
 
 static jni::ObjectArray::LocalRef
@@ -3357,7 +3375,7 @@ nsWindow::NotifyIMEInternal(const IMENotification& aIMENotification)
     return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-NS_IMETHODIMP_(void)
+void
 nsWindow::SetInputContext(const InputContext& aContext,
                           const InputContextAction& aAction)
 {
@@ -3376,7 +3394,7 @@ nsWindow::SetInputContext(const InputContext& aContext,
     top->mGeckoViewSupport->SetInputContext(aContext, aAction);
 }
 
-NS_IMETHODIMP_(InputContext)
+InputContext
 nsWindow::GetInputContext()
 {
     nsWindow* top = FindTopLevel();
@@ -3566,7 +3584,7 @@ nsWindow::NeedsPaint()
 void
 nsWindow::ConfigureAPZControllerThread()
 {
-    APZThreadUtils::SetControllerThread(nullptr);
+    APZThreadUtils::SetControllerThread(mozilla::GetAndroidUiThreadMessageLoop());
 }
 
 already_AddRefed<GeckoContentController>

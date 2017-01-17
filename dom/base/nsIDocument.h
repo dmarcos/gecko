@@ -6,7 +6,7 @@
 #ifndef nsIDocument_h___
 #define nsIDocument_h___
 
-#include "mozFlushType.h"                // for enum
+#include "mozilla/FlushType.h"           // for enum
 #include "nsAutoPtr.h"                   // for member
 #include "nsCOMArray.h"                  // for member
 #include "nsCRT.h"                       // for NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
@@ -149,7 +149,7 @@ class MediaQueryList;
 class GlobalObject;
 class NodeFilter;
 class NodeIterator;
-enum class OrientationType : uint32_t;
+enum class OrientationType : uint8_t;
 class ProcessingInstruction;
 class Promise;
 class StyleSheetList;
@@ -705,6 +705,14 @@ public:
   bool GetHasMixedDisplayContentBlocked()
   {
     return mHasMixedDisplayContentBlocked;
+  }
+
+  /**
+  * Set referrer policy CSP flag for this document.
+  */
+  void SetHasReferrerPolicyCSP(bool aHasReferrerPolicyCSP)
+  {
+    mHasReferrerPolicyCSP = aHasReferrerPolicyCSP;
   }
 
   /**
@@ -1514,15 +1522,15 @@ public:
    * Flush notifications for this document and its parent documents
    * (since those may affect the layout of this one).
    */
-  virtual void FlushPendingNotifications(mozFlushType aType) = 0;
+  virtual void FlushPendingNotifications(mozilla::FlushType aType) = 0;
 
   /**
    * Calls FlushPendingNotifications on any external resources this document
    * has. If this document has no external resources or is an external resource
    * itself this does nothing. This should only be called with
-   * aType >= Flush_Style.
+   * aType >= FlushType::Style.
    */
-  virtual void FlushExternalResources(mozFlushType aType) = 0;
+  virtual void FlushExternalResources(mozilla::FlushType aType) = 0;
 
   nsBindingManager* BindingManager() const
   {
@@ -2872,7 +2880,7 @@ public:
                             mozilla::dom::TaskCategory aCategory,
                             already_AddRefed<nsIRunnable>&& aRunnable) override;
 
-  virtual already_AddRefed<nsIEventTarget>
+  virtual nsIEventTarget*
   EventTargetFor(mozilla::dom::TaskCategory aCategory) const override;
 
   // The URLs passed to these functions should match what
@@ -2880,6 +2888,8 @@ public:
   // determine whether some code is being called from a tracking script.
   void NoteScriptTrackingStatus(const nsACString& aURL, bool isTracking);
   bool IsScriptTracking(const nsACString& aURL) const;
+
+  bool PrerenderHref(nsIURI* aHref);
 
 protected:
   bool GetUseCounter(mozilla::UseCounter aUseCounter)
@@ -3035,9 +3045,10 @@ protected:
 #ifdef MOZILLA_INTERNAL_API
   // Our visibility state
   mozilla::dom::VisibilityState mVisibilityState;
-  static_assert(sizeof(mozilla::dom::VisibilityState) == sizeof(uint32_t), "Error size of mVisibilityState and mDummy");
+  static_assert(sizeof(mozilla::dom::VisibilityState) == sizeof(uint8_t),
+                "Error size of mVisibilityState and mDummy");
 #else
-  uint32_t mDummy;
+  uint8_t mDummy;
 #endif
 
   // True if BIDI is enabled.
@@ -3077,6 +3088,9 @@ protected:
   // OnPageHide happens, and becomes true again when OnPageShow happens.  So
   // it's false only when we're in bfcache or unloaded.
   bool mVisible : 1;
+
+  // True if a document load has a CSP with referrer attached.
+  bool mHasReferrerPolicyCSP : 1;
 
   // True if our content viewer has been removed from the docshell
   // (it may still be displayed, but in zombie state). Form control data

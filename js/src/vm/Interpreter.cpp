@@ -1020,6 +1020,9 @@ PopEnvironment(JSContext* cx, EnvironmentIter& ei)
       case ScopeKind::NonSyntactic:
       case ScopeKind::Module:
         break;
+      case ScopeKind::WasmFunction:
+        MOZ_CRASH("wasm is not interpreted");
+        break;
     }
 }
 
@@ -1185,6 +1188,33 @@ ProcessTryNotes(JSContext* cx, EnvironmentIter& ei, InterpreterRegs& regs)
                 // settle to avoid infinitely handling the same exception.
                 SettleOnTryNote(cx, tn, ei, regs);
                 return ErrorReturnContinuation;
+            }
+            break;
+          }
+
+          case JSTRY_ITERCLOSE: {
+            // The iterator object is at the top of the stack.
+            Value* sp = regs.spForStackDepth(tn->stackDepth);
+            RootedObject iterObject(cx, &sp[-1].toObject());
+            if (!IteratorCloseForException(cx, iterObject)) {
+                SettleOnTryNote(cx, tn, ei, regs);
+                return ErrorReturnContinuation;
+            }
+            break;
+          }
+
+          case JSTRY_DESTRUCTURING_ITERCLOSE: {
+            // Whether the destructuring iterator is done is at the top of the
+            // stack. The iterator object is second from the top.
+            MOZ_ASSERT(tn->stackDepth > 1);
+            Value* sp = regs.spForStackDepth(tn->stackDepth);
+            MOZ_ASSERT(sp[-1].isBoolean());
+            if (sp[-1].isFalse()) {
+                RootedObject iterObject(cx, &sp[-2].toObject());
+                if (!IteratorCloseForException(cx, iterObject)) {
+                    SettleOnTryNote(cx, tn, ei, regs);
+                    return ErrorReturnContinuation;
+                }
             }
             break;
           }
@@ -1535,11 +1565,7 @@ GetSuperEnvFunction(JSContext* cx, InterpreterRegs& regs)
  */
 
 template<typename T>
-class ReservedRootedBase {
-};
-
-template<typename T>
-class ReservedRooted : public ReservedRootedBase<T>
+class ReservedRooted : public RootedBase<T, ReservedRooted<T>>
 {
     Rooted<T>* savedRoot;
 
@@ -1566,14 +1592,6 @@ class ReservedRooted : public ReservedRootedBase<T>
     DECLARE_POINTER_CONSTREF_OPS(T)
     DECLARE_POINTER_ASSIGN_OPS(ReservedRooted, T)
 };
-
-template <>
-class ReservedRootedBase<Value> : public ValueOperations<ReservedRooted<Value>>
-{};
-
-template <>
-class ReservedRootedBase<Scope*> : public ScopeCastOperation<ReservedRooted<Scope*>>
-{};
 
 static MOZ_NEVER_INLINE bool
 Interpret(JSContext* cx, RunState& state)
@@ -1868,8 +1886,6 @@ CASE(EnableInterruptsPseudoOpcode)
 /* Various 1-byte no-ops. */
 CASE(JSOP_NOP)
 CASE(JSOP_NOP_DESTRUCTURING)
-CASE(JSOP_UNUSED183)
-CASE(JSOP_UNUSED187)
 CASE(JSOP_UNUSED192)
 CASE(JSOP_UNUSED209)
 CASE(JSOP_UNUSED210)
@@ -2164,6 +2180,13 @@ CASE(JSOP_ENDITER)
 }
 END_CASE(JSOP_ENDITER)
 
+CASE(JSOP_ISGENCLOSING)
+{
+    bool b = REGS.sp[-1].isMagic(JS_GENERATOR_CLOSING);
+    PUSH_BOOLEAN(b);
+}
+END_CASE(JSOP_ISGENCLOSING)
+
 CASE(JSOP_DUP)
 {
     MOZ_ASSERT(REGS.stackDepth() >= 1);
@@ -2200,6 +2223,16 @@ CASE(JSOP_PICK)
     REGS.sp[-1] = lval;
 }
 END_CASE(JSOP_PICK)
+
+CASE(JSOP_UNPICK)
+{
+    int i = GET_UINT8(REGS.pc);
+    MOZ_ASSERT(REGS.stackDepth() >= unsigned(i) + 1);
+    Value lval = REGS.sp[-1];
+    memmove(REGS.sp - i, REGS.sp - (i + 1), sizeof(Value) * i);
+    REGS.sp[-(i + 1)] = lval;
+}
+END_CASE(JSOP_UNPICK)
 
 CASE(JSOP_BINDGNAME)
 CASE(JSOP_BINDNAME)
@@ -4656,7 +4689,8 @@ js::RunOnceScriptPrologue(JSContext* cx, HandleScript script)
 
     // Force instantiation of the script's function's group to ensure the flag
     // is preserved in type information.
-    if (!script->functionNonDelazifying()->getGroup(cx))
+    RootedFunction fun(cx, script->functionNonDelazifying());
+    if (!JSObject::getGroup(cx, fun))
         return false;
 
     MarkObjectGroupFlags(cx, script->functionNonDelazifying(), OBJECT_FLAG_RUNONCE_INVALIDATED);
@@ -5041,7 +5075,16 @@ js::ThrowCheckIsObject(JSContext* cx, CheckIsObjectKind kind)
 {
     switch (kind) {
       case CheckIsObjectKind::IteratorNext:
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NEXT_RETURNED_PRIMITIVE);
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_ITER_METHOD_RETURNED_PRIMITIVE, "next");
+        break;
+      case CheckIsObjectKind::IteratorReturn:
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_ITER_METHOD_RETURNED_PRIMITIVE, "return");
+        break;
+      case CheckIsObjectKind::IteratorThrow:
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_ITER_METHOD_RETURNED_PRIMITIVE, "throw");
         break;
       case CheckIsObjectKind::GetIterator:
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_GET_ITER_RETURNED_PRIMITIVE);

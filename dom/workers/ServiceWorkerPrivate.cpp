@@ -107,19 +107,26 @@ namespace {
 
 class CheckScriptEvaluationWithCallback final : public WorkerRunnable
 {
+  nsMainThreadPtrHandle<ServiceWorkerPrivate> mServiceWorkerPrivate;
   nsMainThreadPtrHandle<KeepAliveToken> mKeepAliveToken;
-  RefPtr<LifeCycleEventCallback> mCallback;
+
+  // The script evaluation result must be reported even if the runnable
+  // is cancelled.
+  RefPtr<LifeCycleEventCallback> mScriptEvaluationCallback;
+
 #ifdef DEBUG
   bool mDone;
 #endif
 
 public:
   CheckScriptEvaluationWithCallback(WorkerPrivate* aWorkerPrivate,
+                                    ServiceWorkerPrivate* aServiceWorkerPrivate,
                                     KeepAliveToken* aKeepAliveToken,
-                                    LifeCycleEventCallback* aCallback)
+                                    LifeCycleEventCallback* aScriptEvaluationCallback)
     : WorkerRunnable(aWorkerPrivate)
+    , mServiceWorkerPrivate(new nsMainThreadPtrHolder<ServiceWorkerPrivate>(aServiceWorkerPrivate))
     , mKeepAliveToken(new nsMainThreadPtrHolder<KeepAliveToken>(aKeepAliveToken))
-    , mCallback(aCallback)
+    , mScriptEvaluationCallback(aScriptEvaluationCallback)
 #ifdef DEBUG
     , mDone(false)
 #endif
@@ -136,42 +143,55 @@ public:
   WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     aWorkerPrivate->AssertIsOnWorkerThread();
-    Done(aWorkerPrivate->WorkerScriptExecutedSuccessfully());
+
+    bool fetchHandlerWasAdded = aWorkerPrivate->FetchHandlerWasAdded();
+    nsCOMPtr<nsIRunnable> runnable = NewRunnableMethod<bool>(this,
+      &CheckScriptEvaluationWithCallback::ReportFetchFlag, fetchHandlerWasAdded);
+    aWorkerPrivate->DispatchToMainThread(runnable.forget());
+
+    ReportScriptEvaluationResult(aWorkerPrivate->WorkerScriptExecutedSuccessfully());
 
     return true;
+  }
+
+  void
+  ReportFetchFlag(bool aFetchHandlerWasAdded)
+  {
+    AssertIsOnMainThread();
+    mServiceWorkerPrivate->SetHandlesFetch(aFetchHandlerWasAdded);
   }
 
   nsresult
   Cancel() override
   {
-    Done(false);
+    ReportScriptEvaluationResult(false);
     return WorkerRunnable::Cancel();
   }
 
 private:
   void
-  Done(bool aResult)
+  ReportScriptEvaluationResult(bool aScriptEvaluationResult)
   {
 #ifdef DEBUG
     mDone = true;
 #endif
-    mCallback->SetResult(aResult);
-    MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(mCallback));
+    mScriptEvaluationCallback->SetResult(aScriptEvaluationResult);
+    MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(mScriptEvaluationCallback));
   }
 };
 
 } // anonymous namespace
 
 nsresult
-ServiceWorkerPrivate::CheckScriptEvaluation(LifeCycleEventCallback* aCallback)
+ServiceWorkerPrivate::CheckScriptEvaluation(LifeCycleEventCallback* aScriptEvaluationCallback)
 {
   nsresult rv = SpawnWorkerIfNeeded(LifeCycleEvent, nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
   RefPtr<KeepAliveToken> token = CreateEventKeepAliveToken();
   RefPtr<WorkerRunnable> r = new CheckScriptEvaluationWithCallback(mWorkerPrivate,
-                                                                   token,
-                                                                   aCallback);
+                                                                   this, token,
+                                                                   aScriptEvaluationCallback);
   if (NS_WARN_IF(!r->Dispatch())) {
     return NS_ERROR_FAILURE;
   }
@@ -572,7 +592,7 @@ public:
     : ExtendableEventWorkerRunnable(aWorkerPrivate, aKeepAliveToken)
     , mRegistration(aRegistration)
   {
-    MOZ_ASSERT(aRegistration);
+    MOZ_DIAGNOSTIC_ASSERT(aRegistration);
   }
 
   void
@@ -1682,6 +1702,36 @@ ServiceWorkerPrivate::SendFetchEvent(nsIInterceptedChannel* aChannel,
 {
   AssertIsOnMainThread();
 
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  if (NS_WARN_IF(!mInfo || !swm)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  RefPtr<ServiceWorkerRegistrationInfo> registration =
+    swm->GetRegistration(mInfo->GetPrincipal(), mInfo->Scope());
+
+  // Its possible the registration is removed between starting the interception
+  // and actually dispatching the fetch event.  In these cases we simply
+  // want to restart the original network request.  Since this is a normal
+  // condition we handle the reset here instead of returning an error which
+  // would in turn trigger a console report.
+  if (!registration) {
+    aChannel->ResetInterception();
+    return NS_OK;
+  }
+
+  // Handle Fetch algorithm - step 16. If the service worker didn't register
+  // any fetch event handlers, then abort the interception and maybe trigger
+  // the soft update algorithm.
+  if (!mInfo->HandlesFetch()) {
+    aChannel->ResetInterception();
+
+    // Trigger soft updates if necessary.
+    registration->MaybeScheduleTimeCheckAndUpdate();
+
+    return NS_OK;
+  }
+
   // if the ServiceWorker script fails to load for some reason, just resume
   // the original channel.
   nsCOMPtr<nsIRunnable> failRunnable =
@@ -1692,16 +1742,6 @@ ServiceWorkerPrivate::SendFetchEvent(nsIInterceptedChannel* aChannel,
 
   nsMainThreadPtrHandle<nsIInterceptedChannel> handle(
     new nsMainThreadPtrHolder<nsIInterceptedChannel>(aChannel, false));
-
-  if (NS_WARN_IF(!mInfo)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  MOZ_ASSERT(swm);
-
-  RefPtr<ServiceWorkerRegistrationInfo> registration =
-    swm->GetRegistration(mInfo->GetPrincipal(), mInfo->Scope());
 
   nsMainThreadPtrHandle<ServiceWorkerRegistrationInfo> regInfo(
     new nsMainThreadPtrHolder<ServiceWorkerRegistrationInfo>(registration, false));
@@ -1779,6 +1819,12 @@ ServiceWorkerPrivate::SpawnWorkerIfNeeded(WakeUpReason aWhy,
   info.mServiceWorkerID = mInfo->ID();
   info.mLoadGroup = aLoadGroup;
   info.mLoadFailedAsyncRunnable = aLoadFailedRunnable;
+
+  // If we are loading a script for a ServiceWorker then we must not
+  // try to intercept it.  If the interception matches the current
+  // ServiceWorker's scope then we could deadlock the load.
+  info.mLoadFlags = mInfo->GetLoadFlags() |
+                    nsIChannel::LOAD_BYPASS_SERVICE_WORKER;
 
   rv = info.mBaseURI->GetHost(info.mDomain);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -2118,6 +2164,18 @@ ServiceWorkerPrivate::Observe(nsISupports* aSubject, const char* aTopic, const c
   }
 
   return NS_OK;
+}
+
+void
+ServiceWorkerPrivate::SetHandlesFetch(bool aValue)
+{
+  AssertIsOnMainThread();
+
+  if (NS_WARN_IF(!mInfo)) {
+    return;
+  }
+
+  mInfo->SetHandlesFetch(aValue);
 }
 
 END_WORKERS_NAMESPACE

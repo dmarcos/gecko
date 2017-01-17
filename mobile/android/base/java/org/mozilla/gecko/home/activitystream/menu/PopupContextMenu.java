@@ -16,7 +16,10 @@ import android.view.View;
 import android.widget.PopupWindow;
 
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.activitystream.ActivityStream;
+import org.mozilla.gecko.activitystream.ActivityStreamTelemetry;
 import org.mozilla.gecko.home.HomePager;
+import org.mozilla.gecko.home.activitystream.model.Item;
 
 /* package-private */ class PopupContextMenu
         extends ActivityStreamContextMenu {
@@ -28,19 +31,15 @@ import org.mozilla.gecko.home.HomePager;
 
     public PopupContextMenu(final Context context,
                             View anchor,
+                            final ActivityStreamTelemetry.Extras.Builder telemetryExtraBuilder,
                             final MenuMode mode,
-                            final String title,
-                            @NonNull final String url,
-                            @Nullable final Boolean isBookmarked,
-                            @Nullable final Boolean isPinned,
+                            final Item item,
                             HomePager.OnUrlOpenListener onUrlOpenListener,
                             HomePager.OnUrlOpenInBackgroundListener onUrlOpenInBackgroundListener) {
         super(context,
+                telemetryExtraBuilder,
                 mode,
-                title,
-                url,
-                isBookmarked,
-                isPinned,
+                item,
                 onUrlOpenListener,
                 onUrlOpenInBackgroundListener);
 

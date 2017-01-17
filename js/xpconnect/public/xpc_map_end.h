@@ -4,6 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// If you include this file you must also include xpc_make_class.h at the top
+// of the file doing the including.
 
 #ifndef XPC_MAP_CLASSNAME
 #error "Must #define XPC_MAP_CLASSNAME before #including xpc_map_end.h"
@@ -11,6 +13,10 @@
 
 #ifndef XPC_MAP_QUOTED_CLASSNAME
 #error "Must #define XPC_MAP_QUOTED_CLASSNAME before #including xpc_map_end.h"
+#endif
+
+#ifndef XPC_MAP_FLAGS
+#error "Must #define XPC_MAP_FLAGS before #including xpc_map_end.h"
 #endif
 
 #include "js/Id.h"
@@ -65,6 +71,25 @@ XPC_MAP_CLASSNAME::GetScriptableFlags()
     XPC_MAP_FLAGS |
 #endif
     0;
+}
+
+// virtual
+const js::Class*
+XPC_MAP_CLASSNAME::GetClass()
+{
+    static const js::ClassOps classOps =
+        XPC_MAKE_CLASS_OPS(GetScriptableFlags());
+    static const js::Class klass =
+        XPC_MAKE_CLASS(XPC_MAP_QUOTED_CLASSNAME, GetScriptableFlags(),
+                       &classOps);
+    return &klass;
+}
+
+// virtual
+const JSClass*
+XPC_MAP_CLASSNAME::GetJSClass()
+{
+    return Jsvalify(GetClass());
 }
 
 /**************************************************************/
@@ -167,6 +192,4 @@ NS_IMETHODIMP XPC_MAP_CLASSNAME::PostCreatePrototype(JSContext* cx, JSObject* pr
 #undef XPC_MAP_WANT_HASINSTANCE
 #endif
 
-#ifdef XPC_MAP_FLAGS
 #undef XPC_MAP_FLAGS
-#endif

@@ -162,7 +162,6 @@ TabParent::TabParent(nsIContentParent* aManager,
 #endif
   , mLayerTreeEpoch(0)
   , mPreserveLayers(false)
-  , mFirstActivate(true)
 {
   MOZ_ASSERT(aManager);
 }
@@ -359,6 +358,12 @@ TabParent::DestroyInternal()
   IMEStateManager::OnTabParentDestroying(this);
 
   RemoveWindowListeners();
+
+#ifdef ACCESSIBILITY
+  if (a11y::DocAccessibleParent* tabDoc = GetTopLevelDocAccessible()) {
+    tabDoc->Destroy();
+  }
+#endif
 
   // If this fails, it's most likely due to a content-process crash,
   // and auto-cleanup will kick in.  Otherwise, the child side will
@@ -1248,8 +1253,9 @@ public:
                      const char* aTopic,
                      const char16_t* aData) override
   {
-    if (!mTabParent) {
-      // We already sent the notification
+    if (!mTabParent || !mObserverId) {
+      // We already sent the notification, or we don't actually need to
+      // send any notification at all.
       return NS_OK;
     }
 
@@ -1952,28 +1958,6 @@ TabParent::RecvReplyKeyEvent(const WidgetKeyboardEvent& event)
 }
 
 mozilla::ipc::IPCResult
-TabParent::RecvDispatchAfterKeyboardEvent(const WidgetKeyboardEvent& aEvent)
-{
-  NS_ENSURE_TRUE(mFrameElement, IPC_OK());
-
-  WidgetKeyboardEvent localEvent(aEvent);
-  localEvent.mWidget = GetWidget();
-
-  nsIDocument* doc = mFrameElement->OwnerDoc();
-  nsCOMPtr<nsIPresShell> presShell = doc->GetShell();
-  NS_ENSURE_TRUE(presShell, IPC_OK());
-
-  if (mFrameElement &&
-      PresShell::BeforeAfterKeyboardEventEnabled() &&
-      localEvent.mMessage != eKeyPress) {
-    presShell->DispatchAfterKeyboardEvent(mFrameElement, localEvent,
-                                          aEvent.DefaultPrevented());
-  }
-
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
 TabParent::RecvAccessKeyNotHandled(const WidgetKeyboardEvent& aEvent)
 {
   NS_ENSURE_TRUE(mFrameElement, IPC_OK());
@@ -2148,10 +2132,10 @@ TabParent::RecvStartPluginIME(const WidgetKeyboardEvent& aKeyboardEvent,
   if (!widget) {
     return IPC_OK();
   }
-  widget->StartPluginIME(aKeyboardEvent,
-                         (int32_t&)aPanelX,
-                         (int32_t&)aPanelY,
-                         *aCommitted);
+  Unused << widget->StartPluginIME(aKeyboardEvent,
+                                   (int32_t&)aPanelX,
+                                   (int32_t&)aPanelY,
+                                   *aCommitted);
   return IPC_OK();
 }
 
@@ -2679,12 +2663,8 @@ TabParent::SetDocShellIsActive(bool isActive)
   // Ask the child to repaint using the PHangMonitor channel/thread (which may
   // be less congested).
   if (isActive) {
-    if (mFirstActivate) {
-      mFirstActivate = false;
-    } else {
-      ContentParent* cp = Manager()->AsContentParent();
-      cp->ForceTabPaint(this, mLayerTreeEpoch);
-    }
+    ContentParent* cp = Manager()->AsContentParent();
+    cp->ForceTabPaint(this, mLayerTreeEpoch);
   }
 
   return NS_OK;
@@ -3240,7 +3220,7 @@ TabParent::RecvSHistoryUpdate(const uint32_t& aCount, const uint32_t& aLocalInde
   }
 
   nsCOMPtr<nsIPartialSHistory> partialHistory;
-  frameLoader->GetPartialSessionHistory(getter_AddRefs(partialHistory));
+  frameLoader->GetPartialSHistory(getter_AddRefs(partialHistory));
   if (!partialHistory) {
     // PartialSHistory is not enabled
     return IPC_OK();

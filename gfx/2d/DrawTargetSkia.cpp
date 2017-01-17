@@ -473,6 +473,10 @@ SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, Float aAlpha = 1.0, Po
     case PatternType::SURFACE: {
       const SurfacePattern& pat = static_cast<const SurfacePattern&>(aPattern);
       sk_sp<SkImage> image = GetSkImageForSurface(pat.mSurface);
+      if (!image) {
+        aPaint.setColor(SK_ColorTRANSPARENT);
+        break;
+      }
 
       SkMatrix mat;
       GfxMatrixToSkiaMatrix(pat.mMatrix, mat);
@@ -486,11 +490,7 @@ SetPaintPattern(SkPaint& aPaint, const Pattern& aPattern, Float aAlpha = 1.0, Po
       SkShader::TileMode xTileMode = ExtendModeToTileMode(pat.mExtendMode, Axis::X_AXIS);
       SkShader::TileMode yTileMode = ExtendModeToTileMode(pat.mExtendMode, Axis::Y_AXIS);
 
-      if (image) {
-        aPaint.setShader(image->makeShader(xTileMode, yTileMode, &mat));
-      } else {
-        aPaint.setColor(SK_ColorTRANSPARENT);
-      }
+      aPaint.setShader(image->makeShader(xTileMode, yTileMode, &mat));
 
       if (pat.mSamplingFilter == SamplingFilter::POINT) {
         aPaint.setFilterQuality(kNone_SkFilterQuality);
@@ -565,7 +565,7 @@ struct AutoPaintSetup {
       temp.setBlendMode(GfxOpToSkiaOp(aOptions.mCompositionOp));
       temp.setAlpha(ColorFloatToByte(aOptions.mAlpha));
       //TODO: Get a rect here
-      mCanvas->saveLayer(nullptr, &temp);
+      mCanvas->saveLayerPreserveLCDTextRequests(nullptr, &temp);
       mNeedsRestore = true;
     } else {
       mPaint.setAlpha(ColorFloatToByte(aOptions.mAlpha));
@@ -842,8 +842,8 @@ DrawTargetSkia::Fill(const Path *aPath,
 bool
 DrawTargetSkia::ShouldLCDRenderText(FontType aFontType, AntialiasMode aAntialiasMode)
 {
-  // For non-opaque surfaces, only allow subpixel AA if explicitly permitted.
-  if (!IsOpaque(mFormat) && !mPermitSubpixelAA) {
+  // Only allow subpixel AA if explicitly permitted.
+  if (!GetPermitSubpixelAA()) {
     return false;
   }
 
@@ -1041,13 +1041,15 @@ GfxMatrixToCGAffineTransform(const Matrix &m)
 static bool
 SetupCGContext(DrawTargetSkia* aDT,
                CGContextRef aCGContext,
-               sk_sp<SkCanvas> aCanvas)
+               sk_sp<SkCanvas> aCanvas,
+               const IntPoint& aOrigin,
+               const IntSize& aSize)
 {
   // DrawTarget expects the origin to be at the top left, but CG
   // expects it to be at the bottom left. Transform to set the origin to
   // the top left. Have to set this before we do anything else.
   // This is transform (1) up top
-  CGContextTranslateCTM(aCGContext, 0, aDT->GetSize().height);
+  CGContextTranslateCTM(aCGContext, -aOrigin.x, aOrigin.y + aSize.height);
 
   // Transform (2) from the comments.
   CGContextScaleCTM(aCGContext, 1, -1);
@@ -1102,9 +1104,10 @@ DrawTargetSkia::BorrowCGContext(const DrawOptions &aOptions)
   int32_t stride;
   SurfaceFormat format;
   IntSize size;
+  IntPoint origin;
 
   uint8_t* aSurfaceData = nullptr;
-  if (!LockBits(&aSurfaceData, &size, &stride, &format)) {
+  if (!LockBits(&aSurfaceData, &size, &stride, &format, &origin)) {
     NS_WARNING("Could not lock skia bits to wrap CG around");
     return nullptr;
   }
@@ -1114,7 +1117,7 @@ DrawTargetSkia::BorrowCGContext(const DrawOptions &aOptions)
     // we can reuse the CG Context
     CGContextSaveGState(mCG);
     CGContextSetAlpha(mCG, aOptions.mAlpha);
-    SetupCGContext(this, mCG, mCanvas);
+    SetupCGContext(this, mCG, mCanvas, origin, size);
     return mCG;
   }
 
@@ -1155,7 +1158,7 @@ DrawTargetSkia::BorrowCGContext(const DrawOptions &aOptions)
   CGContextSetShouldSmoothFonts(mCG, true);
   CGContextSetTextDrawingMode(mCG, kCGTextFill);
   CGContextSaveGState(mCG);
-  SetupCGContext(this, mCG, mCanvas);
+  SetupCGContext(this, mCG, mCanvas, origin, size);
   return mCG;
 }
 
@@ -1584,11 +1587,11 @@ DrawTargetSkia::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFor
 #endif
 
 #ifdef DEBUG
-  // Check that our SkCanvas isn't backed by vector storage such as PDF.  If it
-  // is then we want similar storage to avoid losing fidelity (if and when this
-  // DrawTarget is Snapshot()'ed, drawning a raster back into this DrawTarget
-  // will lose fidelity).
-  if (mCanvas->imageInfo().colorType() == kUnknown_SkColorType) {
+  if (!IsBackedByPixels(mCanvas.get())) {
+    // If our canvas is backed by vector storage such as PDF then we want to
+    // create a new DrawTarget with similar storage to avoid losing fidelity
+    // (fidelity will be lost if the returned DT is Snapshot()'ed and drawn
+    // back onto us since a raster will be drawn instead of vector commands).
     NS_WARNING("Not backed by pixels - we need to handle PDF backed SkCanvas");
   }
 #endif
@@ -1773,6 +1776,7 @@ DrawTargetSkia::Init(const IntSize &aSize, SurfaceFormat aFormat)
   mSize = aSize;
   mFormat = aFormat;
   mCanvas = sk_ref_sp(mSurface->getCanvas());
+  SetPermitSubpixelAA(IsOpaque(mFormat));
 
   if (info.isOpaque()) {
     mCanvas->clear(SK_ColorBLACK);
@@ -1789,9 +1793,7 @@ DrawTargetSkia::Init(SkCanvas* aCanvas)
 
   // If the canvas is backed by pixels we clear it to be on the safe side.  If
   // it's not (for example, for PDF output) we don't.
-  bool isBackedByPixels = imageInfo.colorType() != kUnknown_SkColorType;
-  if (isBackedByPixels) {
-    // Note for PDF backed SkCanvas |alphaType == kUnknown_SkAlphaType|.
+  if (IsBackedByPixels(mCanvas.get())) {
     SkColor clearColor = imageInfo.isOpaque() ? SK_ColorBLACK : SK_ColorTRANSPARENT;
     mCanvas->clear(clearColor);
   }
@@ -1801,6 +1803,7 @@ DrawTargetSkia::Init(SkCanvas* aCanvas)
   mSize.height = size.height();
   mFormat = SkiaColorTypeToGfxFormat(imageInfo.colorType(),
                                      imageInfo.alphaType());
+  SetPermitSubpixelAA(IsOpaque(mFormat));
   return true;
 }
 
@@ -1850,6 +1853,7 @@ DrawTargetSkia::InitWithGrContext(GrContext* aGrContext,
   mSize = aSize;
   mFormat = aFormat;
   mCanvas = sk_ref_sp(mSurface->getCanvas());
+  SetPermitSubpixelAA(IsOpaque(mFormat));
   return true;
 }
 
@@ -1869,6 +1873,7 @@ DrawTargetSkia::Init(unsigned char* aData, const IntSize &aSize, int32_t aStride
   mSize = aSize;
   mFormat = aFormat;
   mCanvas = sk_ref_sp(mSurface->getCanvas());
+  SetPermitSubpixelAA(IsOpaque(mFormat));
   return true;
 }
 
@@ -1995,7 +2000,8 @@ DrawTargetSkia::PushLayer(bool aOpaque, Float aOpacity, SourceSurface* aMask,
                           const Matrix& aMaskTransform, const IntRect& aBounds,
                           bool aCopyBackground)
 {
-  PushedLayer layer(GetPermitSubpixelAA(), aOpaque, aOpacity, aMask, aMaskTransform);
+  PushedLayer layer(GetPermitSubpixelAA(), aOpaque, aOpacity, aMask, aMaskTransform,
+                    mCanvas->getTopDevice());
   mPushedLayers.push_back(layer);
 
   SkPaint paint;
@@ -2004,14 +2010,24 @@ DrawTargetSkia::PushLayer(bool aOpaque, Float aOpacity, SourceSurface* aMask,
   // implicitly drawing the layer so that we can properly mask it in PopLayer.
   paint.setAlpha(aMask ? 0 : ColorFloatToByte(aOpacity));
 
+  // aBounds is supplied in device space, but SaveLayerRec wants local space.
   SkRect bounds = IntRectToSkRect(aBounds);
+  if (!bounds.isEmpty()) {
+    SkMatrix inverseCTM;
+    if (mCanvas->getTotalMatrix().invert(&inverseCTM)) {
+      inverseCTM.mapRect(&bounds);
+    } else {
+      bounds.setEmpty();
+    }
+  }
 
   sk_sp<SkImageFilter> backdrop(aCopyBackground ? new CopyLayerImageFilter : nullptr);
 
   SkCanvas::SaveLayerRec saveRec(aBounds.IsEmpty() ? nullptr : &bounds,
                                  &paint,
                                  backdrop.get(),
-                                 aOpaque ? SkCanvas::kIsOpaque_SaveLayerFlag : 0);
+                                 SkCanvas::kPreserveLCDText_SaveLayerFlag |
+                                   (aOpaque ? SkCanvas::kIsOpaque_SaveLayerFlag : 0));
 
   mCanvas->saveLayer(saveRec);
 
@@ -2031,7 +2047,10 @@ DrawTargetSkia::PopLayer()
   MOZ_ASSERT(mPushedLayers.size());
   const PushedLayer& layer = mPushedLayers.back();
 
-  if (layer.mMask) {
+  // Ensure that the top device has actually changed. If it hasn't, then there
+  // is no layer image to be masked.
+  if (layer.mMask &&
+      layer.mPreviousDevice != mCanvas->getTopDevice()) {
     // If we have a mask, take a reference to the top layer's device so that
     // we can mask it ourselves. This assumes we forced SkCanvas::restore to
     // skip implicitly drawing the layer.

@@ -277,10 +277,6 @@ WidgetEvent::HasKeyEventMessage() const
     case eKeyUp:
     case eKeyDownOnPlugin:
     case eKeyUpOnPlugin:
-    case eBeforeKeyDown:
-    case eBeforeKeyUp:
-    case eAfterKeyDown:
-    case eAfterKeyUp:
     case eAccessKeyNotFound:
       return true;
     default:
@@ -386,6 +382,9 @@ WidgetEvent::IsAllowedToDispatchDOMEvent() const
       if (DefaultPreventedByContent() &&
           (mMessage == eMouseMove || mMessage == eMouseDown ||
            mMessage == eMouseUp)) {
+        return false;
+      }
+      if (mMessage == eMouseTouchDrag) {
         return false;
       }
       MOZ_FALLTHROUGH;

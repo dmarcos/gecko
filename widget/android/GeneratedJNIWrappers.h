@@ -2340,7 +2340,7 @@ public:
                 "(II)V";
         static const bool isStatic = false;
         static const mozilla::jni::ExceptionMode exceptionMode =
-                mozilla::jni::ExceptionMode::ABORT;
+                mozilla::jni::ExceptionMode::IGNORE;
         static const mozilla::jni::CallingThread callingThread =
                 mozilla::jni::CallingThread::GECKO;
         static const mozilla::jni::DispatchTarget dispatchTarget =
@@ -2363,7 +2363,7 @@ public:
                 "(Ljava/lang/CharSequence;III)V";
         static const bool isStatic = false;
         static const mozilla::jni::ExceptionMode exceptionMode =
-                mozilla::jni::ExceptionMode::ABORT;
+                mozilla::jni::ExceptionMode::IGNORE;
         static const mozilla::jni::CallingThread callingThread =
                 mozilla::jni::CallingThread::GECKO;
         static const mozilla::jni::DispatchTarget dispatchTarget =
@@ -5016,6 +5016,94 @@ public:
     static const mozilla::jni::CallingThread callingThread =
             mozilla::jni::CallingThread::ANY;
 
+};
+
+class VsyncSource : public mozilla::jni::ObjectBase<VsyncSource>
+{
+public:
+    static const char name[];
+
+    explicit VsyncSource(const Context& ctx) : ObjectBase<VsyncSource>(ctx) {}
+
+    struct GetRefreshRate_t {
+        typedef VsyncSource Owner;
+        typedef float ReturnType;
+        typedef float SetterType;
+        typedef mozilla::jni::Args<> Args;
+        static constexpr char name[] = "getRefreshRate";
+        static constexpr char signature[] =
+                "()F";
+        static const bool isStatic = false;
+        static const mozilla::jni::ExceptionMode exceptionMode =
+                mozilla::jni::ExceptionMode::ABORT;
+        static const mozilla::jni::CallingThread callingThread =
+                mozilla::jni::CallingThread::ANY;
+        static const mozilla::jni::DispatchTarget dispatchTarget =
+                mozilla::jni::DispatchTarget::CURRENT;
+    };
+
+    auto GetRefreshRate() const -> float;
+
+    struct NotifyVsync_t {
+        typedef VsyncSource Owner;
+        typedef void ReturnType;
+        typedef void SetterType;
+        typedef mozilla::jni::Args<> Args;
+        static constexpr char name[] = "nativeNotifyVsync";
+        static constexpr char signature[] =
+                "()V";
+        static const bool isStatic = true;
+        static const mozilla::jni::ExceptionMode exceptionMode =
+                mozilla::jni::ExceptionMode::ABORT;
+        static const mozilla::jni::CallingThread callingThread =
+                mozilla::jni::CallingThread::ANY;
+        static const mozilla::jni::DispatchTarget dispatchTarget =
+                mozilla::jni::DispatchTarget::CURRENT;
+    };
+
+    struct ObserveVsync_t {
+        typedef VsyncSource Owner;
+        typedef bool ReturnType;
+        typedef bool SetterType;
+        typedef mozilla::jni::Args<
+                bool> Args;
+        static constexpr char name[] = "observeVsync";
+        static constexpr char signature[] =
+                "(Z)Z";
+        static const bool isStatic = false;
+        static const mozilla::jni::ExceptionMode exceptionMode =
+                mozilla::jni::ExceptionMode::ABORT;
+        static const mozilla::jni::CallingThread callingThread =
+                mozilla::jni::CallingThread::ANY;
+        static const mozilla::jni::DispatchTarget dispatchTarget =
+                mozilla::jni::DispatchTarget::CURRENT;
+    };
+
+    auto ObserveVsync(bool) const -> bool;
+
+    struct INSTANCE_t {
+        typedef VsyncSource Owner;
+        typedef VsyncSource::LocalRef ReturnType;
+        typedef VsyncSource::Param SetterType;
+        typedef mozilla::jni::Args<> Args;
+        static constexpr char name[] = "INSTANCE";
+        static constexpr char signature[] =
+                "Lorg/mozilla/gecko/gfx/VsyncSource;";
+        static const bool isStatic = true;
+        static const mozilla::jni::ExceptionMode exceptionMode =
+                mozilla::jni::ExceptionMode::ABORT;
+        static const mozilla::jni::CallingThread callingThread =
+                mozilla::jni::CallingThread::ANY;
+        static const mozilla::jni::DispatchTarget dispatchTarget =
+                mozilla::jni::DispatchTarget::CURRENT;
+    };
+
+    static auto INSTANCE() -> VsyncSource::LocalRef;
+
+    static const mozilla::jni::CallingThread callingThread =
+            mozilla::jni::CallingThread::ANY;
+
+    template<class Impl> class Natives;
 };
 
 class Clipboard : public mozilla::jni::ObjectBase<Clipboard>

@@ -610,9 +610,10 @@ WasmBinaryToText(JSContext* cx, unsigned argc, Value* vp)
     StringBuffer buffer(cx);
     bool ok;
     if (experimental)
-        ok = wasm::BinaryToExperimentalText(cx, bytes, length, buffer, wasm::ExperimentalTextFormatting());
+        ok = wasm::BinaryToExperimentalText(cx, bytes, length, buffer);
     else
         ok = wasm::BinaryToText(cx, bytes, length, buffer);
+
     if (!ok) {
         if (!cx->isExceptionPending())
             JS_ReportErrorASCII(cx, "wasm binary to text print error");
@@ -785,7 +786,17 @@ ScheduleGC(JSContext* cx, unsigned argc, Value* vp)
         PrepareZoneForGC(zone);
     } else if (args[0].isString()) {
         /* This allows us to schedule the atoms zone for GC. */
-        PrepareZoneForGC(args[0].toString()->zone());
+        Zone* zone = args[0].toString()->zoneFromAnyThread();
+        if (!CurrentThreadCanAccessZone(zone)) {
+            RootedObject callee(cx, &args.callee());
+            ReportUsageErrorASCII(cx, callee, "Specified zone not accessible for GC");
+            return false;
+        }
+        PrepareZoneForGC(zone);
+    } else {
+        RootedObject callee(cx, &args.callee());
+        ReportUsageErrorASCII(cx, callee, "Bad argument - expecting integer, object or string");
+        return false;
     }
 
     uint32_t zealBits;
@@ -1044,7 +1055,7 @@ HasChild(JSContext* cx, unsigned argc, Value* vp)
     RootedValue parent(cx, args.get(0));
     RootedValue child(cx, args.get(1));
 
-    if (!parent.isMarkable() || !child.isMarkable()) {
+    if (!parent.isGCThing() || !child.isGCThing()) {
         args.rval().setBoolean(false);
         return true;
     }
@@ -3337,7 +3348,8 @@ GetConstructorName(JSContext* cx, unsigned argc, Value* vp)
     }
 
     RootedAtom name(cx);
-    if (!args[0].toObject().constructorDisplayAtom(cx, &name))
+    RootedObject obj(cx, &args[0].toObject());
+    if (!JSObject::constructorDisplayAtom(cx, obj, &name))
         return false;
 
     if (name) {
@@ -4217,9 +4229,10 @@ JS_FN_HELP("rejectPromise", RejectPromise, 2, 0,
 gc::ZealModeHelpText),
 
     JS_FN_HELP("schedulegc", ScheduleGC, 1, 0,
-"schedulegc([num | obj])",
+"schedulegc([num | obj | string])",
 "  If num is given, schedule a GC after num allocations.\n"
 "  If obj is given, schedule a GC of obj's zone.\n"
+"  If string is given, schedule a GC of the string's zone if possible.\n"
 "  Returns the number of allocations before the next trigger."),
 
     JS_FN_HELP("selectforgc", SelectForGC, 0, 0,

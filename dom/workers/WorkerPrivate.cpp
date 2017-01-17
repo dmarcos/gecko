@@ -1126,13 +1126,14 @@ private:
       // the ServiceWorkerManager to report on any controlled documents.
       if (aWorkerPrivate->IsServiceWorker()) {
         RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-        MOZ_ASSERT(swm);
-        swm->HandleError(aCx, aWorkerPrivate->GetPrincipal(),
-                         aWorkerPrivate->WorkerName(),
-                         aWorkerPrivate->ScriptURL(),
-                         mMessage,
-                         mFilename, mLine, mLineNumber,
-                         mColumnNumber, mFlags, mExnType);
+        if (swm) {
+          swm->HandleError(aCx, aWorkerPrivate->GetPrincipal(),
+                           aWorkerPrivate->WorkerName(),
+                           aWorkerPrivate->ScriptURL(),
+                           mMessage,
+                           mFilename, mLine, mLineNumber,
+                           mColumnNumber, mFlags, mExnType);
+        }
         return true;
       }
 
@@ -1609,9 +1610,10 @@ TimerThreadEventTarget::IsOnCurrentThread(bool* aIsOnCurrentThread)
 NS_IMPL_ISUPPORTS(TimerThreadEventTarget, nsIEventTarget)
 
 WorkerLoadInfo::WorkerLoadInfo()
-  : mWindowID(UINT64_MAX)
+  : mLoadFlags(nsIRequest::LOAD_NORMAL)
+  , mWindowID(UINT64_MAX)
   , mServiceWorkerID(0)
-  , mReferrerPolicy(net::RP_Default)
+  , mReferrerPolicy(net::RP_Unset)
   , mFromWindow(false)
   , mEvalAllowed(false)
   , mReportCSPViolations(false)
@@ -1666,6 +1668,7 @@ WorkerLoadInfo::StealFrom(WorkerLoadInfo& aOther)
 
   mDomain = aOther.mDomain;
   mServiceWorkerCacheName = aOther.mServiceWorkerCacheName;
+  mLoadFlags = aOther.mLoadFlags;
   mWindowID = aOther.mWindowID;
   mServiceWorkerID = aOther.mServiceWorkerID;
   mReferrerPolicy = aOther.mReferrerPolicy;
@@ -3501,7 +3504,7 @@ WorkerPrivateParent<Derived>::SetPrincipal(nsIPrincipal* aPrincipal,
                                   &mLoadInfo.mEvalAllowed);
     // Set ReferrerPolicy
     bool hasReferrerPolicy = false;
-    uint32_t rp = mozilla::net::RP_Default;
+    uint32_t rp = mozilla::net::RP_Unset;
 
     nsresult rv = mLoadInfo.mCSP->GetReferrerPolicy(&rp, &hasReferrerPolicy);
     NS_ENSURE_SUCCESS_VOID(rv);
@@ -4019,6 +4022,7 @@ WorkerPrivate::WorkerPrivate(WorkerPrivate* aParent,
   , mPeriodicGCTimerRunning(false)
   , mIdleGCTimerRunning(false)
   , mWorkerScriptExecutedSuccessfully(false)
+  , mFetchHandlerWasAdded(false)
   , mOnLine(false)
 {
   MOZ_ASSERT_IF(!IsDedicatedWorker(), !aWorkerName.IsVoid());
@@ -4048,7 +4052,7 @@ WorkerPrivate::WorkerPrivate(WorkerPrivate* aParent,
   }
 
   MOZ_ASSERT(NS_IsMainThread());
-  target = GetWindow() ? GetWindow()->GetThrottledEventQueue() : nullptr;
+  target = GetWindow() ? GetWindow()->EventTargetFor(TaskCategory::Worker) : nullptr;
 
   if (!target) {
     nsCOMPtr<nsIThread> mainThread;
@@ -4460,7 +4464,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindowInner* aWindow,
       loadInfo.mFromWindow = false;
       loadInfo.mWindowID = UINT64_MAX;
       loadInfo.mStorageAllowed = true;
-      loadInfo.mOriginAttributes = PrincipalOriginAttributes();
+      loadInfo.mOriginAttributes = OriginAttributes();
     }
 
     MOZ_ASSERT(loadInfo.mPrincipal);
@@ -5307,9 +5311,17 @@ WorkerPrivate::CancelAllTimeouts()
 }
 
 already_AddRefed<nsIEventTarget>
-WorkerPrivate::CreateNewSyncLoop()
+WorkerPrivate::CreateNewSyncLoop(Status aFailStatus)
 {
   AssertIsOnWorkerThread();
+
+  {
+    MutexAutoLock lock(mMutex);
+
+    if (mStatus >= aFailStatus) {
+      return nullptr;
+    }
+  }
 
   nsCOMPtr<nsIThreadInternal> thread = do_QueryInterface(NS_GetCurrentThread());
   MOZ_ASSERT(thread);

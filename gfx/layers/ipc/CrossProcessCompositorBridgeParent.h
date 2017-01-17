@@ -13,6 +13,8 @@
 namespace mozilla {
 namespace layers {
 
+class CompositorOptions;
+
 /**
  * This class handles layer updates pushed directly from child processes to
  * the compositor thread. It's associated with a CompositorBridgeParent on the
@@ -94,14 +96,7 @@ public:
   virtual bool DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers) override;
 
   virtual void ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
-                                   const uint64_t& aTransactionId,
-                                   const TargetConfig& aTargetConfig,
-                                   const InfallibleTArray<PluginWindowData>& aPlugins,
-                                   bool aIsFirstPaint,
-                                   bool aScheduleComposite,
-                                   uint32_t aPaintSequenceNumber,
-                                   bool aIsRepeatTransaction,
-                                   int32_t /*aPaintSyncId: unused*/,
+                                   const TransactionInfo& aInfo,
                                    bool aHitTestUpdate) override;
   virtual void ForceComposite(LayerTransactionParent* aLayerTree) override;
   virtual void NotifyClearCachedResources(LayerTransactionParent* aLayerTree) override;
@@ -144,7 +139,7 @@ public:
     return false;
   }
 
-  virtual mozilla::ipc::IPCResult RecvAsyncPanZoomEnabled(const uint64_t& aLayersId, bool* aHasAPZ) override;
+  virtual mozilla::ipc::IPCResult RecvGetCompositorOptions(const uint64_t& aLayersId, CompositorOptions* aOptions) override;
 
   virtual PAPZCTreeManagerParent* AllocPAPZCTreeManagerParent(const uint64_t& aLayersId) override;
   virtual bool DeallocPAPZCTreeManagerParent(PAPZCTreeManagerParent* aActor) override;

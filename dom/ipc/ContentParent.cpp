@@ -41,7 +41,6 @@
 #include "mozilla/devtools/HeapSnapshotTempFileHelperParent.h"
 #include "mozilla/docshell/OfflineCacheUpdateParent.h"
 #include "mozilla/dom/DataTransfer.h"
-#include "mozilla/dom/DOMStorageIPC.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/ExternalHelperAppParent.h"
@@ -53,6 +52,7 @@
 #include "mozilla/dom/PCycleCollectWithLogsParent.h"
 #include "mozilla/dom/PMemoryReportRequestParent.h"
 #include "mozilla/dom/ServiceWorkerRegistrar.h"
+#include "mozilla/dom/StorageIPC.h"
 #include "mozilla/dom/devicestorage/DeviceStorageRequestParent.h"
 #include "mozilla/dom/power/PowerManagerService.h"
 #include "mozilla/dom/Permissions.h"
@@ -708,11 +708,8 @@ ContentParent::GetInitialProcessPriority(Element* aFrameElement)
     return PROCESS_PRIORITY_FOREGROUND;
   }
 
-  if (aFrameElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::mozapptype,
-                                 NS_LITERAL_STRING("inputmethod"), eCaseMatters)) {
-    return PROCESS_PRIORITY_FOREGROUND_KEYBOARD;
-  } else if (!aFrameElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::mozapptype,
-                                        NS_LITERAL_STRING("critical"), eCaseMatters)) {
+  if (!aFrameElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::mozapptype,
+                                  NS_LITERAL_STRING("critical"), eCaseMatters)) {
     return PROCESS_PRIORITY_FOREGROUND;
   }
 
@@ -1780,7 +1777,7 @@ ContentParent::LaunchSubprocess(ProcessPriority aInitialPriority /* = PROCESS_PR
 
   ContentProcessManager::GetSingleton()->AddContentProcess(this);
 
-  ProcessHangMonitor::AddProcess(this);
+  mHangMonitorActor = ProcessHangMonitor::AddProcess(this);
 
   // Set a reply timeout for CPOWs.
   SetReplyTimeoutMs(Preferences::GetInt("dom.ipc.cpow.timeout", 0));
@@ -2076,6 +2073,12 @@ mozilla::ipc::IPCResult
 ContentParent::RecvReadDataStorageArray(const nsString& aFilename,
                                         InfallibleTArray<DataStorageItem>* aValues)
 {
+  // If we're shutting down, the DataStorage object may have been cleared
+  // already, and setting it up is pointless anyways since we're about to die.
+  if (mShutdownPending) {
+    return IPC_OK();
+  }
+
   // Ensure the SSS is initialized before we try to use its storage.
   nsCOMPtr<nsISiteSecurityService> sss = do_GetService("@mozilla.org/ssservice;1");
 
@@ -2472,14 +2475,6 @@ ContentParent::AllocPBackgroundParent(Transport* aTransport,
                                       ProcessId aOtherProcess)
 {
   return BackgroundParent::Alloc(this, aTransport, aOtherProcess);
-}
-
-PProcessHangMonitorParent*
-ContentParent::AllocPProcessHangMonitorParent(Transport* aTransport,
-                                              ProcessId aOtherProcess)
-{
-  mHangMonitorActor = CreateHangMonitorParent(this, aTransport, aOtherProcess);
-  return mHangMonitorActor;
 }
 
 mozilla::ipc::IPCResult
@@ -3037,13 +3032,13 @@ ContentParent::DeallocPMediaParent(media::PMediaParent *aActor)
 PStorageParent*
 ContentParent::AllocPStorageParent()
 {
-  return new DOMStorageDBParent();
+  return new StorageDBParent();
 }
 
 bool
 ContentParent::DeallocPStorageParent(PStorageParent* aActor)
 {
-  DOMStorageDBParent* child = static_cast<DOMStorageDBParent*>(aActor);
+  StorageDBParent* child = static_cast<StorageDBParent*>(aActor);
   child->ReleaseIPDLReference();
   return true;
 }
@@ -4182,7 +4177,7 @@ ContentParent::CommonCreateWindow(PBrowserParent* aThisTab,
                                   nsIURI* aURIToLoad,
                                   const nsCString& aFeatures,
                                   const nsCString& aBaseURI,
-                                  const DocShellOriginAttributes& aOpenerOriginAttributes,
+                                  const OriginAttributes& aOpenerOriginAttributes,
                                   const float& aFullZoom,
                                   nsresult& aResult,
                                   nsCOMPtr<nsITabParent>& aNewTabParent,
@@ -4306,7 +4301,7 @@ ContentParent::RecvCreateWindow(PBrowserParent* aThisTab,
                                 const bool& aSizeSpecified,
                                 const nsCString& aFeatures,
                                 const nsCString& aBaseURI,
-                                const DocShellOriginAttributes& aOpenerOriginAttributes,
+                                const OriginAttributes& aOpenerOriginAttributes,
                                 const float& aFullZoom,
                                 nsresult* aResult,
                                 bool* aWindowIsNew,
@@ -4373,7 +4368,7 @@ ContentParent::RecvCreateWindowInDifferentProcess(
   const URIParams& aURIToLoad,
   const nsCString& aFeatures,
   const nsCString& aBaseURI,
-  const DocShellOriginAttributes& aOpenerOriginAttributes,
+  const OriginAttributes& aOpenerOriginAttributes,
   const float& aFullZoom)
 {
   nsCOMPtr<nsITabParent> newRemoteTab;
@@ -4770,6 +4765,22 @@ ContentParent::RecvAccumulateChildKeyedHistogram(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult
+ContentParent::RecvUpdateChildScalars(
+                InfallibleTArray<ScalarAction>&& aScalarActions)
+{
+  Telemetry::UpdateChildScalars(GeckoProcessType_Content, aScalarActions);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+ContentParent::RecvUpdateChildKeyedScalars(
+                InfallibleTArray<KeyedScalarAction>&& aScalarActions)
+{
+  Telemetry::UpdateChildKeyedScalars(GeckoProcessType_Content, aScalarActions);
+  return IPC_OK();
+}
+
 PURLClassifierParent*
 ContentParent::AllocPURLClassifierParent(const Principal& aPrincipal,
                                          const bool& aUseTrackingProtection,
@@ -4790,11 +4801,13 @@ ContentParent::RecvPURLClassifierConstructor(PURLClassifierParent* aActor,
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aActor);
+  *aSuccess = false;
 
   auto* actor = static_cast<URLClassifierParent*>(aActor);
   nsCOMPtr<nsIPrincipal> principal(aPrincipal);
   if (!principal) {
-    return IPC_FAIL_NO_REASON(this);
+    actor->ClassificationFailed();
+    return IPC_OK();
   }
   return actor->StartClassify(principal, aUseTrackingProtection, aSuccess);
 }

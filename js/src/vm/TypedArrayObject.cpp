@@ -139,6 +139,17 @@ TypedArrayObject::ensureHasBuffer(JSContext* cx, Handle<TypedArrayObject*> tarra
     return true;
 }
 
+#ifdef DEBUG
+void
+TypedArrayObject::assertZeroLengthArrayData() const
+{
+    if (length() == 0 && !hasBuffer()) {
+        uint8_t* end = fixedData(TypedArrayObject::FIXED_DATA_START);
+        MOZ_ASSERT(end[0] == ZeroLengthArrayData);
+    }
+}
+#endif
+
 /* static */ void
 TypedArrayObject::trace(JSTracer* trc, JSObject* objArg)
 {
@@ -151,6 +162,13 @@ TypedArrayObject::finalize(FreeOp* fop, JSObject* obj)
 {
     MOZ_ASSERT(!IsInsideNursery(obj));
     TypedArrayObject* curObj = &obj->as<TypedArrayObject>();
+
+    // Template objects or discarded objects (which didn't have enough room
+    // for inner elements). Don't have anything to free.
+    if (!curObj->elementsRaw())
+        return;
+
+    curObj->assertZeroLengthArrayData();
 
     // Typed arrays with a buffer object do not need to be free'd
     if (curObj->hasBuffer())
@@ -182,7 +200,7 @@ TypedArrayObject::objectMovedDuringMinorGC(JSTracer* trc, JSObject* obj, const J
 {
     TypedArrayObject* newObj = &obj->as<TypedArrayObject>();
     const TypedArrayObject* oldObj = &old->as<TypedArrayObject>();
-    MOZ_ASSERT(newObj->elements() == oldObj->elements());
+    MOZ_ASSERT(newObj->elementsRaw() == oldObj->elementsRaw());
     MOZ_ASSERT(obj->isTenured());
 
     // Typed arrays with a buffer object do not need an update.
@@ -213,8 +231,18 @@ JS_FOR_EACH_TYPED_ARRAY(OBJECT_MOVED_TYPED_ARRAY)
     }
 
     size_t headerSize = dataOffset() + sizeof(HeapSlot);
+
+    // See AllocKindForLazyBuffer.
+    MOZ_ASSERT_IF(nbytes == 0, headerSize + sizeof(uint8_t) <= GetGCKindBytes(newAllocKind));
+
     if (headerSize + nbytes <= GetGCKindBytes(newAllocKind)) {
         MOZ_ASSERT(oldObj->hasInlineElements());
+#ifdef DEBUG
+        if (nbytes == 0) {
+            uint8_t* output = newObj->fixedData(TypedArrayObject::FIXED_DATA_START);
+            output[0] = ZeroLengthArrayData;
+        }
+#endif
         newObj->setInlineElements();
     } else {
         MOZ_ASSERT(!oldObj->hasInlineElements());
@@ -509,6 +537,12 @@ class TypedArrayObjectTemplate : public TypedArrayObject
             void* data = obj->fixedData(FIXED_DATA_START);
             obj->initPrivate(data);
             memset(data, 0, len * sizeof(NativeType));
+#ifdef DEBUG
+            if (len == 0) {
+                uint8_t* elements = static_cast<uint8_t*>(data);
+                elements[0] = ZeroLengthArrayData;
+            }
+#endif
         }
 
         obj->setFixedSlot(TypedArrayObject::LENGTH_SLOT, Int32Value(len));
@@ -600,6 +634,13 @@ class TypedArrayObjectTemplate : public TypedArrayObject
 
         // Verify that the private slot is at the expected place.
         MOZ_ASSERT(tarray->numFixedSlots() == TypedArrayObject::DATA_SLOT);
+
+#ifdef DEBUG
+        if (len == 0) {
+            uint8_t* output = tarray->fixedData(TypedArrayObject::FIXED_DATA_START);
+            output[0] = TypedArrayObject::ZeroLengthArrayData;
+        }
+#endif
     }
 
     static void
@@ -1655,6 +1696,11 @@ DataViewObject*
 DataViewObject::create(JSContext* cx, uint32_t byteOffset, uint32_t byteLength,
                        Handle<ArrayBufferObjectMaybeShared*> arrayBuffer, JSObject* protoArg)
 {
+    if (arrayBuffer->isDetached()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TYPED_ARRAY_DETACHED);
+        return nullptr;
+    }
+
     MOZ_ASSERT(byteOffset <= INT32_MAX);
     MOZ_ASSERT(byteLength <= INT32_MAX);
     MOZ_ASSERT(byteOffset + byteLength < UINT32_MAX);
@@ -1734,7 +1780,7 @@ DataViewObject::create(JSContext* cx, uint32_t byteOffset, uint32_t byteLength,
 }
 
 bool
-DataViewObject::getAndCheckConstructorArgs(JSContext* cx, JSObject* bufobj, const CallArgs& args,
+DataViewObject::getAndCheckConstructorArgs(JSContext* cx, HandleObject bufobj, const CallArgs& args,
                                            uint32_t* byteOffsetPtr, uint32_t* byteLengthPtr)
 {
     if (!IsArrayBufferMaybeShared(bufobj)) {
@@ -1849,7 +1895,7 @@ DataViewObject::constructWrapped(JSContext* cx, HandleObject bufobj, const CallA
     MOZ_ASSERT(args.isConstructing());
     MOZ_ASSERT(bufobj->is<WrapperObject>());
 
-    JSObject* unwrapped = CheckedUnwrap(bufobj);
+    RootedObject unwrapped(cx, CheckedUnwrap(bufobj));
     if (!unwrapped) {
         ReportAccessDenied(cx);
         return false;
@@ -1874,15 +1920,27 @@ DataViewObject::constructWrapped(JSContext* cx, HandleObject bufobj, const CallA
             return false;
     }
 
-    FixedInvokeArgs<3> args2(cx);
+    RootedObject dv(cx);
+    {
+        JSAutoCompartment ac(cx, unwrapped);
 
-    args2[0].set(PrivateUint32Value(byteOffset));
-    args2[1].set(PrivateUint32Value(byteLength));
-    args2[2].setObject(*proto);
+        Rooted<ArrayBufferObjectMaybeShared*> buffer(cx);
+        buffer = &unwrapped->as<ArrayBufferObjectMaybeShared>();
 
-    RootedValue fval(cx, global->createDataViewForThis());
-    RootedValue thisv(cx, ObjectValue(*bufobj));
-    return js::Call(cx, fval, thisv, args2, args.rval());
+        RootedObject wrappedProto(cx, proto);
+        if (!cx->compartment()->wrap(cx, &wrappedProto))
+            return false;
+
+        dv = DataViewObject::create(cx, byteOffset, byteLength, buffer, wrappedProto);
+        if (!dv)
+            return false;
+    }
+
+    if (!cx->compartment()->wrap(cx, &dv))
+        return false;
+
+    args.rval().setObject(*dv);
+    return true;
 }
 
 bool
@@ -1904,11 +1962,9 @@ DataViewObject::class_constructor(JSContext* cx, unsigned argc, Value* vp)
 
 template <typename NativeType>
 /* static */ SharedMem<uint8_t*>
-DataViewObject::getDataPointer(JSContext* cx, Handle<DataViewObject*> obj, double offset,
+DataViewObject::getDataPointer(JSContext* cx, Handle<DataViewObject*> obj, uint64_t offset,
                                bool* isSharedMemory)
 {
-    MOZ_ASSERT(offset >= 0);
-
     const size_t TypeSize = sizeof(NativeType);
     if (offset > UINT32_MAX - TypeSize || offset + TypeSize > obj->byteLength()) {
         JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_ARG_INDEX_OUT_OF_RANGE,
@@ -2013,31 +2069,6 @@ struct DataViewIO
     }
 };
 
-static bool
-ToIndex(JSContext* cx, HandleValue v, double* index)
-{
-    if (v.isUndefined()) {
-        *index = 0.0;
-        return true;
-    }
-
-    double integerIndex;
-    if (!ToInteger(cx, v, &integerIndex))
-        return false;
-
-    // Inlined version of ToLength.
-    // 1. Already an integer
-    // 2. Step eliminates < 0, +0 == -0 with SameValueZero
-    // 3/4. Limit to <= 2^53-1, so everything above should fail.
-    if (integerIndex < 0 || integerIndex > 9007199254740991) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_BAD_INDEX);
-        return false;
-    }
-
-    *index = integerIndex;
-    return true;
-}
-
 template<typename NativeType>
 /* static */ bool
 DataViewObject::read(JSContext* cx, Handle<DataViewObject*> obj,
@@ -2047,7 +2078,7 @@ DataViewObject::read(JSContext* cx, Handle<DataViewObject*> obj,
     // Step 3. unnecessary assert
 
     // Step 4.
-    double getIndex;
+    uint64_t getIndex;
     if (!ToIndex(cx, args.get(0), &getIndex))
         return false;
 
@@ -2119,7 +2150,7 @@ DataViewObject::write(JSContext* cx, Handle<DataViewObject*> obj,
     // Step 3. unnecessary assert
 
     // Step 4.
-    double getIndex;
+    uint64_t getIndex;
     if (!ToIndex(cx, args.get(0), &getIndex))
         return false;
 
@@ -2908,22 +2939,7 @@ DataViewObject::initClass(JSContext* cx)
     if (!DefineToStringTag(cx, proto, cx->names().DataView))
         return false;
 
-    /*
-     * Create a helper function to implement the craziness of
-     * |new DataView(new otherWindow.ArrayBuffer())|, and install it in the
-     * global for use by the DataViewObject constructor.
-     */
-    RootedFunction fun(cx, NewNativeFunction(cx, ArrayBufferObject::createDataViewForThis,
-                                             0, nullptr));
-    if (!fun)
-        return false;
-
-    if (!GlobalObject::initBuiltinConstructor(cx, global, JSProto_DataView, ctor, proto))
-        return false;
-
-    global->setCreateDataViewForThis(fun);
-
-    return true;
+    return GlobalObject::initBuiltinConstructor(cx, global, JSProto_DataView, ctor, proto);
 }
 
 void
@@ -3031,36 +3047,50 @@ js::DefineTypedArrayElement(JSContext* cx, HandleObject obj, uint64_t index,
 {
     MOZ_ASSERT(obj->is<TypedArrayObject>());
 
-    // These are all substeps of 3.c.
-    // Steps i-vi.
+    // These are all substeps of 3.b.
+
+    // Steps i-iii are handled by the caller.
+
+    // Steps iv-v.
     // We (wrongly) ignore out of range defines with a value.
-    if (index >= obj->as<TypedArrayObject>().length())
+    uint32_t length = obj->as<TypedArrayObject>().length();
+    if (index >= length)
         return result.succeed();
 
-    // Step vii.
+    // Step vi.
     if (desc.isAccessorDescriptor())
         return result.fail(JSMSG_CANT_REDEFINE_PROP);
 
-    // Step viii.
+    // Step vii.
     if (desc.hasConfigurable() && desc.configurable())
         return result.fail(JSMSG_CANT_REDEFINE_PROP);
 
-    // Step ix.
+    // Step viii.
     if (desc.hasEnumerable() && !desc.enumerable())
         return result.fail(JSMSG_CANT_REDEFINE_PROP);
 
-    // Step x.
+    // Step ix.
     if (desc.hasWritable() && !desc.writable())
         return result.fail(JSMSG_CANT_REDEFINE_PROP);
 
-    // Step xi.
+    // Step x.
     if (desc.hasValue()) {
-        double d;
-        if (!ToNumber(cx, desc.value(), &d))
+        // The following step numbers refer to 9.4.5.9
+        // IntegerIndexedElementSet.
+
+        // Steps 1-2 are enforced by the caller.
+
+        // Step 3.
+        double numValue;
+        if (!ToNumber(cx, desc.value(), &numValue))
             return false;
 
-        if (obj->is<TypedArrayObject>())
-            TypedArrayObject::setElement(obj->as<TypedArrayObject>(), index, d);
+        // Steps 4-5, 8-9.
+        if (obj->as<TypedArrayObject>().hasDetachedBuffer())
+            return result.fail(JSMSG_TYPED_ARRAY_DETACHED);
+
+        // Steps 10-16.
+        TypedArrayObject::setElement(obj->as<TypedArrayObject>(), index, numValue);
     }
 
     // Step xii.

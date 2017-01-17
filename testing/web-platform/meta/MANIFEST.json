@@ -31926,6 +31926,10 @@
         "url": "/user-timing/test_user_timing_mark.html"
       },
       {
+        "path": "user-timing/test_user_timing_mark_and_measure_exception_when_invoke_with_timing_attributes.html",
+        "url": "/user-timing/test_user_timing_mark_and_measure_exception_when_invoke_with_timing_attributes.html"
+      },
+      {
         "path": "user-timing/test_user_timing_mark_and_measure_exception_when_invoke_without_parameter.html",
         "url": "/user-timing/test_user_timing_mark_and_measure_exception_when_invoke_without_parameter.html"
       },
@@ -32188,6 +32192,10 @@
       {
         "path": "webaudio/the-audio-api/the-audionode-interface/audionode-connect-return-value.html",
         "url": "/webaudio/the-audio-api/the-audionode-interface/audionode-connect-return-value.html"
+      },
+      {
+        "path": "webaudio/the-audio-api/the-audioparam-interface/idl-test.html",
+        "url": "/webaudio/the-audio-api/the-audioparam-interface/idl-test.html"
       },
       {
         "path": "webaudio/the-audio-api/the-audioparam-interface/retrospective-setValueAtTime.html",
@@ -39335,7 +39343,9 @@
     ]
   },
   "local_changes": {
-    "deleted": [],
+    "deleted": [
+      "web-animations/animation-model/animation-types/type-per-property.html"
+    ],
     "deleted_reftests": {},
     "items": {
       "testharness": {
@@ -39557,10 +39567,34 @@
             "url": "/html/semantics/forms/the-select-element/select-validity.html"
           }
         ],
+        "selection/setBaseAndExtent.html": [
+          {
+            "path": "selection/setBaseAndExtent.html",
+            "url": "/selection/setBaseAndExtent.html"
+          }
+        ],
+        "service-workers/service-worker/registration-useCache.https.html": [
+          {
+            "path": "service-workers/service-worker/registration-useCache.https.html",
+            "url": "/service-workers/service-worker/registration-useCache.https.html"
+          }
+        ],
         "uievents/order-of-events/focus-events/focus-automated-blink-webkit.html": [
           {
             "path": "uievents/order-of-events/focus-events/focus-automated-blink-webkit.html",
             "url": "/uievents/order-of-events/focus-events/focus-automated-blink-webkit.html"
+          }
+        ],
+        "web-animations/animation-model/animation-types/addition-per-property.html": [
+          {
+            "path": "web-animations/animation-model/animation-types/addition-per-property.html",
+            "url": "/web-animations/animation-model/animation-types/addition-per-property.html"
+          }
+        ],
+        "web-animations/animation-model/animation-types/interpolation-per-property.html": [
+          {
+            "path": "web-animations/animation-model/animation-types/interpolation-per-property.html",
+            "url": "/web-animations/animation-model/animation-types/interpolation-per-property.html"
           }
         ],
         "web-animations/animation-model/animation-types/spacing-keyframes-filters.html": [
@@ -39585,6 +39619,12 @@
           {
             "path": "web-animations/animation-model/combining-effects/effect-composition.html",
             "url": "/web-animations/animation-model/combining-effects/effect-composition.html"
+          }
+        ],
+        "web-animations/interfaces/KeyframeEffect/composite.html": [
+          {
+            "path": "web-animations/interfaces/KeyframeEffect/composite.html",
+            "url": "/web-animations/interfaces/KeyframeEffect/composite.html"
           }
         ],
         "web-animations/interfaces/KeyframeEffect/copy-contructor.html": [

@@ -414,7 +414,7 @@ public:
    * CONSTRUCTION PHASE ONLY
    * Create a BorderLayer for this manager's layer tree.
    */
-  virtual already_AddRefed<BorderLayer> CreateBorderLayer() { return nullptr; }
+  virtual already_AddRefed<BorderLayer> CreateBorderLayer() = 0;
   /**
    * CONSTRUCTION PHASE ONLY
    * Create a CanvasLayer for this manager's layer tree.
@@ -1557,6 +1557,18 @@ public:
   virtual BorderLayer* AsBorderLayer() { return nullptr; }
 
   /**
+    * Dynamic cast to a Canvas. Returns null if this is not a
+    * ColorLayer.
+    */
+  virtual CanvasLayer* AsCanvasLayer() { return nullptr; }
+
+  /**
+    * Dynamic cast to an Image. Returns null if this is not a
+    * ColorLayer.
+    */
+  virtual ImageLayer* AsImageLayer() { return nullptr; }
+
+  /**
    * Dynamic cast to a LayerComposite.  Return null if this is not a
    * LayerComposite.  Can be used anytime.
    */
@@ -2245,6 +2257,12 @@ public:
 protected:
   friend class ReadbackProcessor;
 
+  // Note that this is not virtual, and is based on the implementation of
+  // ContainerLayer::RemoveChild, so it should only be called where you would
+  // want to explicitly call the base class implementation of RemoveChild;
+  // e.g., while (mFirstChild) ContainerLayer::RemoveChild(mFirstChild);
+  void RemoveAllChildren();
+
   void DidInsertChild(Layer* aLayer);
   void DidRemoveChild(Layer* aLayer);
 
@@ -2569,6 +2587,8 @@ public:
    * Check the data is owned by this layer is still valid for rendering
    */
   virtual bool IsDataValid(const Data& aData) { return true; }
+
+  virtual CanvasLayer* AsCanvasLayer() override { return this; }
 
   /**
    * Notify this CanvasLayer that the canvas surface contents have

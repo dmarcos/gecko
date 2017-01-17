@@ -1,6 +1,10 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
+// Note: All tests in this directory are expected to have a runTests function
+// which TestRunner will use.
+/* global runTests */
+
 var tmp = {};
 Cu.import("resource://gre/modules/PageThumbs.jsm", tmp);
 Cu.import("resource://gre/modules/BackgroundPageThumbs.jsm", tmp);
@@ -36,7 +40,7 @@ var TestRunner = {
   /**
    * Starts the test runner.
    */
-  run: function() {
+  run() {
     waitForExplicitFinish();
 
     SessionStore.promiseInitialized.then(function() {
@@ -54,7 +58,7 @@ var TestRunner = {
    * @param aValue This value will be passed to the yielder via the runner's
    *               iterator.
    */
-  next: function(aValue) {
+  next(aValue) {
     let obj = TestRunner._iter.next(aValue);
     if (obj.done) {
       finish();

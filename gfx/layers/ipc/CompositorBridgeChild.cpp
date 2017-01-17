@@ -234,7 +234,7 @@ CompositorBridgeParent*
 CompositorBridgeChild::InitSameProcess(widget::CompositorWidget* aWidget,
                                        const uint64_t& aLayerTreeId,
                                        CSSToLayoutDeviceScale aScale,
-                                       bool aUseAPZ,
+                                       const CompositorOptions& aOptions,
                                        bool aUseExternalSurface,
                                        const gfx::IntSize& aSurfaceSize)
 {
@@ -242,7 +242,7 @@ CompositorBridgeChild::InitSameProcess(widget::CompositorWidget* aWidget,
     gfxPlatform::GetPlatform()->GetHardwareVsync()->GetGlobalDisplay().GetVsyncRate();
 
   mCompositorBridgeParent =
-    new CompositorBridgeParent(aScale, vsyncRate, aUseExternalSurface, aSurfaceSize);
+    new CompositorBridgeParent(aScale, vsyncRate, aOptions, aUseExternalSurface, aSurfaceSize);
 
   bool ok = Open(mCompositorBridgeParent->GetIPCChannel(),
                  CompositorThreadHolder::Loop(),
@@ -250,7 +250,7 @@ CompositorBridgeChild::InitSameProcess(widget::CompositorWidget* aWidget,
   MOZ_RELEASE_ASSERT(ok);
 
   InitIPDL();
-  mCompositorBridgeParent->InitSameProcess(aWidget, aLayerTreeId, aUseAPZ);
+  mCompositorBridgeParent->InitSameProcess(aWidget, aLayerTreeId);
   return mCompositorBridgeParent;
 }
 
@@ -469,18 +469,15 @@ CompositorBridgeChild::RecvUpdatePluginConfigurations(const LayoutDeviceIntPoint
         // by a child window move, and will call invalidate on the plugin
         // parent window which the browser owns. The latter gets picked up in
         // our OnPaint handler and forwarded over to the plugin process async.
-        rv = widget->Resize(aContentOffset.x + bounds.x,
-                            aContentOffset.y + bounds.y,
-                            bounds.width, bounds.height, true);
-        NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
+        widget->Resize(aContentOffset.x + bounds.x,
+                       aContentOffset.y + bounds.y,
+                       bounds.width, bounds.height, true);
       }
 
-      rv = widget->Enable(isVisible);
-      NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
+      widget->Enable(isVisible);
 
       // visible state - updated after clipping, prior to invalidating
-      rv = widget->Show(isVisible);
-      NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
+      widget->Show(isVisible);
 
       // Handle invalidation, this can be costly, avoid if it is not needed.
       if (isVisible) {
@@ -492,8 +489,7 @@ CompositorBridgeChild::RecvUpdatePluginConfigurations(const LayoutDeviceIntPoint
         mozilla::widget::WinUtils::InvalidatePluginAsWorkaround(
           widget, visibleBounds);
 #else
-        rv = widget->Invalidate(visibleBounds);
-        NS_ASSERTION(NS_SUCCEEDED(rv), "widget call failure");
+        widget->Invalidate(visibleBounds);
 #endif
         visiblePluginIds.AppendElement(aPlugins[pluginsIdx].windowId());
       }
@@ -1090,14 +1086,6 @@ CompositorBridgeChild::DeallocPCompositorWidgetChild(PCompositorWidgetChild* aAc
 #else
   return false;
 #endif
-}
-
-bool
-CompositorBridgeChild::GetAPZEnabled(uint64_t aLayerTreeId)
-{
-  bool result = false;
-  Unused << SendAsyncPanZoomEnabled(aLayerTreeId, &result);
-  return result;
 }
 
 PAPZCTreeManagerChild*

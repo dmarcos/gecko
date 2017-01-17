@@ -76,9 +76,9 @@ const once = event => {
   let target = shell.contentBrowser;
   return new Promise((resolve, reject) => {
     target.addEventListener(event, function gotEvent(evt) {
-      target.removeEventListener(event, gotEvent, false);
+      target.removeEventListener(event, gotEvent);
       resolve(evt);
-    }, false);
+    });
   });
 }
 
@@ -607,9 +607,7 @@ var shell = {
           Services.perms.addFromPrincipal(principal, 'offline-app',
                                           Ci.nsIPermissionManager.ALLOW_ACTION);
 
-          let documentURI = Services.io.newURI(contentWindow.document.documentURI,
-                                               null,
-                                               null);
+          let documentURI = Services.io.newURI(contentWindow.document.documentURI);
           let manifestURI = Services.io.newURI(manifest, null, documentURI);
           let updateService = Cc['@mozilla.org/offlinecacheupdate-service;1']
                               .getService(Ci.nsIOfflineCacheUpdateService);
@@ -795,7 +793,7 @@ var CustomEventManager = {
     window.addEventListener("ContentStart", (function(evt) {
       let content = shell.contentBrowser.contentWindow;
       content.addEventListener("mozContentEvent", this, false, true);
-    }).bind(this), false);
+    }).bind(this));
   },
 
   handleEvent: function custevt_handleEvent(evt) {
@@ -819,16 +817,16 @@ var CustomEventManager = {
                                      'ask-children-to-execute-copypaste-command', detail.cmd);
         break;
       case 'add-permission':
-        Services.perms.add(Services.io.newURI(detail.uri, null, null),
+        Services.perms.add(Services.io.newURI(detail.uri),
                            detail.permissionType, permissionMap.get(detail.permission));
         break;
       case 'remove-permission':
-        Services.perms.remove(Services.io.newURI(detail.uri, null, null),
+        Services.perms.remove(Services.io.newURI(detail.uri),
                               detail.permissionType);
         break;
       case 'test-permission':
         let result = Services.perms.testExactPermission(
-          Services.io.newURI(detail.uri, null, null), detail.permissionType);
+          Services.io.newURI(detail.uri), detail.permissionType);
         // Not equal check here because we want to prevent default only if it's not set
         if (result !== permissionMapRev.get(detail.permission)) {
           evt.preventDefault();

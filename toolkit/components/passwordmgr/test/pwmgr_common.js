@@ -115,10 +115,10 @@ function doKey(aKey, modifier) {
                QueryInterface(SpecialPowers.Ci.nsIInterfaceRequestor).
                getInterface(SpecialPowers.Ci.nsIDOMWindowUtils);
 
-  if (wutils.sendKeyEvent("keydown",  key, 0, modifier)) {
+  if (wutils.sendKeyEvent("keydown", key, 0, modifier)) {
     wutils.sendKeyEvent("keypress", key, 0, modifier);
   }
-  wutils.sendKeyEvent("keyup",    key, 0, modifier);
+  wutils.sendKeyEvent("keyup", key, 0, modifier);
 }
 
 /**
@@ -221,7 +221,7 @@ function setMasterPassword(enable) {
   // invocation of pwmgr can trigger a MP prompt.
 
   var pk11db = Cc["@mozilla.org/security/pk11tokendb;1"].getService(Ci.nsIPK11TokenDB);
-  var token = pk11db.findTokenByName("");
+  var token = pk11db.getInternalKeyToken();
   info("MP change from " + oldPW + " to " + newPW);
   token.changePassword(oldPW, newPW);
 }
@@ -423,7 +423,11 @@ if (this.addMessageListener) {
       return arg;
     });
 
-    return Services.logins[msg.methodName](...recreatedArgs);
+    let rv = Services.logins[msg.methodName](...recreatedArgs);
+    if (rv instanceof Ci.nsILoginInfo) {
+      rv = LoginHelper.loginToVanillaObject(rv);
+    }
+    return rv;
   });
 
   var globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
@@ -432,7 +436,10 @@ if (this.addMessageListener) {
   });
 } else {
   // Code to only run in the mochitest pages (not in the chrome script).
-  SpecialPowers.pushPrefEnv({"set": [["signon.rememberSignons", true]]});
+  SpecialPowers.pushPrefEnv({"set": [["signon.rememberSignons", true],
+                                     ["signon.autofillForms.http", true],
+                                     ["security.insecure_field_warning.contextual.enabled", false]]
+                           });
   SimpleTest.registerCleanupFunction(() => {
     SpecialPowers.popPrefEnv();
     runInParent(function cleanupParent() {

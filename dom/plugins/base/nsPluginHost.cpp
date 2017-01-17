@@ -1579,7 +1579,7 @@ nsPluginHost::RegisterFakePlugin(JS::Handle<JS::Value> aInitDictionary,
   nsresult rv = nsFakePluginTag::Create(initDictionary, getter_AddRefs(newTag));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  for (auto existingTag : mFakePlugins) {
+  for (const auto& existingTag : mFakePlugins) {
     if (newTag->HandlerURIMatches(existingTag->HandlerURI())) {
       return NS_ERROR_UNEXPECTED;
     }
@@ -3304,7 +3304,7 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
       // errors about malformed requests if we include it in POSTs. See
       // bug 724465.
       nsCOMPtr<nsIURI> referer;
-      net::ReferrerPolicy referrerPolicy = net::RP_Default;
+      net::ReferrerPolicy referrerPolicy = net::RP_Unset;
 
       nsCOMPtr<nsIObjectLoadingContent> olc = do_QueryInterface(element);
       if (olc)

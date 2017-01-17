@@ -114,11 +114,11 @@ static bool initialized = false;
 
 // Implement NSPR-based crypto algorithms
 static int nr_crypto_nss_random_bytes(UCHAR *buf, int len) {
-  ScopedPK11SlotInfo slot(PK11_GetInternalSlot());
+  UniquePK11SlotInfo slot(PK11_GetInternalSlot());
   if (!slot)
     return R_INTERNAL;
 
-  SECStatus rv = PK11_GenerateRandomOnSlot(slot, buf, len);
+  SECStatus rv = PK11_GenerateRandomOnSlot(slot.get(), buf, len);
   if (rv != SECSuccess)
     return R_INTERNAL;
 
@@ -969,6 +969,16 @@ nsresult NrIceCtx::Finalize() {
   }
 
   return NS_OK;
+}
+
+void NrIceCtx::UpdateNetworkState(bool online) {
+  MOZ_MTLOG(ML_INFO, "NrIceCtx(" << name_ << "): updating network state to " <<
+            (online ? "online" : "offline"));
+  if (online) {
+    nr_ice_peer_ctx_refresh_consent_all_streams(peer_);
+  } else {
+    nr_ice_peer_ctx_disconnect_all_streams(peer_);
+  }
 }
 
 void NrIceCtx::SetConnectionState(ConnectionState state) {

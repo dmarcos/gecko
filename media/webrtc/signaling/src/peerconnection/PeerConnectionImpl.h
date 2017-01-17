@@ -414,6 +414,8 @@ public:
                          NS_ConvertUTF16toUTF8(aMid).get(), aLevel);
   }
 
+  void UpdateNetworkState(bool online);
+
   NS_IMETHODIMP CloseStreams();
 
   void CloseStreams(ErrorResult &rv)
@@ -811,6 +813,7 @@ private:
 
   bool mAllowIceLoopback;
   bool mAllowIceLinkLocal;
+  bool mForceIceTcp;
   RefPtr<PeerConnectionMedia> mMedia;
 
   // The JSEP negotiation session.
@@ -818,8 +821,6 @@ private:
   mozilla::UniquePtr<mozilla::JsepSession> mJsepSession;
   std::string mPreviousIceUfrag; // used during rollback of ice restart
   std::string mPreviousIcePwd; // used during rollback of ice restart
-  unsigned long mIceRestartCount;
-  unsigned long mIceRollbackCount;
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
   // Start time of ICE, used for telemetry

@@ -30,6 +30,8 @@ ServoRestyleManager::PostRestyleEvent(Element* aElement,
                                       nsRestyleHint aRestyleHint,
                                       nsChangeHint aMinChangeHint)
 {
+  MOZ_ASSERT(!(aMinChangeHint & nsChangeHint_NeutralChange),
+             "Didn't expect explicit change hints to be neutral!");
   if (MOZ_UNLIKELY(IsDisconnected()) ||
       MOZ_UNLIKELY(PresContext()->PresShell()->IsDestroying())) {
     return;
@@ -59,6 +61,16 @@ ServoRestyleManager::PostRestyleEvent(Element* aElement,
     aRestyleHint |= eRestyle_Self | eRestyle_Subtree;
   }
 
+  // XXX For now, convert eRestyle_Subtree into (eRestyle_Self |
+  // eRestyle_SomeDescendants), which Servo will interpret as
+  // RESTYLE_SELF | RESTYLE_DESCENDANTS, since this is a commonly
+  // posted restyle hint that doesn't yet align with RestyleHint's
+  // bits.
+  if (aRestyleHint & eRestyle_Subtree) {
+    aRestyleHint &= ~eRestyle_Subtree;
+    aRestyleHint |= eRestyle_Self | eRestyle_SomeDescendants;
+  }
+
   if (aRestyleHint || aMinChangeHint) {
     Servo_NoteExplicitHints(aElement, aRestyleHint, aMinChangeHint);
   }
@@ -77,6 +89,18 @@ ServoRestyleManager::RebuildAllStyleData(nsChangeHint aExtraHint,
                                          nsRestyleHint aRestyleHint)
 {
   NS_WARNING("stylo: ServoRestyleManager::RebuildAllStyleData not implemented");
+  // That said, we do know that rebuilding all style data in Gecko would get rid
+  // of the old ruletree, and hence of the cached-on-the-root default computed
+  // styles.  So we know we need to clear them here.  I think this is the only
+  // way they could get cleared, in fact, though not _all_ calls that come
+  // through here may need to clear them in practice.
+  //
+  // We probably need to do some actual restyling here too, though.  And figure
+  // out whether it actually matters that we may be recomputing the default
+  // styles in too many cases.  For one thing, we do a bunch of eager work here,
+  // whereas we should really just set a bit that says to recompute the default
+  // computed styles before the next time we restyle anything!
+  StyleSet()->RecomputeDefaultComputedStyles();
 }
 
 void
@@ -124,9 +148,10 @@ ServoRestyleManager::RecreateStyleContexts(Element* aElement,
 
   // FIXME(bholley): Once we transfer ownership of the styles to the frame, we
   // can fast-reject without the FFI call by checking mServoData for null.
-  nsChangeHint changeHint = Servo_CheckChangeHint(aElement);
-  if (changeHint) {
-      aChangeListToProcess.AppendChange(primaryFrame, aElement, changeHint);
+  nsChangeHint changeHint = Servo_TakeChangeHint(aElement);
+  if (changeHint & ~nsChangeHint_NeutralChange) {
+    aChangeListToProcess.AppendChange(
+      primaryFrame, aElement, changeHint & ~nsChangeHint_NeutralChange);
   }
 
   // If our change hint is reconstruct, we delegate to the frame constructor,
@@ -143,10 +168,7 @@ ServoRestyleManager::RecreateStyleContexts(Element* aElement,
   // attach a new style context.
   bool recreateContext = primaryFrame && changeHint;
   if (recreateContext) {
-    RefPtr<ServoComputedValues> computedValues
-      = Servo_ResolveStyle(aElement, aStyleSet->mRawSet.get(),
-                           ConsumeStyleBehavior::Consume,
-                           LazyComputeBehavior::Assert).Consume();
+    RefPtr<ServoComputedValues> computedValues = aStyleSet->ResolveServoStyle(aElement);
 
     // Hold the old style context alive, because it could become a dangling
     // pointer during the replacement. In practice it's not a huge deal (on
@@ -208,11 +230,18 @@ ServoRestyleManager::RecreateStyleContexts(Element* aElement,
     StyleChildrenIterator it(aElement);
     for (nsIContent* n = it.GetNextChild(); n; n = it.GetNextChild()) {
       if (traverseElementChildren && n->IsElement()) {
-        MOZ_ASSERT(primaryFrame,
-                   "Frame construction should be scheduled, and it takes the "
-                   "correct style for the children, so no need to be here.");
-        RecreateStyleContexts(n->AsElement(), primaryFrame->StyleContext(),
-                              aStyleSet, aChangeListToProcess);
+        if (!primaryFrame) {
+          // The frame constructor presumably decided to suppress frame
+          // construction on this subtree. Just clear the dirty descendants
+          // bit from the subtree, since there's no point in harvesting the
+          // change hints.
+          MOZ_ASSERT(!n->AsElement()->GetPrimaryFrame(),
+                     "Only display:contents should do this, and we don't handle that yet");
+          ClearDirtyDescendantsFromSubtree(n->AsElement());
+        } else {
+          RecreateStyleContexts(n->AsElement(), primaryFrame->StyleContext(),
+                                aStyleSet, aChangeListToProcess);
+        }
       } else if (traverseTextChildren && n->IsNodeOfType(nsINode::eTEXT)) {
         RecreateStyleContextsForText(n, primaryFrame->StyleContext(),
                                      aStyleSet);

@@ -48,7 +48,7 @@ class nsIIncrementalStreamLoaderObserver;
 class nsIUnicharStreamLoader;
 class nsIUnicharStreamLoaderObserver;
 
-namespace mozilla { class NeckoOriginAttributes; }
+namespace mozilla { class OriginAttributes; }
 
 template <class> class nsCOMPtr;
 template <typename> struct already_AddRefed;
@@ -657,10 +657,10 @@ NS_QueryNotificationCallbacks(nsIInterfaceRequestor  *callbacks,
 bool NS_UsePrivateBrowsing(nsIChannel *channel);
 
 /**
- * Extract the NeckoOriginAttributes from the channel's triggering principal.
+ * Extract the OriginAttributes from the channel's triggering principal.
  */
 bool NS_GetOriginAttributes(nsIChannel *aChannel,
-                            mozilla::NeckoOriginAttributes &aAttributes);
+                            mozilla::OriginAttributes &aAttributes);
 
 /**
  * Returns true if the channel has visited any cross-origin URLs on any
@@ -672,8 +672,12 @@ bool NS_HasBeenCrossOrigin(nsIChannel* aChannel, bool aReport = false);
 // know about script security manager.
 #define NECKO_NO_APP_ID 0
 #define NECKO_UNKNOWN_APP_ID UINT32_MAX
-// special app id reserved for separating the safebrowsing cookie
-#define NECKO_SAFEBROWSING_APP_ID UINT32_MAX - 1
+
+// Unique first-party domain for separating the safebrowsing cookie.
+// Note if this value is changed, code in test_cookiejars_safebrowsing.js
+// should also be changed.
+#define NECKO_SAFEBROWSING_FIRST_PARTY_DOMAIN \
+  "safebrowsing.86868755-6b82-4842-b301-72671a0db32e.mozilla"
 
 /**
  * Determines whether appcache should be checked for a given URI.
@@ -958,6 +962,12 @@ nsresult NS_ShouldSecureUpgrade(nsIURI* aURI,
 nsresult NS_GetSecureUpgradedURI(nsIURI* aURI, nsIURI** aUpgradedURI);
 
 nsresult NS_CompareLoadInfoAndLoadContext(nsIChannel *aChannel);
+
+/**
+ * Return default referrer policy which is controlled by user
+ * pref network.http.referer.userControlPolicy
+ */
+uint32_t NS_GetDefaultReferrerPolicy();
 
 namespace mozilla {
 namespace net {

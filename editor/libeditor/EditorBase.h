@@ -141,8 +141,7 @@ struct IMEState;
  * delegate the actual commands to the editor independent of the XPFE
  * implementation.
  */
-class EditorBase : public nsIEditor
-                 , public nsIEditorIMESupport
+class EditorBase : public nsIEditorIMESupport
                  , public nsSupportsWeakReference
                  , public nsIPhonetic
 {
@@ -234,6 +233,19 @@ public:
                         ErrorResult& aResult);
   nsresult JoinNodes(nsINode& aLeftNode, nsINode& aRightNode);
   nsresult MoveNode(nsIContent* aNode, nsINode* aParent, int32_t aOffset);
+
+  nsresult CloneAttribute(nsIAtom* aAttribute, Element* aDestElement,
+                          Element* aSourceElement);
+  nsresult RemoveAttribute(Element* aElement, nsIAtom* aAttribute);
+  virtual nsresult RemoveAttributeOrEquivalent(Element* aElement,
+                                               nsIAtom* aAttribute,
+                                               bool aSuppressTransaction) = 0;
+  nsresult SetAttribute(Element* aElement, nsIAtom* aAttribute,
+                        const nsAString& aValue);
+  virtual nsresult SetAttributeOrEquivalent(Element* aElement,
+                                            nsIAtom* aAttribute,
+                                            const nsAString& aValue,
+                                            bool aSuppressTransaction) = 0;
 
   /**
    * Method to replace certain CreateElementNS() calls.

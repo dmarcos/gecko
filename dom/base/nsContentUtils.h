@@ -28,6 +28,7 @@
 #include "nsTArrayForwardDeclare.h"
 #include "Units.h"
 #include "mozilla/dom/AutocompleteInfoBinding.h"
+#include "mozilla/dom/BindingDeclarations.h" // For CallerType
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/net/ReferrerPolicy.h"
@@ -804,13 +805,13 @@ public:
   /**
    * Returns origin attributes of the document.
    **/
-  static mozilla::PrincipalOriginAttributes
+  static mozilla::OriginAttributes
   GetOriginAttributes(nsIDocument* aDoc);
 
   /**
    * Returns origin attributes of the load group.
    **/
-  static mozilla::PrincipalOriginAttributes
+  static mozilla::OriginAttributes
   GetOriginAttributes(nsILoadGroup* aLoadGroup);
 
   /**
@@ -2082,13 +2083,14 @@ public:
   }
 
   /*
-   * Returns true if the browser should attempt to prevent content scripts
+   * Returns true if the browser should attempt to prevent the given caller type
    * from collecting distinctive information about the browser that could
    * be used to "fingerprint" and track the user across websites.
    */
-  static bool ResistFingerprinting()
+  static bool ResistFingerprinting(mozilla::dom::CallerType aCallerType)
   {
-    return sPrivacyResistFingerprinting;
+    return aCallerType != mozilla::dom::CallerType::System &&
+           sPrivacyResistFingerprinting;
   }
 
   /**
@@ -2584,6 +2586,7 @@ public:
                                  bool aIgnoreRootScrollFrame,
                                  float aPressure,
                                  unsigned short aInputSourceArg,
+                                 uint32_t aIdentifier,
                                  bool aToWindow,
                                  bool *aPreventDefault,
                                  bool aIsDOMEventSynthesized,

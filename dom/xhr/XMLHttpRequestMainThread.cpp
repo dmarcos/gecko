@@ -1613,13 +1613,11 @@ XMLHttpRequestMainThread::SetOriginAttributes(const OriginAttributesDictionary& 
 {
   MOZ_ASSERT((mState == State::opened) && !mFlagSend);
 
-  GenericOriginAttributes attrs(aAttrs);
-  NeckoOriginAttributes neckoAttrs;
-  neckoAttrs.SetFromGenericAttributes(attrs);
+  OriginAttributes attrs(aAttrs);
 
   nsCOMPtr<nsILoadInfo> loadInfo = mChannel->GetLoadInfo();
   MOZ_ASSERT(loadInfo);
-  loadInfo->SetOriginAttributes(neckoAttrs);
+  loadInfo->SetOriginAttributes(attrs);
 }
 
 void
@@ -2012,6 +2010,16 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
     mResponseXML->SetChromeXHRDocURI(chromeXHRDocURI);
     mResponseXML->SetChromeXHRDocBaseURI(chromeXHRDocBaseURI);
 
+    // suppress parsing failure messages to console for statuses which
+    // can have empty bodies (see bug 884693).
+    uint32_t responseStatus;
+    if (NS_SUCCEEDED(GetStatus(&responseStatus)) &&
+        (responseStatus == 201 || responseStatus == 202 ||
+         responseStatus == 204 || responseStatus == 205 ||
+         responseStatus == 304)) {
+      mResponseXML->SetSuppressParserErrorConsoleMessages(true);
+    }
+
     if (nsContentUtils::IsSystemPrincipal(mPrincipal)) {
       mResponseXML->ForceEnableXULXBL();
     }
@@ -2075,15 +2083,6 @@ XMLHttpRequestMainThread::OnStopRequest(nsIRequest *request, nsISupports *ctxt, 
     NS_ASSERTION(mFirstStartRequestSeen, "Inconsistent state!");
     mFirstStartRequestSeen = false;
     mRequestObserver->OnStopRequest(request, ctxt, status);
-  }
-
-  // suppress parsing failure messages to console for status 204/304 (see bug 884693).
-  if (mResponseXML) {
-    uint32_t responseStatus;
-    if (NS_SUCCEEDED(GetStatus(&responseStatus)) &&
-        (responseStatus == 204 || responseStatus == 304)) {
-      mResponseXML->SetSuppressParserErrorConsoleMessages(true);
-    }
   }
 
   // make sure to notify the listener if we were aborted
@@ -2603,7 +2602,7 @@ XMLHttpRequestMainThread::InitiateFetch(nsIInputStream* aUploadStream,
       nsCOMPtr<nsPIDOMWindowInner> owner = GetOwner();
       nsCOMPtr<nsIDocument> doc = owner ? owner->GetExtantDoc() : nullptr;
       mozilla::net::ReferrerPolicy referrerPolicy = doc ?
-        doc->GetReferrerPolicy() : mozilla::net::RP_Default;
+        doc->GetReferrerPolicy() : mozilla::net::RP_Unset;
       nsContentUtils::SetFetchReferrerURIWithPolicy(mPrincipal, doc,
                                                     httpChannel, referrerPolicy);
     }
@@ -3381,7 +3380,10 @@ XMLHttpRequestMainThread::OnRedirectVerifyCallback(nsresult result)
   mRedirectCallback->OnRedirectVerifyCallback(result);
   mRedirectCallback = nullptr;
 
-  return result;
+  // It's important that we return success here. If we return the result code
+  // that we were passed, JavaScript callers who cancel the redirect will wind
+  // up throwing an exception in the process.
+  return NS_OK;
 }
 
 /////////////////////////////////////////////////////

@@ -47,6 +47,7 @@ function log(a) {
 const STATE_STOPPED = 0;
 const STATE_RUNNING = 1;
 const STATE_QUITTING = -1;
+const STATE_QUITTING_FLUSHED = -2;
 
 const PRIVACY_NONE = 0;
 const PRIVACY_ENCRYPTED = 1;
@@ -148,10 +149,17 @@ SessionStore.prototype = {
   _clearDisk: function ss_clearDisk() {
     this._sessionDataIsGood = false;
 
-    OS.File.remove(this._sessionFile.path);
-    OS.File.remove(this._sessionFileBackup.path);
-    OS.File.remove(this._sessionFilePrevious.path);
-    OS.File.remove(this._sessionFileTemp.path);
+    if (this._loadState > STATE_QUITTING) {
+      OS.File.remove(this._sessionFile.path);
+      OS.File.remove(this._sessionFileBackup.path);
+      OS.File.remove(this._sessionFilePrevious.path);
+      OS.File.remove(this._sessionFileTemp.path);
+    } else { // We're shutting down and must delete synchronously
+      if (this._sessionFile.exists()) { this._sessionFile.remove(false); }
+      if (this._sessionFileBackup.exists()) { this._sessionFileBackup.remove(false); }
+      if (this._sessionFileBackup.exists()) { this._sessionFilePrevious.remove(false); }
+      if (this._sessionFileBackup.exists()) { this._sessionFileTemp.remove(false); }
+    }
   },
 
   _forgetClosedTabs: function ss_forgetClosedTabs() {
@@ -193,8 +201,8 @@ SessionStore.prototype = {
         let window = aSubject;
         window.addEventListener("load", function() {
           self.onWindowOpen(window);
-          window.removeEventListener("load", arguments.callee, false);
-        }, false);
+          window.removeEventListener("load", arguments.callee);
+        });
         break;
       }
       case "domwindowclosed": // catch closed windows
@@ -222,15 +230,13 @@ SessionStore.prototype = {
         observerService.removeObserver(this, "quit-application-proceeding");
         observerService.removeObserver(this, "quit-application");
 
-        // If a save has been queued, kill the timer and save now
-        if (this._saveTimer) {
-          this._saveTimer.cancel();
-          this._saveTimer = null;
-          this.flushPendingState();
-        }
+        // Flush all pending writes to disk now
+        this.flushPendingState();
+        this._loadState = STATE_QUITTING_FLUSHED;
 
         break;
-      case "browser:purge-session-history": // catch sanitization 
+      case "browser:purge-session-history": // catch sanitization
+        log("browser:purge-session-history");
         this._clearDisk();
 
         // Clear all data about closed tabs
@@ -239,8 +245,11 @@ SessionStore.prototype = {
         if (this._loadState == STATE_RUNNING) {
           // Save the purged state immediately
           this.saveState();
-        } else if (this._loadState == STATE_QUITTING) {
+        } else if (this._loadState <= STATE_QUITTING) {
           this.saveStateDelayed();
+          if (this._loadState == STATE_QUITTING_FLUSHED) {
+            this.flushPendingState();
+          }
         }
 
         Services.obs.notifyObservers(null, "sessionstore-state-purge-complete", "");
@@ -333,9 +342,11 @@ SessionStore.prototype = {
         log("application-background");
         // Tab events dispatched immediately before the application was backgrounded
         // might actually arrive after this point, therefore save them without delay.
-        this._interval = 0;
-        this._minSaveDelay = MINIMUM_SAVE_DELAY_BACKGROUND; // A small delay allows successive tab events to be batched together.
-        this.flushPendingState();
+        if (this._loadState == STATE_RUNNING) {
+          this._interval = 0;
+          this._minSaveDelay = MINIMUM_SAVE_DELAY_BACKGROUND; // A small delay allows successive tab events to be batched together.
+          this.flushPendingState();
+        }
         break;
       case "application-foreground":
         // Reset minimum interval between session store writes back to default.
@@ -503,7 +514,7 @@ SessionStore.prototype = {
     }
 
     // Ignore non-browser windows and windows opened while shutting down
-    if (aWindow.document.documentElement.getAttribute("windowtype") != "navigator:browser" || this._loadState == STATE_QUITTING) {
+    if (aWindow.document.documentElement.getAttribute("windowtype") != "navigator:browser" || this._loadState <= STATE_QUITTING) {
       return;
     }
 
@@ -1012,11 +1023,14 @@ SessionStore.prototype = {
     aHistory = aHistory || { entries: [{ url: aBrowser.currentURI.spec, title: aBrowser.contentTitle }], index: 1 };
 
     let tabData = {};
+    let tab = aWindow.BrowserApp.getTabForBrowser(aBrowser);
     tabData.entries = aHistory.entries;
     tabData.index = aHistory.index;
     tabData.attributes = { image: aBrowser.mIconURL };
-    tabData.desktopMode = aWindow.BrowserApp.getTabForBrowser(aBrowser).desktopMode;
+    tabData.desktopMode = tab.desktopMode;
     tabData.isPrivate = aBrowser.docShell.QueryInterface(Ci.nsILoadContext).usePrivateBrowsing;
+    tabData.tabId = tab.id;
+    tabData.parentId = tab.parentId;
 
     aBrowser.__SS_data = tabData;
   },
@@ -1284,7 +1298,7 @@ SessionStore.prototype = {
   _deserializeHistoryEntry: function _deserializeHistoryEntry(aEntry, aIdMap, aDocIdentMap) {
     let shEntry = Cc["@mozilla.org/browser/session-history-entry;1"].createInstance(Ci.nsISHEntry);
 
-    shEntry.setURI(Services.io.newURI(aEntry.url, null, null));
+    shEntry.setURI(Services.io.newURI(aEntry.url));
     shEntry.setTitle(aEntry.title || aEntry.url);
     if (aEntry.subframe) {
       shEntry.setIsSubFrame(aEntry.subframe || false);
@@ -1294,11 +1308,11 @@ SessionStore.prototype = {
       shEntry.contentType = aEntry.contentType;
     }
     if (aEntry.referrer) {
-      shEntry.referrerURI = Services.io.newURI(aEntry.referrer, null, null);
+      shEntry.referrerURI = Services.io.newURI(aEntry.referrer);
     }
 
     if (aEntry.originalURI) {
-      shEntry.originalURI =  Services.io.newURI(aEntry.originalURI, null, null);
+      shEntry.originalURI =  Services.io.newURI(aEntry.originalURI);
     }
 
     if (aEntry.loadReplace) {
@@ -1470,7 +1484,8 @@ SessionStore.prototype = {
         selected: isSelectedTab,
         isPrivate: tabData.isPrivate,
         desktopMode: tabData.desktopMode,
-        cancelEditMode: isSelectedTab
+        cancelEditMode: isSelectedTab,
+        parentId: tabData.parentId
       };
 
       let tab = window.BrowserApp.addTab(tabData.entries[tabData.index - 1].url, params);
@@ -1622,22 +1637,27 @@ SessionStore.prototype = {
 
       // Use stubbed tab if we've already created it; otherwise, make a new tab
       let tab;
+      let parentId = tabData.parentId;
       if (tabData.tabId == null) {
         let params = {
           selected: (selected == i+1),
           delayLoad: true,
           title: entry.title,
           desktopMode: (tabData.desktopMode == true),
-          isPrivate: (tabData.isPrivate == true)
+          isPrivate: (tabData.isPrivate == true),
+          parentId: parentId
         };
         tab = window.BrowserApp.addTab(entry.url, params);
       } else {
         tab = window.BrowserApp.getTabForId(tabData.tabId);
-        delete tabData.tabId;
 
         // Don't restore tab if user has closed it
         if (tab == null) {
+          delete tabData.tabId;
           continue;
+        }
+        if (parentId > -1) {
+          tab.setParentId(parentId);
         }
       }
 
@@ -1709,7 +1729,8 @@ SessionStore.prototype = {
       selected: true,
       isPrivate: aCloseTabData.isPrivate,
       desktopMode: aCloseTabData.desktopMode,
-      tabIndex: this._lastClosedTabIndex
+      tabIndex: this._lastClosedTabIndex,
+      parentId: aCloseTabData.parentId
     };
     let tab = aWindow.BrowserApp.addTab(aCloseTabData.entries[aCloseTabData.index - 1].url, params);
     tab.browser.__SS_data = aCloseTabData;
@@ -1824,7 +1845,7 @@ SessionStore.prototype = {
     if (this._loadState == STATE_RUNNING) {
       // Save the purged state immediately
       this.saveState();
-    } else if (this._loadState == STATE_QUITTING) {
+    } else if (this._loadState <= STATE_QUITTING) {
       this.saveStateDelayed();
     }
   }

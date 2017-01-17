@@ -131,8 +131,6 @@
 #include "nsIParser.h"
 #include "nsIContentSink.h"
 
-#include "nsDateTimeFormatCID.h"
-#include "nsIDateTimeFormat.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/InternalMutationEvent.h"
@@ -1279,7 +1277,7 @@ static already_AddRefed<mozilla::dom::NodeInfo> nullNodeInfo;
 nsIDocument::nsIDocument()
   : nsINode(nullNodeInfo),
     mReferrerPolicySet(false),
-    mReferrerPolicy(mozilla::net::RP_Default),
+    mReferrerPolicy(mozilla::net::RP_Unset),
     mBlockAllMixedContent(false),
     mBlockAllMixedContentPreloads(false),
     mUpgradeInsecureRequests(false),
@@ -1432,6 +1430,7 @@ nsDocument::~nsDocument()
       // record CSP telemetry on this document
       if (mHasCSP) {
         Accumulate(Telemetry::CSP_DOCUMENTS_COUNT, 1);
+        Accumulate(Telemetry::CSP_REFERRER_DIRECTIVE, mHasReferrerPolicyCSP);
       }
       if (mHasUnsafeInlineCSP) {
         Accumulate(Telemetry::CSP_UNSAFE_INLINE_DOCUMENTS_COUNT, 1);
@@ -1633,10 +1632,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
   else {
     NS_IMPL_CYCLE_COLLECTION_DESCRIBE(nsDocument, tmp->mRefCnt.get())
   }
-
-  // Always need to traverse script objects, so do that before we check
-  // if we're uncollectable.
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 
   if (!nsINode::Traverse(tmp, cb)) {
     return NS_SUCCESS_INTERRUPTED_TRAVERSE;
@@ -2472,7 +2467,7 @@ nsDocument::ApplySettingsFromCSP(bool aSpeculative)
     if (csp) {
       // Set up any Referrer Policy specified by CSP
       bool hasReferrerPolicy = false;
-      uint32_t referrerPolicy = mozilla::net::RP_Default;
+      uint32_t referrerPolicy = mozilla::net::RP_Unset;
       rv = csp->GetReferrerPolicy(&referrerPolicy, &hasReferrerPolicy);
       NS_ENSURE_SUCCESS_VOID(rv);
       if (hasReferrerPolicy) {
@@ -2893,7 +2888,7 @@ nsIDocument::Dispatch(const char* aName,
   return DispatcherTrait::Dispatch(aName, aCategory, Move(aRunnable));
 }
 
-already_AddRefed<nsIEventTarget>
+nsIEventTarget*
 nsIDocument::EventTargetFor(TaskCategory aCategory) const
 {
   if (mDocGroup) {
@@ -2916,6 +2911,78 @@ bool
 nsIDocument::IsScriptTracking(const nsACString& aURL) const
 {
   return mTrackingScripts.Contains(aURL);
+}
+
+bool
+nsIDocument::PrerenderHref(nsIURI* aHref)
+{
+  MOZ_ASSERT(aHref);
+
+  static bool sPrerenderEnabled = false;
+  static bool sPrerenderPrefCached = false;
+  if (!sPrerenderPrefCached) {
+    sPrerenderPrefCached = true;
+    Preferences::AddBoolVarCache(&sPrerenderEnabled,
+                                 "dom.linkPrerender.enabled",
+                                 false);
+  }
+
+  // Check if prerender is enabled
+  if (!sPrerenderEnabled) {
+    return false;
+  }
+
+  nsCOMPtr<nsIURI> referrer = GetDocumentURI();
+  bool urisMatch = false;
+  aHref->EqualsExceptRef(referrer, &urisMatch);
+  if (urisMatch) {
+    // Prerender current document isn't quite meaningful, and we may not be able
+    // to load it out of process.
+    return false;
+  }
+
+  nsCOMPtr<nsIDocShell> docShell = GetDocShell();
+  nsCOMPtr<nsIWebNavigation> webNav = do_QueryInterface(docShell);
+  NS_ENSURE_TRUE(webNav, false);
+
+  bool canGoForward = false;
+  nsresult rv = webNav->GetCanGoForward(&canGoForward);
+  if (NS_FAILED(rv) || canGoForward) {
+    // Skip prerender on history navigation as we don't support it yet.
+    // Remove this check once bug 1323650 is implemented.
+    return false;
+  }
+
+  // Check if the document is in prerender state. We don't prerender in a
+  // prerendered document.
+  if (docShell->GetIsPrerendered()) {
+    return false;
+  }
+
+  // We currently do not support prerendering in documents loaded within the
+  // chrome process.
+  if (!XRE_IsContentProcess()) {
+    return false;
+  }
+
+  // Adopting an prerendered document is similar to performing a load within a
+  // different docshell, as the prerendering must have occurred in a different
+  // docshell.
+  if (!docShell->GetIsOnlyToplevelInTabGroup()) {
+    return false;
+  }
+
+  TabChild* tabChild = TabChild::GetFrom(docShell);
+  NS_ENSURE_TRUE(tabChild, false);
+
+  nsCOMPtr<nsIWebBrowserChrome3> wbc3;
+  tabChild->GetWebBrowserChrome(getter_AddRefs(wbc3));
+  NS_ENSURE_TRUE(wbc3, false);
+
+  rv = wbc3->StartPrerenderingDocument(aHref, referrer);
+  NS_ENSURE_SUCCESS(rv, false);
+
+  return true;
 }
 
 NS_IMETHODIMP
@@ -3199,7 +3266,7 @@ nsDocument::ElementsFromPointHelper(float aX, float aY,
   // Make sure the layout information we get is up-to-date, and
   // ensure we get a root frame (for everything but XUL)
   if (aFlags & nsIDocument::FLUSH_LAYOUT) {
-    FlushPendingNotifications(Flush_Layout);
+    FlushPendingNotifications(FlushType::Layout);
   }
 
   nsIPresShell *ps = GetShell();
@@ -3281,7 +3348,7 @@ nsDocument::NodesFromRectHelper(float aX, float aY,
   // Make sure the layout information we get is up-to-date, and
   // ensure we get a root frame (for everything but XUL)
   if (aFlushLayout) {
-    FlushPendingNotifications(Flush_Layout);
+    FlushPendingNotifications(FlushType::Layout);
   }
 
   nsIPresShell *ps = GetShell();
@@ -3583,16 +3650,6 @@ nsDocument::TryChannelCharset(nsIChannel *aChannel,
 already_AddRefed<nsIPresShell>
 nsDocument::CreateShell(nsPresContext* aContext, nsViewManager* aViewManager,
                         StyleSetHandle aStyleSet)
-{
-  // Don't add anything here.  Add it to |doCreateShell| instead.
-  // This exists so that subclasses can pass other values for the 4th
-  // parameter some of the time.
-  return doCreateShell(aContext, aViewManager, aStyleSet);
-}
-
-already_AddRefed<nsIPresShell>
-nsDocument::doCreateShell(nsPresContext* aContext,
-                          nsViewManager* aViewManager, StyleSetHandle aStyleSet)
 {
   NS_ASSERTION(!mPresShell, "We have a presshell already!");
 
@@ -5890,10 +5947,10 @@ nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
     options.mExtends.Construct(lcName);
   }
 
-  RootedCallback<OwningNonNull<binding_detail::FastFunction>> functionConstructor(aCx);
-  functionConstructor = new binding_detail::FastFunction(aCx, wrappedConstructor, sgo);
+  RefPtr<Function> functionConstructor =
+    new Function(aCx, wrappedConstructor, sgo);
 
-  registry->Define(lcType, functionConstructor, options, rv);
+  registry->Define(lcType, *functionConstructor, options, rv);
 
   aRetval.set(wrappedConstructor);
 }
@@ -7681,7 +7738,7 @@ nsIDocument::CreateEvent(const nsAString& aEventType, ErrorResult& rv) const
 }
 
 void
-nsDocument::FlushPendingNotifications(mozFlushType aType)
+nsDocument::FlushPendingNotifications(FlushType aType)
 {
   nsDocumentOnStack dos(this);
 
@@ -7692,7 +7749,7 @@ nsDocument::FlushPendingNotifications(mozFlushType aType)
   // part if we have no presshell or if it's already done an initial
   // reflow.
   if ((!IsHTMLDocument() ||
-       (aType > Flush_ContentAndNotify && mPresShell &&
+       (aType > FlushType::ContentAndNotify && mPresShell &&
         !mPresShell->DidInitialize())) &&
       (mParser || mWeakSink)) {
     nsCOMPtr<nsIContentSink> sink;
@@ -7706,14 +7763,14 @@ nsDocument::FlushPendingNotifications(mozFlushType aType)
     }
     // Determine if it is safe to flush the sink notifications
     // by determining if it safe to flush all the presshells.
-    if (sink && (aType == Flush_Content || IsSafeToFlush())) {
+    if (sink && (aType == FlushType::Content || IsSafeToFlush())) {
       sink->FlushPendingNotifications(aType);
     }
   }
 
   // Should we be flushing pending binding constructors in here?
 
-  if (aType <= Flush_ContentAndNotify) {
+  if (aType <= FlushType::ContentAndNotify) {
     // Nothing to do here
     return;
   }
@@ -7728,9 +7785,9 @@ nsDocument::FlushPendingNotifications(mozFlushType aType)
   // layout flush on our parent, since we need our container to be the
   // correct size to determine the correct style.
   if (mParentDocument && IsSafeToFlush()) {
-    mozFlushType parentType = aType;
-    if (aType >= Flush_Style)
-      parentType = std::max(Flush_Layout, aType);
+    FlushType parentType = aType;
+    if (aType >= FlushType::Style)
+      parentType = std::max(FlushType::Layout, aType);
     mParentDocument->FlushPendingNotifications(parentType);
   }
 
@@ -7741,13 +7798,13 @@ nsDocument::FlushPendingNotifications(mozFlushType aType)
   // already but the presshell hasn't actually done the corresponding work yet.
   // So if mInFlush and reentering this code, we need to flush the presshell.
   if (mNeedStyleFlush ||
-      (mNeedLayoutFlush && aType >= Flush_InterruptibleLayout) ||
-      aType >= Flush_Display ||
+      (mNeedLayoutFlush && aType >= FlushType::InterruptibleLayout) ||
+      aType >= FlushType::Display ||
       mInFlush) {
     nsCOMPtr<nsIPresShell> shell = GetShell();
     if (shell) {
       mNeedStyleFlush = false;
-      mNeedLayoutFlush = mNeedLayoutFlush && (aType < Flush_InterruptibleLayout);
+      mNeedLayoutFlush = mNeedLayoutFlush && (aType < FlushType::InterruptibleLayout);
       // mInFlush is a bitfield, so can't us AutoRestore here.  But we
       // need to keep track of multi-level reentry correctly, so need
       // to restore the old mInFlush value.
@@ -7769,9 +7826,9 @@ Copy(nsIDocument* aDocument, void* aData)
 }
 
 void
-nsDocument::FlushExternalResources(mozFlushType aType)
+nsDocument::FlushExternalResources(FlushType aType)
 {
-  NS_ASSERTION(aType >= Flush_Style,
+  NS_ASSERTION(aType >= FlushType::Style,
     "should only need to flush for style or higher in external resources");
   if (GetDisplayDocument()) {
     return;
@@ -7862,14 +7919,6 @@ nsDocument::IsScriptEnabled()
 nsRadioGroupStruct*
 nsDocument::GetRadioGroupInternal(const nsAString& aName) const
 {
-#ifdef DEBUG
-  if (IsHTMLDocument()) {
-    nsAutoString lcName;
-    ToLowerCase(aName, lcName);
-    MOZ_ASSERT(aName == lcName);
-  }
-#endif
-
   nsRadioGroupStruct* radioGroup;
   if (!mRadioGroups.Get(aName, &radioGroup)) {
     return nullptr;
@@ -7882,9 +7931,6 @@ nsRadioGroupStruct*
 nsDocument::GetRadioGroup(const nsAString& aName) const
 {
   nsAutoString tmKey(aName);
-  if (IsHTMLDocument()) {
-    ToLowerCase(tmKey); //should case-insensitive.
-  }
 
   return GetRadioGroupInternal(tmKey);
 }
@@ -7893,9 +7939,6 @@ nsRadioGroupStruct*
 nsDocument::GetOrCreateRadioGroup(const nsAString& aName)
 {
   nsAutoString tmKey(aName);
-  if (IsHTMLDocument()) {
-    ToLowerCase(tmKey); //should case-insensitive.
-  }
 
   if (nsRadioGroupStruct* radioGroup = GetRadioGroupInternal(tmKey)) {
     return radioGroup;
@@ -9938,8 +9981,8 @@ nsDocument::FindImageMap(const nsAString& aUseMapValue)
     nsIContent* map = mImageMaps->Item(i);
     if (map->AttrValueIs(kNameSpaceID_None, nsGkAtoms::id, mapName,
                          eCaseMatters) ||
-        (map->GetAttr(kNameSpaceID_None, nsGkAtoms::name, name) &&
-         mapName.Equals(name, nsCaseInsensitiveStringComparator()))) {
+        map->AttrValueIs(kNameSpaceID_None, nsGkAtoms::name, mapName,
+                         eCaseMatters)) {
       return map->AsElement();
     }
   }
@@ -10159,7 +10202,7 @@ nsIDocument::CaretPositionFromPoint(float aX, float aY)
   nscoord y = nsPresContext::CSSPixelsToAppUnits(aY);
   nsPoint pt(x, y);
 
-  FlushPendingNotifications(Flush_Layout);
+  FlushPendingNotifications(FlushType::Layout);
 
   nsIPresShell *ps = GetShell();
   if (!ps) {
@@ -10268,7 +10311,7 @@ Element*
 nsIDocument::GetScrollingElement()
 {
   if (GetCompatibilityMode() == eCompatibility_NavQuirks) {
-    FlushPendingNotifications(Flush_Layout);
+    FlushPendingNotifications(FlushType::Layout);
     HTMLBodyElement* body = GetBodyElement();
     if (body && !IsPotentiallyScrollable(body)) {
       return body;
@@ -10749,7 +10792,7 @@ nsDocument::RestorePreviousFullScreenState()
   UnlockPointer();
   // All documents listed in the array except the last one are going to
   // completely exit from the fullscreen state.
-  for (auto i : MakeRange(exitDocs.Length() - 1)) {
+  for (auto i : IntegerRange(exitDocs.Length() - 1)) {
     exitDocs[i]->CleanupFullscreenState();
   }
   // The last document will either rollback one fullscreen element, or
@@ -11703,6 +11746,13 @@ nsDocument::SetPointerLock(Element* aElement, int aCursorStyle)
   nsIPresShell* shell = GetShell();
   if (!shell) {
     NS_WARNING("SetPointerLock(): No PresShell");
+    if (!aElement) {
+      // If we are unlocking pointer lock, but for some reason the doc
+      // has already detached from the presshell, just ask the event
+      // state manager to release the pointer.
+      EventStateManager::SetPointerLock(nullptr, nullptr);
+      return true;
+    }
     return false;
   }
   nsPresContext* presContext = shell->GetPresContext();
@@ -11728,7 +11778,7 @@ nsDocument::SetPointerLock(Element* aElement, int aCursorStyle)
   RefPtr<EventStateManager> esm = presContext->EventStateManager();
   esm->SetCursor(aCursorStyle, nullptr, false,
                  0.0f, 0.0f, widget, true);
-  esm->SetPointerLock(widget, aElement);
+  EventStateManager::SetPointerLock(widget, aElement);
 
   return true;
 }
@@ -12255,8 +12305,17 @@ MightBeAboutOrChromeScheme(nsIURI* aURI)
   return isAbout || isChrome;
 }
 
+static bool
+ReportExternalResourceUseCounters(nsIDocument* aDocument, void* aData)
+{
+  const auto reportKind
+    = nsDocument::UseCounterReportKind::eIncludeExternalResources;
+  static_cast<nsDocument*>(aDocument)->ReportUseCounters(reportKind);
+  return true;
+}
+
 void
-nsDocument::ReportUseCounters()
+nsDocument::ReportUseCounters(UseCounterReportKind aKind)
 {
   static const bool sDebugUseCounters = false;
   if (mReportedUseCounters) {
@@ -12264,6 +12323,10 @@ nsDocument::ReportUseCounters()
   }
 
   mReportedUseCounters = true;
+
+  if (aKind == UseCounterReportKind::eIncludeExternalResources) {
+    EnumerateExternalResources(ReportExternalResourceUseCounters, nullptr);
+  }
 
   if (Telemetry::HistogramUseCounterCount > 0 &&
       (IsContentDocument() || IsResourceDoc())) {
@@ -12395,7 +12458,8 @@ nsDocument::ScheduleIntersectionObserverNotification()
 void
 nsDocument::NotifyIntersectionObservers()
 {
-  for (const auto& observer : mIntersectionObservers) {
+  nsTArray<RefPtr<DOMIntersectionObserver>> observers(mIntersectionObservers);
+  for (const auto& observer : observers) {
     observer->Notify();
   }
 }

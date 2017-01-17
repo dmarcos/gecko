@@ -91,11 +91,6 @@ public:
 
   static bool AccessibleCaretEnabled(nsIDocShell* aDocShell);
 
-  // BeforeAfterKeyboardEvent preference
-  static bool BeforeAfterKeyboardEventEnabled();
-
-  static bool IsTargetIframe(nsINode* aTarget);
-
   void Init(nsIDocument* aDocument, nsPresContext* aPresContext,
             nsViewManager* aViewManager, mozilla::StyleSetHandle aStyleSet);
   virtual void Destroy() override;
@@ -133,7 +128,7 @@ public:
   virtual void FrameNeedsToContinueReflow(nsIFrame *aFrame) override;
   virtual void CancelAllPendingReflows() override;
   virtual bool IsSafeToFlush() const override;
-  virtual void FlushPendingNotifications(mozFlushType aType) override;
+  virtual void FlushPendingNotifications(mozilla::FlushType aType) override;
   virtual void FlushPendingNotifications(mozilla::ChangesToFlush aType) override;
   virtual void DestroyFramesFor(nsIContent*  aContent,
                                 nsIContent** aDestroyedFramesFor) override;
@@ -416,10 +411,6 @@ public:
 
   virtual void RecordShadowStyleChange(mozilla::dom::ShadowRoot* aShadowRoot) override;
 
-  virtual void DispatchAfterKeyboardEvent(nsINode* aTarget,
-                                          const mozilla::WidgetKeyboardEvent& aEvent,
-                                          bool aEmbeddedCancelled) override;
-
   virtual bool CanDispatchEvent(
       const mozilla::WidgetGUIEvent* aEvent = nullptr) const override;
 
@@ -609,6 +600,7 @@ protected:
   public:
     virtual ~DelayedEvent() { }
     virtual void Dispatch() { }
+    virtual bool IsKeyPressEvent() { return false; }
   };
 
   class DelayedInputEvent : public DelayedEvent
@@ -633,6 +625,7 @@ protected:
   {
   public:
     explicit DelayedKeyEvent(mozilla::WidgetKeyboardEvent* aEvent);
+    virtual bool IsKeyPressEvent() override;
   };
 
   // Check if aEvent is a mouse event and record the mouse location for later
@@ -657,7 +650,7 @@ protected:
     void Revoke() {
       if (mPresShell) {
         mPresShell->GetPresContext()->RefreshDriver()->
-          RemoveRefreshObserver(this, Flush_Display);
+          RemoveRefreshObserver(this, FlushType::Display);
         mPresShell = nullptr;
       }
     }
@@ -786,46 +779,6 @@ protected:
   // that we last did an approximate frame visibility update.
   VisibleFrames mApproximatelyVisibleFrames;
 
-
-  //////////////////////////////////////////////////////////////////////////////
-  // Methods for dispatching KeyboardEvent and BeforeAfterKeyboardEvent.
-  //////////////////////////////////////////////////////////////////////////////
-
-  void HandleKeyboardEvent(nsINode* aTarget,
-                           mozilla::WidgetKeyboardEvent& aEvent,
-                           bool aEmbeddedCancelled,
-                           nsEventStatus* aStatus,
-                           mozilla::EventDispatchingCallback* aEventCB);
-  void DispatchBeforeKeyboardEventInternal(
-         const nsTArray<nsCOMPtr<mozilla::dom::Element> >& aChain,
-         const mozilla::WidgetKeyboardEvent& aEvent,
-         size_t& aChainIndex,
-         bool& aDefaultPrevented);
-  void DispatchAfterKeyboardEventInternal(
-         const nsTArray<nsCOMPtr<mozilla::dom::Element> >& aChain,
-         const mozilla::WidgetKeyboardEvent& aEvent,
-         bool aEmbeddedCancelled,
-         size_t aChainIndex = 0);
-
-#ifdef MOZ_B2G
-  // This method is used to forward the keyboard event to the input-method-app
-  // before the event is dispatched to its event target.
-  // Return true if it's successfully forwarded. Otherwise, return false.
-  bool ForwardKeyToInputMethodApp(nsINode* aTarget,
-                                  mozilla::WidgetKeyboardEvent& aEvent,
-                                  nsEventStatus* aStatus);
-#endif // MOZ_B2G
-
-  // This method tries forwarding key events to the input-method-editor(IME).
-  // If the event isn't be forwarded, then it will be dispathed to its target.
-  // Return true when event is successfully forwarded to the input-method-editor.
-  // Otherwise, return false.
-  bool ForwardKeyToInputMethodAppOrDispatch(bool aIsTargetRemote,
-                                            nsINode* aTarget,
-                                            mozilla::WidgetKeyboardEvent& aEvent,
-                                            nsEventStatus* aStatus,
-                                            mozilla::EventDispatchingCallback* aEventCB);
-
   nsresult SetResolutionImpl(float aResolution, bool aScaleToResolution);
 
 #ifdef DEBUG
@@ -951,6 +904,8 @@ protected:
 
   // Whether the widget has received a paint message yet.
   bool                      mHasReceivedPaintMessage : 1;
+
+  bool                      mIsLastKeyDownCanceled : 1;
 
   static bool               sDisableNonTestMouseEvents;
 };

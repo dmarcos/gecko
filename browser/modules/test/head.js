@@ -1,5 +1,8 @@
 Cu.import("resource://gre/modules/Promise.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
+                                  "resource://testing-common/PlacesTestUtils.jsm");
+
 const SINGLE_TRY_TIMEOUT = 100;
 const NUMBER_OF_TRIES = 30;
 
@@ -67,10 +70,6 @@ function checkKeyedScalar(scalars, scalarName, key, expectedValue) {
  */
 let typeInSearchField = Task.async(function* (browser, text, fieldName) {
   yield ContentTask.spawn(browser, [fieldName, text], function* ([contentFieldName, contentText]) {
-    // Avoid intermittent failures.
-    if (contentFieldName === "searchText") {
-      content.wrappedJSObject.gContentSearchController.remoteTimeout = 5000;
-    }
     // Put the focus on the search box.
     let searchInput = content.document.getElementById(contentFieldName);
     searchInput.focus();
@@ -94,6 +93,16 @@ function checkKeyedHistogram(h, key, expectedValue) {
   const snapshot = h.snapshot();
   Assert.ok(key in snapshot, `The histogram must contain ${key}.`);
   Assert.equal(snapshot[key].sum, expectedValue, `The key ${key} must contain ${expectedValue}.`);
+}
+
+/**
+ * Return the scalars from the parent-process.
+ */
+function getParentProcessScalars(aChannel, aKeyed = false, aClear = false) {
+  const scalars = aKeyed ?
+    Services.telemetry.snapshotKeyedScalars(aChannel, aClear)["default"] :
+    Services.telemetry.snapshotScalars(aChannel, aClear)["default"];
+  return scalars || {};
 }
 
 function checkEvents(events, expectedEvents) {

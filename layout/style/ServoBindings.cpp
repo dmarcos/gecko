@@ -7,9 +7,10 @@
 #include "mozilla/ServoBindings.h"
 
 #include "ChildIterator.h"
-#include "StyleStructContext.h"
 #include "gfxFontFamilyList.h"
 #include "nsAttrValueInlines.h"
+#include "nsCSSProps.h"
+#include "nsCSSParser.h"
 #include "nsCSSRuleProcessor.h"
 #include "nsContentUtils.h"
 #include "nsDOMTokenList.h"
@@ -20,6 +21,7 @@
 #include "nsINode.h"
 #include "nsIPrincipal.h"
 #include "nsNameSpaceManager.h"
+#include "nsNetUtil.h"
 #include "nsRuleNode.h"
 #include "nsString.h"
 #include "nsStyleStruct.h"
@@ -57,6 +59,12 @@ bool
 Gecko_NodeIsElement(RawGeckoNodeBorrowed aNode)
 {
   return aNode->IsElement();
+}
+
+bool
+Gecko_IsInDocument(RawGeckoNodeBorrowed aNode)
+{
+  return aNode->IsInComposedDoc();
 }
 
 RawGeckoNodeBorrowedOrNull
@@ -192,6 +200,13 @@ Gecko_IsRootElement(RawGeckoElementBorrowed aElement)
   return aElement->OwnerDoc()->GetRootElement() == aElement;
 }
 
+bool
+Gecko_MatchesElement(CSSPseudoClassType aType,
+                     RawGeckoElementBorrowed aElement)
+{
+  return nsCSSPseudoClasses::MatchesElement(aType, aElement).value();
+}
+
 nsIAtom*
 Gecko_LocalName(RawGeckoElementBorrowed aElement)
 {
@@ -272,32 +287,35 @@ Gecko_CalcStyleDifference(nsStyleContext* aOldStyleContext,
 ServoElementSnapshotOwned
 Gecko_CreateElementSnapshot(RawGeckoElementBorrowed aElement)
 {
+  MOZ_ASSERT(NS_IsMainThread());
   return new ServoElementSnapshot(aElement);
 }
 
 void
 Gecko_DropElementSnapshot(ServoElementSnapshotOwned aSnapshot)
 {
-  MOZ_ASSERT(NS_IsMainThread(),
-             "ServoAttrSnapshots can only be dropped on the main thread");
-  delete aSnapshot;
+  // Proxy deletes have a lot of overhead, so Servo tries hard to only drop
+  // snapshots on the main thread. However, there are certain cases where
+  // it's unavoidable (i.e. synchronously dropping the style data for the
+  // descendants of a new display:none root).
+  if (MOZ_UNLIKELY(!NS_IsMainThread())) {
+    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([=]() { delete aSnapshot; });
+    NS_DispatchToMainThread(task.forget());
+  } else {
+    delete aSnapshot;
+  }
 }
 
 RawServoDeclarationBlockStrongBorrowedOrNull
 Gecko_GetServoDeclarationBlock(RawGeckoElementBorrowed aElement)
 {
-  const nsAttrValue* attr = aElement->GetParsedAttr(nsGkAtoms::style);
-  if (!attr || attr->Type() != nsAttrValue::eCSSDeclaration) {
-    return nullptr;
-  }
-  DeclarationBlock* decl = attr->GetCSSDeclarationValue();
+  DeclarationBlock* decl = aElement->GetInlineStyleDeclaration();
   if (!decl) {
     return nullptr;
   }
   if (decl->IsGecko()) {
-    // XXX This can happen at least when script sets style attribute
-    //     since we haven't implemented Element.style for stylo. But
-    //     we may want to turn it into an assertion after that's done.
+    // XXX This can happen when nodes are adopted from a Gecko-style-backend
+    //     document into a Servo-style-backend document.  See bug 1330051.
     NS_WARNING("stylo: requesting a Gecko declaration block?");
     return nullptr;
   }
@@ -653,8 +671,12 @@ Gecko_SetMozBinding(nsStyleDisplay* aDisplay,
                     ThreadSafeURIHolder* aReferrer,
                     ThreadSafePrincipalHolder* aPrincipal)
 {
+  if (!aURLString) {
+    aDisplay->mBinding = nullptr;
+    return;
+  }
+
   MOZ_ASSERT(aDisplay);
-  MOZ_ASSERT(aURLString);
   MOZ_ASSERT(aBaseURI);
   MOZ_ASSERT(aReferrer);
   MOZ_ASSERT(aPrincipal);
@@ -875,6 +897,15 @@ Gecko_EnsureImageLayersLength(nsStyleImageLayers* aLayers, size_t aLen,
 }
 
 void
+Gecko_EnsureStyleAnimationArrayLength(void* aArray, size_t aLen)
+{
+  auto base =
+    reinterpret_cast<nsStyleAutoArray<StyleAnimation>*>(aArray);
+
+  base->EnsureLengthAtLeast(aLen);
+}
+
+void
 Gecko_ResetStyleCoord(nsStyleUnit* aUnit, nsStyleUnion* aValue)
 {
   nsStyleCoord::Reset(*aUnit, *aValue);
@@ -1017,14 +1048,62 @@ Gecko_CSSValue_GetArrayItem(nsCSSValueBorrowedMut aCSSValue, int32_t aIndex)
   return &aCSSValue->GetArrayValue()->Item(aIndex);
 }
 
+
+bool
+Gecko_PropertyId_IsPrefEnabled(nsCSSPropertyID id)
+{
+  return nsCSSProps::IsEnabled(id);
+}
+
+void
+Gecko_LoadStyleSheet(css::Loader* aLoader,
+                     ServoStyleSheet* aParent,
+                     RawServoImportRuleBorrowed aImportRule,
+                     const uint8_t* aURLString,
+                     uint32_t aURLStringLength,
+                     const uint8_t* aMediaString,
+                     uint32_t aMediaStringLength)
+{
+  MOZ_ASSERT(aLoader, "Should've catched this before");
+  MOZ_ASSERT(aParent, "Only used for @import, so parent should exist!");
+  MOZ_ASSERT(aURLString, "Invalid URLs shouldn't be loaded!");
+  RefPtr<nsMediaList> media = new nsMediaList();
+  if (aMediaStringLength) {
+    MOZ_ASSERT(aMediaString);
+    // TODO(emilio, bug 1325878): This is not great, though this is going away
+    // soon anyway, when we can have a Servo-backed nsMediaList.
+    nsDependentCSubstring medium(reinterpret_cast<const char*>(aMediaString),
+                                 aMediaStringLength);
+    nsCSSParser mediumParser(aLoader);
+    mediumParser.ParseMediaList(
+        NS_ConvertUTF8toUTF16(medium), nullptr, 0, media);
+  }
+
+  nsDependentCSubstring urlSpec(reinterpret_cast<const char*>(aURLString),
+                                aURLStringLength);
+  nsCOMPtr<nsIURI> uri;
+  nsresult rv = NS_NewURI(getter_AddRefs(uri), urlSpec);
+
+  if (NS_FAILED(rv)) {
+    // Servo and Gecko have different ideas of what a valid URL is, so we might
+    // get in here with a URL string that NS_NewURI can't handle.  If so,
+    // silently do nothing.  Eventually we should be able to assert that the
+    // NS_NewURI succeeds, here.
+    return;
+  }
+
+  aLoader->LoadChildSheet(aParent, uri, media, nullptr, aImportRule, nullptr);
+}
+
 NS_IMPL_THREADSAFE_FFI_REFCOUNTING(nsCSSValueSharedList, CSSValueSharedList);
 
 #define STYLE_STRUCT(name, checkdata_cb)                                      \
                                                                               \
 void                                                                          \
-Gecko_Construct_nsStyle##name(nsStyle##name* ptr)                             \
+Gecko_Construct_Default_nsStyle##name(nsStyle##name* ptr,                     \
+                                      const nsPresContext* pres_context)      \
 {                                                                             \
-  new (ptr) nsStyle##name(StyleStructContext::ServoContext());                \
+  new (ptr) nsStyle##name(pres_context);                                      \
 }                                                                             \
                                                                               \
 void                                                                          \
@@ -1038,6 +1117,12 @@ void                                                                          \
 Gecko_Destroy_nsStyle##name(nsStyle##name* ptr)                               \
 {                                                                             \
   ptr->~nsStyle##name();                                                      \
+}
+
+void
+Gecko_Construct_nsStyleVariables(nsStyleVariables* ptr)
+{
+  new (ptr) nsStyleVariables();
 }
 
 #include "nsStyleStructList.h"

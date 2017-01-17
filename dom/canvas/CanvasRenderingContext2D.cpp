@@ -1010,7 +1010,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(CanvasRenderingContext2D)
       ImplCycleCollectionTraverse(cb, info.mElement, "Hit region fallback element");
     }
   }
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(CanvasRenderingContext2D)
@@ -1344,7 +1343,7 @@ CanvasRenderingContext2D::AllowOpenGLCanvas() const
 
 bool CanvasRenderingContext2D::SwitchRenderingMode(RenderingMode aRenderingMode)
 {
-  if (!IsTargetValid() || mRenderingMode == aRenderingMode) {
+  if (!(IsTargetValid() || mBufferProvider) || mRenderingMode == aRenderingMode) {
     return false;
   }
 
@@ -2912,7 +2911,7 @@ CanvasRenderingContext2D::UpdateFilter()
   // The filter might reference an SVG filter that is declared inside this
   // document. Flush frames so that we'll have an nsSVGFilterFrame to work
   // with.
-  presShell->FlushPendingNotifications(Flush_Frames);
+  presShell->FlushPendingNotifications(FlushType::Frames);
 
   bool sourceGraphicIsTainted =
     (mCanvasElement && mCanvasElement->IsWriteOnly());
@@ -5101,7 +5100,7 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
   auto result = aImage.mImgContainer->
     Draw(context, scaledImageSize,
          ImageRegion::Create(gfxRect(aSrc.x, aSrc.y, aSrc.width, aSrc.height)),
-         aImage.mWhichFrame, SamplingFilter::GOOD, Some(svgContext), modifiedFlags);
+         aImage.mWhichFrame, SamplingFilter::GOOD, Some(svgContext), modifiedFlags, 1.0);
 
   if (result != DrawResult::SUCCESS) {
     NS_WARNING("imgIContainer::Draw failed");

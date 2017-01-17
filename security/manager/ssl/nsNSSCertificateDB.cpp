@@ -10,8 +10,8 @@
 #include "NSSCertDBTrustDomain.h"
 #include "SharedSSLState.h"
 #include "certdb.h"
-#include "mozilla/Base64.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Base64.h"
 #include "mozilla/Casting.h"
 #include "mozilla/Unused.h"
 #include "nsArray.h"
@@ -249,7 +249,7 @@ nsNSSCertificateDB::handleCACertDownload(NotNull<nsIArray*> x509Certs,
   uint32_t numCerts;
 
   x509Certs->GetLength(&numCerts);
-  NS_ASSERTION(numCerts > 0, "Didn't get any certs to import.");
+  MOZ_ASSERT(numCerts > 0, "Didn't get any certs to import.");
   if (numCerts == 0)
     return NS_OK; // Nothing to import, so nothing to do.
 
@@ -1410,7 +1410,7 @@ VerifyCertAtTime(nsIX509Cert* aCert,
                                                resultChain,
                                                false, // don't save intermediates
                                                aFlags,
-                                               NeckoOriginAttributes(),
+                                               OriginAttributes(),
                                                &evOidPolicy);
   } else {
     result = certVerifier->VerifyCert(nssCert.get(), aUsage, aTime,
@@ -1420,7 +1420,7 @@ VerifyCertAtTime(nsIX509Cert* aCert,
                                       aFlags,
                                       nullptr, // stapledOCSPResponse
                                       nullptr, // sctsFromTLSExtension
-                                      NeckoOriginAttributes(),
+                                      OriginAttributes(),
                                       &evOidPolicy);
   }
 

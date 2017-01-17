@@ -377,6 +377,12 @@ this.ExtensionData = class {
       hosts: this.whiteListedHosts.pat,
       apis: [...this.apiNames],
     };
+
+    if (Array.isArray(this.manifest.content_scripts)) {
+      for (let entry of this.manifest.content_scripts) {
+        result.hosts.push(...entry.matches);
+      }
+    }
     const EXP_PATTERN = /^experiments\.\w+/;
     result.permissions = [...this.permissions]
       .filter(p => !result.hosts.includes(p) && !EXP_PATTERN.test(p));
@@ -429,10 +435,21 @@ this.ExtensionData = class {
         // Errors are handled by the type checks above.
       }
 
+      let containersEnabled = true;
+      try {
+        containersEnabled = Services.prefs.getBoolPref("privacy.userContext.enabled");
+      } catch (e) {
+        // If we fail here, we are in some xpcshell test.
+      }
+
       let permissions = this.manifest.permissions || [];
 
       let whitelist = [];
       for (let perm of permissions) {
+        if (perm == "contextualIdentities" && !containersEnabled) {
+          continue;
+        }
+
         this.permissions.add(perm);
 
         let match = /^(\w+)(?:\.(\w+)(?:\.\w+)*)?$/.exec(perm);
@@ -696,7 +713,7 @@ this.Extension = class extends ExtensionData {
 
   // Checks that the given URL is a child of our baseURI.
   isExtensionURL(url) {
-    let uri = Services.io.newURI(url, null, null);
+    let uri = Services.io.newURI(url);
 
     let common = this.baseURI.getCommonBaseSpec(uri);
     return common == this.baseURI.spec;

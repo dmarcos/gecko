@@ -743,6 +743,10 @@ gfxPlatform::Init()
         MOZ_CRASH("Could not initialize gfxFontCache");
     }
 
+#ifdef MOZ_ENABLE_FREETYPE
+    Factory::SetFTLibrary(gPlatform->GetFTLibrary());
+#endif
+
     /* Create and register our CMS Override observer. */
     gPlatform->mSRGBOverrideObserver = new SRGBOverrideObserver();
     Preferences::AddWeakObserver(gPlatform->mSRGBOverrideObserver, GFX_PREF_CMS_FORCE_SRGB);
@@ -1443,7 +1447,7 @@ gfxPlatform::CreateOffscreenCanvasDrawTarget(const IntSize& aSize, SurfaceFormat
 already_AddRefed<DrawTarget>
 gfxPlatform::CreateOffscreenContentDrawTarget(const IntSize& aSize, SurfaceFormat aFormat)
 {
-  NS_ASSERTION(mPreferredCanvasBackend != BackendType::NONE, "No backend.");
+  NS_ASSERTION(mContentBackend != BackendType::NONE, "No backend.");
   return CreateDrawTargetForBackend(mContentBackend, aSize, aFormat);
 }
 
@@ -2208,18 +2212,18 @@ gfxPlatform::InitGPUProcessPrefs()
 {
   // We want to hide this from about:support, so only set a default if the
   // pref is known to be true.
-  if (!gfxPrefs::GPUProcessDevEnabled() && !gfxPrefs::GPUProcessDevForceEnabled()) {
+  if (!gfxPrefs::GPUProcessEnabled() && !gfxPrefs::GPUProcessForceEnabled()) {
     return;
   }
 
   FeatureState& gpuProc = gfxConfig::GetFeature(Feature::GPU_PROCESS);
 
   gpuProc.SetDefaultFromPref(
-    gfxPrefs::GetGPUProcessDevEnabledPrefName(),
+    gfxPrefs::GetGPUProcessEnabledPrefName(),
     true,
-    gfxPrefs::GetGPUProcessDevEnabledPrefDefault());
+    gfxPrefs::GetGPUProcessEnabledPrefDefault());
 
-  if (gfxPrefs::GPUProcessDevForceEnabled()) {
+  if (gfxPrefs::GPUProcessForceEnabled()) {
     gpuProc.UserForceEnable("User force-enabled via pref");
   }
 

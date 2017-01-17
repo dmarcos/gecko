@@ -166,6 +166,9 @@ public:
   RecvGMPsChanged(nsTArray<GMPCapabilityData>&& capabilities) override;
 
   mozilla::ipc::IPCResult
+  RecvInitProcessHangMonitor(Endpoint<PProcessHangMonitorChild>&& aHangMonitor) override;
+
+  mozilla::ipc::IPCResult
   RecvInitRendering(
     Endpoint<PCompositorBridgeChild>&& aCompositor,
     Endpoint<PImageBridgeChild>&& aImageBridge,
@@ -178,10 +181,6 @@ public:
     Endpoint<PImageBridgeChild>&& aImageBridge,
     Endpoint<PVRManagerChild>&& aVRBridge,
     Endpoint<PVideoDecoderManagerChild>&& aVideoManager) override;
-
-  PProcessHangMonitorChild*
-  AllocPProcessHangMonitorChild(Transport* aTransport,
-                                ProcessId aOtherProcess) override;
 
   virtual mozilla::ipc::IPCResult RecvSetProcessSandbox(const MaybeFileDesc& aBroker) override;
 
@@ -646,6 +645,9 @@ private:
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
   virtual void ProcessingError(Result aCode, const char* aReason) override;
+
+  virtual already_AddRefed<nsIEventTarget>
+  GetConstructedEventTarget(const Message& aMsg) override;
 
   InfallibleTArray<nsAutoPtr<AlertObserver> > mAlertObservers;
   RefPtr<ConsoleListener> mConsoleListener;

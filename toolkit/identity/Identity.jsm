@@ -199,7 +199,6 @@ IDService.prototype = {
             }
             self.RP._doLogin(rp, rpLoginOptions, assertion);
             self.RP._cleanUpProvisionFlow(aRPId, aProvId);
-            return;
           });
         });
       });
@@ -285,7 +284,7 @@ IDService.prototype = {
 
         let callbackObj = {
           domain: aDomain,
-          idpParams: idpParams,
+          idpParams,
         };
         log("_fetchWellKnownFile result: ", callbackObj);
         // Yay.  Valid IdP configuration for the domain.

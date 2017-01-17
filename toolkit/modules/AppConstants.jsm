@@ -260,6 +260,13 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
+  INSTALL_COMPACT_THEMES:
+#ifdef INSTALL_COMPACT_THEMES
+  true,
+#else
+  false,
+#endif
+
   MENUBAR_CAN_AUTOHIDE:
 #ifdef MENUBAR_CAN_AUTOHIDE
   true,
@@ -290,13 +297,6 @@ this.AppConstants = Object.freeze({
 
   MOZ_ENABLE_PROFILER_SPS:
 #ifdef MOZ_ENABLE_PROFILER_SPS
-  true,
-#else
-  false,
-#endif
-
-  MOZ_STACKWALKING:
-#ifdef MOZ_STACKWALKING
   true,
 #else
   false,

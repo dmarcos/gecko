@@ -7,12 +7,15 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
   "resource://gre/modules/PromiseUtils.jsm");
 
+// Various tests in this directory may define gTestBrowser, to use as the
+// default browser under test in some of the functions below.
+/* global gTestBrowser */
+
 // The blocklist shim running in the content process does not initialize at
 // start up, so it's not active until we load content that needs to do a
 // check. This helper bypasses the delay to get the svc up and running
 // immediately. Note, call this after remote content has loaded.
-function promiseInitContentBlocklistSvc(aBrowser)
-{
+function promiseInitContentBlocklistSvc(aBrowser) {
   return ContentTask.spawn(aBrowser, {}, function* () {
     try {
       Cc["@mozilla.org/extensions/blocklist;1"]
@@ -363,7 +366,7 @@ function waitForNotificationShown(notification, callback) {
   PopupNotifications.panel.addEventListener("popupshown", function onShown(e) {
     PopupNotifications.panel.removeEventListener("popupshown", onShown);
     callback();
-  }, false);
+  });
   notification.reshow();
 }
 

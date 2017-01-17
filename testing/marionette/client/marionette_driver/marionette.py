@@ -69,8 +69,14 @@ class HTMLElement(object):
         """Returns the requested property, or None if the property is
         not set.
         """
-        body = {"id": self.id, "name": name}
-        return self.marionette._send_message("getElementProperty", body, key="value")
+        try:
+            body = {"id": self.id, "name": name}
+            return self.marionette._send_message("getElementProperty", body, key="value")
+        except errors.UnknownCommandException:
+            # Keep backward compatibility for code which uses get_attribute() to
+            # also retrieve element properties.
+            # Remove when Firefox 55 is stable.
+            return self.get_attribute(name)
 
     def click(self):
         self.marionette._send_message("clickElement", {"id": self.id})
@@ -983,10 +989,12 @@ class Marionette(object):
             pref_value = self.execute_script("""
                 Components.utils.import("resource://gre/modules/Preferences.jsm");
 
-                let [pref, defaultBranch, valueType] = arguments;
+                let pref = arguments[0];
+                let defaultBranch = arguments[1];
+                let valueType = arguments[2];
 
                 prefs = new Preferences({defaultBranch: defaultBranch});
-                return prefs.get(pref, null, valueType=Ci[valueType]);
+                return prefs.get(pref, null, Components.interfaces[valueType]);
                 """, script_args=(pref, default_branch, value_type))
             return pref_value
 
@@ -1014,7 +1022,9 @@ class Marionette(object):
             self.execute_script("""
                 Components.utils.import("resource://gre/modules/Preferences.jsm");
 
-                let [pref, value, defaultBranch] = arguments;
+                let pref = arguments[0];
+                let value = arguments[1];
+                let defaultBranch = arguments[2];
 
                 prefs = new Preferences({defaultBranch: defaultBranch});
                 prefs.set(pref, value);
@@ -1445,7 +1455,7 @@ class Marionette(object):
         Each window handle is assigned by the server, and the list of
         strings returned does not have a guaranteed ordering.
 
-        :returns: unordered list of unique window handles as strings
+        :returns: Unordered list of unique window handles as strings
         """
         return self._send_message(
             "getWindowHandles", key="value" if self.protocol == 1 else None)
@@ -1457,7 +1467,7 @@ class Marionette(object):
         Each window handle is assigned by the server, and the list of
         strings returned does not have a guaranteed ordering.
 
-        :returns: unordered list of unique window handles as strings
+        :returns: Unordered list of unique chrome window handles as strings
         """
         return self._send_message(
             "getChromeWindowHandles", key="value" if self.protocol == 1 else None)
@@ -1471,15 +1481,17 @@ class Marionette(object):
         """Close the current window, ending the session if it's the last
         window currently open.
 
+        :returns: Unordered list of remaining unique window handles as strings
         """
-        self._send_message("close")
+        return self._send_message("close")
 
     def close_chrome_window(self):
         """Close the currently selected chrome window, ending the session
         if it's the last window open.
 
+        :returns: Unordered list of remaining unique chrome window handles as strings
         """
-        self._send_message("closeChromeWindow")
+        return self._send_message("closeChromeWindow")
 
     def set_context(self, context):
         """Sets the context that Marionette commands are running in.
@@ -2017,7 +2029,7 @@ class Marionette(object):
         return self._send_message("getCookies", key="value" if self.protocol == 1 else None)
 
     def screenshot(self, element=None, highlights=None, format="base64",
-                   full=True):
+                   full=True, scroll=True):
         """Takes a screenshot of a web element or the current frame.
 
         The screen capture is returned as a lossless PNG image encoded
@@ -2040,6 +2052,10 @@ class Marionette(object):
         :param full: If True (the default), the capture area will be the
             complete frame. Else only the viewport is captured. Only applies
             when `element` is None.
+
+        :param scroll: When `element` is provided, scroll to it before
+            taking the screenshot (default).  Otherwise, avoid scrolling
+            `element` into view.
         """
 
         if element:
@@ -2051,7 +2067,8 @@ class Marionette(object):
         body = {"id": element,
                 "highlights": lights,
                 "full": full,
-                "hash": False}
+                "hash": False,
+                "scroll": scroll}
         if format == "hash":
             body["hash"] = True
         data = self._send_message("takeScreenshot", body, key="value")

@@ -58,6 +58,7 @@ using mozilla::Some;
 class BreakableControl;
 class LabelControl;
 class LoopControl;
+class ForOfLoopControl;
 class TryFinallyControl;
 
 static bool
@@ -148,6 +149,13 @@ bool
 BytecodeEmitter::NestableControl::is<LoopControl>() const
 {
     return StatementKindIsLoop(kind_);
+}
+
+template <>
+bool
+BytecodeEmitter::NestableControl::is<ForOfLoopControl>() const
+{
+    return kind_ == StatementKind::ForOfLoop;
 }
 
 template <>
@@ -267,6 +275,64 @@ class LoopControl : public BreakableControl
             return false;
         bce->patchJumpsToTarget(continues, continueTarget);
         return true;
+    }
+};
+
+class ForOfLoopControl : public LoopControl
+{
+    // The stack depth of the iterator.
+    int32_t iterDepth_;
+
+    // for-of loops, when throwing from non-iterator code (i.e. from the body
+    // or from evaluating the LHS of the loop condition), need to call
+    // IteratorClose. If IteratorClose itself throws, we must not re-call
+    // IteratorClose. Since non-local jumps like break and return call
+    // IteratorClose, whenever a non-local jump is emitted, we must terminate
+    // the current JSTRY_ITERCLOSE note to skip the non-local jump code, then
+    // start a new one.
+    //
+    // Visually,
+    //
+    //   for (x of y) {
+    //     ...             instantiate ForOfLoopControl
+    //     ...         +   <-- iterCloseTryStart_ points to right before
+    //     ...                 assignment to loop variable
+    //     ...         ^
+    //     ...         |
+    //     if (...)    v
+    //                 +   call finishIterCloseTryNote before |break|
+    //                     above range is noted with JSTRY_ITERCLOSE
+    //
+    //       break;    <-- break and IteratorClose are not inside
+    //                     JSTRY_ITERCLOSE note
+    //
+    //                     call startNewIterCloseTryNote after |break|
+    //                 +   <-- next iterCloseTryStart_ points here
+    //     ...         |
+    //     ...         ~
+    //   }
+    ptrdiff_t iterCloseTryStart_;
+
+  public:
+    ForOfLoopControl(BytecodeEmitter* bce, int32_t iterDepth)
+      : LoopControl(bce, StatementKind::ForOfLoop),
+        iterDepth_(iterDepth),
+        iterCloseTryStart_(-1)
+    {
+        MOZ_ASSERT(bce->stackDepth >= iterDepth);
+    }
+
+    MOZ_MUST_USE bool finishIterCloseTryNote(BytecodeEmitter* bce) {
+        ptrdiff_t end = bce->offset();
+        MOZ_ASSERT(end >= iterCloseTryStart_);
+        if (end != iterCloseTryStart_)
+            return bce->tryNoteList.append(JSTRY_ITERCLOSE, iterDepth_, iterCloseTryStart_, end);
+        return true;
+    }
+
+    void startNewIterCloseTryNote(BytecodeEmitter* bce) {
+        MOZ_ASSERT(bce->offset() > iterCloseTryStart_);
+        iterCloseTryStart_ = bce->offset();
     }
 };
 
@@ -736,6 +802,9 @@ BytecodeEmitter::EmitterScope::searchInEnclosingScope(JSAtom* name, Scope* scope
           case ScopeKind::With:
           case ScopeKind::NonSyntactic:
             return NameLocation::Dynamic();
+
+          case ScopeKind::WasmFunction:
+            MOZ_CRASH("No direct eval inside wasm functions");
         }
 
         if (hasEnv) {
@@ -1433,6 +1502,9 @@ BytecodeEmitter::EmitterScope::leave(BytecodeEmitter* bce, bool nonLocal)
       case ScopeKind::NonSyntactic:
       case ScopeKind::Module:
         break;
+
+      case ScopeKind::WasmFunction:
+        MOZ_CRASH("No wasm function scopes in JS");
     }
 
     // Finish up the scope if we are leaving it in LIFO fashion.
@@ -1496,6 +1568,156 @@ BytecodeEmitter::TDZCheckCache::noteTDZCheck(BytecodeEmitter* bce, JSAtom* name,
 
     return true;
 }
+
+class MOZ_STACK_CLASS IfThenElseEmitter
+{
+    BytecodeEmitter* bce_;
+    JumpList jumpAroundThen_;
+    JumpList jumpsAroundElse_;
+    unsigned noteIndex_;
+    int32_t thenDepth_;
+#ifdef DEBUG
+    int32_t pushed_;
+    bool calculatedPushed_;
+#endif
+    enum State {
+        Start,
+        If,
+        Cond,
+        IfElse,
+        Else,
+        End
+    };
+    State state_;
+
+  public:
+    explicit IfThenElseEmitter(BytecodeEmitter* bce)
+      : bce_(bce),
+        noteIndex_(-1),
+        thenDepth_(0),
+#ifdef DEBUG
+        pushed_(0),
+        calculatedPushed_(false),
+#endif
+        state_(Start)
+    {}
+
+    ~IfThenElseEmitter()
+    {}
+
+  private:
+    bool emitIf(State nextState) {
+        MOZ_ASSERT(state_ == Start || state_ == Else);
+        MOZ_ASSERT(nextState == If || nextState == IfElse || nextState == Cond);
+
+        // Clear jumpAroundThen_ offset that points previous JSOP_IFEQ.
+        if (state_ == Else)
+            jumpAroundThen_ = JumpList();
+
+        // Emit an annotated branch-if-false around the then part.
+        SrcNoteType type = nextState == If ? SRC_IF : nextState == IfElse ? SRC_IF_ELSE : SRC_COND;
+        if (!bce_->newSrcNote(type, &noteIndex_))
+            return false;
+        if (!bce_->emitJump(JSOP_IFEQ, &jumpAroundThen_))
+            return false;
+
+        // To restore stack depth in else part, save depth of the then part.
+#ifdef DEBUG
+        // If DEBUG, this is also necessary to calculate |pushed_|.
+        thenDepth_ = bce_->stackDepth;
+#else
+        if (nextState == IfElse || nextState == Cond)
+            thenDepth_ = bce_->stackDepth;
+#endif
+        state_ = nextState;
+        return true;
+    }
+
+  public:
+    bool emitIf() {
+        return emitIf(If);
+    }
+
+    bool emitCond() {
+        return emitIf(Cond);
+    }
+
+    bool emitIfElse() {
+        return emitIf(IfElse);
+    }
+
+    bool emitElse() {
+        MOZ_ASSERT(state_ == IfElse || state_ == Cond);
+
+        calculateOrCheckPushed();
+
+        // Emit a jump from the end of our then part around the else part. The
+        // patchJumpsToTarget call at the bottom of this function will fix up
+        // the offset with jumpsAroundElse value.
+        if (!bce_->emitJump(JSOP_GOTO, &jumpsAroundElse_))
+            return false;
+
+        // Ensure the branch-if-false comes here, then emit the else.
+        if (!bce_->emitJumpTargetAndPatch(jumpAroundThen_))
+            return false;
+
+        // Annotate SRC_IF_ELSE or SRC_COND with the offset from branch to
+        // jump, for IonMonkey's benefit.  We can't just "back up" from the pc
+        // of the else clause, because we don't know whether an extended
+        // jump was required to leap from the end of the then clause over
+        // the else clause.
+        if (!bce_->setSrcNoteOffset(noteIndex_, 0,
+                                    jumpsAroundElse_.offset - jumpAroundThen_.offset))
+        {
+            return false;
+        }
+
+        // Restore stack depth of the then part.
+        bce_->stackDepth = thenDepth_;
+        state_ = Else;
+        return true;
+    }
+
+    bool emitEnd() {
+        MOZ_ASSERT(state_ == If || state_ == Else);
+
+        calculateOrCheckPushed();
+
+        if (state_ == If) {
+            // No else part, fixup the branch-if-false to come here.
+            if (!bce_->emitJumpTargetAndPatch(jumpAroundThen_))
+                return false;
+        }
+
+        // Patch all the jumps around else parts.
+        if (!bce_->emitJumpTargetAndPatch(jumpsAroundElse_))
+            return false;
+
+        state_ = End;
+        return true;
+    }
+
+    void calculateOrCheckPushed() {
+#ifdef DEBUG
+        if (!calculatedPushed_) {
+            pushed_ = bce_->stackDepth - thenDepth_;
+            calculatedPushed_ = true;
+        } else {
+            MOZ_ASSERT(pushed_ == bce_->stackDepth - thenDepth_);
+        }
+#endif
+    }
+
+#ifdef DEBUG
+    int32_t pushed() const {
+        return pushed_;
+    }
+
+    int32_t popped() const {
+        return -pushed_;
+    }
+#endif
+};
 
 BytecodeEmitter::BytecodeEmitter(BytecodeEmitter* parent,
                                  Parser<FullParseHandler>* parser, SharedContext* sc,
@@ -2013,22 +2235,43 @@ BytecodeEmitter::flushPops(int* npops)
 
 namespace {
 
-class NonLocalExitControl {
+class NonLocalExitControl
+{
+  public:
+    enum Kind
+    {
+        // IteratorClose is handled especially inside the exception unwinder.
+        Throw,
+
+        // A 'continue' statement does not call IteratorClose for the loop it
+        // is continuing, i.e. excluding the target loop.
+        Continue,
+
+        // A 'break' or 'return' statement does call IteratorClose for the
+        // loop it is breaking out of or returning from, i.e. including the
+        // target loop.
+        Break,
+        Return
+    };
+
+  private:
     BytecodeEmitter* bce_;
     const uint32_t savedScopeNoteIndex_;
     const int savedDepth_;
     uint32_t openScopeNoteIndex_;
+    Kind kind_;
 
     NonLocalExitControl(const NonLocalExitControl&) = delete;
 
     MOZ_MUST_USE bool leaveScope(BytecodeEmitter::EmitterScope* scope);
 
   public:
-    explicit NonLocalExitControl(BytecodeEmitter* bce)
+    NonLocalExitControl(BytecodeEmitter* bce, Kind kind)
       : bce_(bce),
         savedScopeNoteIndex_(bce->scopeNoteList.length()),
         savedDepth_(bce->stackDepth),
-        openScopeNoteIndex_(bce->innermostEmitterScope->noteIndex())
+        openScopeNoteIndex_(bce->innermostEmitterScope->noteIndex()),
+        kind_(kind)
     { }
 
     ~NonLocalExitControl() {
@@ -2075,6 +2318,14 @@ NonLocalExitControl::prepareForNonLocalJump(BytecodeEmitter::NestableControl* ta
 
     EmitterScope* es = bce_->innermostEmitterScope;
     int npops = 0;
+    bool hasForOfLoopsWithIteratorClose = false;
+
+    // IteratorClose is handled specially in the exception unwinder. For
+    // 'continue', 'break', and 'return' statements, emit IteratorClose
+    // bytecode inline. 'continue' statements do not call IteratorClose for
+    // the loop they are continuing.
+    bool emitIteratorClose = kind_ == Continue || kind_ == Break || kind_ == Return;
+    bool emitIteratorCloseAtTarget = emitIteratorClose && kind_ != Continue;
 
     auto flushPops = [&npops](BytecodeEmitter* bce) {
         if (npops && !bce->flushPops(&npops))
@@ -2114,15 +2365,29 @@ NonLocalExitControl::prepareForNonLocalJump(BytecodeEmitter::NestableControl* ta
           }
 
           case StatementKind::ForOfLoop:
-            npops += 2;
+            // The iterator and the current value are on the stack.
+            //
+            if (emitIteratorClose) {
+                hasForOfLoopsWithIteratorClose = true;
+                if (!control->as<ForOfLoopControl>().finishIterCloseTryNote(bce_))
+                    return false;
+                if (!bce_->emit1(JSOP_POP))               // ... ITER
+                    return false;
+                if (!bce_->emitIteratorClose())           // ...
+                    return false;
+            } else {
+                if (!bce_->emit1(JSOP_POP))               // ... ITER
+                    return false;
+                if (!bce_->emit1(JSOP_POP))               // ...
+                    return false;
+            }
             break;
 
           case StatementKind::ForInLoop:
-            /* The iterator and the current value are on the stack. */
-            npops += 1;
-            if (!flushPops(bce_))
+            // The iterator and the current value are on the stack.
+            if (!bce_->emit1(JSOP_POP))                   // ... ITER
                 return false;
-            if (!bce_->emit1(JSOP_ENDITER))
+            if (!bce_->emit1(JSOP_ENDITER))               // ...
                 return false;
             break;
 
@@ -2131,13 +2396,45 @@ NonLocalExitControl::prepareForNonLocalJump(BytecodeEmitter::NestableControl* ta
         }
     }
 
+    if (target && target->is<ForOfLoopControl>() && emitIteratorCloseAtTarget) {
+        hasForOfLoopsWithIteratorClose = true;
+        if (!target->as<ForOfLoopControl>().finishIterCloseTryNote(bce_))
+            return false;
+
+        // The iterator and the current value are on the stack. At the level
+        // of the target block, there's bytecode after the loop that will pop
+        // the iterator and the value, so duplicate the iterator and call
+        // IteratorClose.
+        if (!bce_->emitDupAt(1))                          // ... ITER RESULT ITER
+            return false;
+        if (!bce_->emitIteratorClose())                   // ... ITER RESULT
+            return false;
+    }
+
     EmitterScope* targetEmitterScope = target ? target->emitterScope() : bce_->varEmitterScope;
     for (; es != targetEmitterScope; es = es->enclosingInFrame()) {
         if (!leaveScope(es))
             return false;
     }
 
-    return flushPops(bce_);
+    if (!flushPops(bce_))
+        return false;
+
+    // See comment in ForOfLoopControl.
+    if (hasForOfLoopsWithIteratorClose) {
+        for (NestableControl* control = bce_->innermostNestableControl;
+             control != target;
+             control = control->enclosing())
+        {
+            if (control->is<ForOfLoopControl>())
+                control->as<ForOfLoopControl>().startNewIterCloseTryNote(bce_);
+        }
+
+        if (target && target->is<ForOfLoopControl>() && emitIteratorCloseAtTarget)
+            target->as<ForOfLoopControl>().startNewIterCloseTryNote(bce_);
+    }
+
+    return true;
 }
 
 }  // anonymous namespace
@@ -2145,7 +2442,9 @@ NonLocalExitControl::prepareForNonLocalJump(BytecodeEmitter::NestableControl* ta
 bool
 BytecodeEmitter::emitGoto(NestableControl* target, JumpList* jumplist, SrcNoteType noteType)
 {
-    NonLocalExitControl nle(this);
+    NonLocalExitControl nle(this, noteType == SRC_CONTINUE
+                                  ? NonLocalExitControl::Continue
+                                  : NonLocalExitControl::Break);
 
     if (!nle.prepareForNonLocalJump(target))
         return false;
@@ -2902,13 +3201,13 @@ BytecodeEmitter::reportError(ParseNode* pn, unsigned errorNumber, ...)
 }
 
 bool
-BytecodeEmitter::reportStrictWarning(ParseNode* pn, unsigned errorNumber, ...)
+BytecodeEmitter::reportExtraWarning(ParseNode* pn, unsigned errorNumber, ...)
 {
     TokenPos pos = pn ? pn->pn_pos : tokenStream()->currentToken().pos;
 
     va_list args;
     va_start(args, errorNumber);
-    bool result = tokenStream()->reportStrictWarningErrorNumberVA(pos.begin, errorNumber, args);
+    bool result = tokenStream()->reportExtraWarningErrorNumberVA(pos.begin, errorNumber, args);
     va_end(args);
     return result;
 }
@@ -4327,7 +4626,69 @@ BytecodeEmitter::emitDestructuringDeclsWithEmitter(ParseNode* pattern, NameEmitt
 }
 
 bool
-BytecodeEmitter::emitDestructuringLHS(ParseNode* target, DestructuringFlavor flav)
+BytecodeEmitter::emitDestructuringLHSRef(ParseNode* target, size_t* emitted)
+{
+    *emitted = 0;
+
+    if (target->isKind(PNK_SPREAD))
+        target = target->pn_kid;
+    else if (target->isKind(PNK_ASSIGN))
+        target = target->pn_left;
+
+    // No need to recur into PNK_ARRAY and PNK_OBJECT subpatterns here, since
+    // emitSetOrInitializeDestructuring does the recursion when setting or
+    // initializing value.  Getting reference doesn't recur.
+    if (target->isKind(PNK_NAME) || target->isKind(PNK_ARRAY) || target->isKind(PNK_OBJECT))
+        return true;
+
+#ifdef DEBUG
+    int depth = stackDepth;
+#endif
+
+    switch (target->getKind()) {
+      case PNK_DOT: {
+        if (target->as<PropertyAccess>().isSuper()) {
+            if (!emitSuperPropLHS(&target->as<PropertyAccess>().expression()))
+                return false;
+            *emitted = 2;
+        } else {
+            if (!emitTree(target->pn_expr))
+                return false;
+            *emitted = 1;
+        }
+        break;
+      }
+
+      case PNK_ELEM: {
+        if (target->as<PropertyByValue>().isSuper()) {
+            if (!emitSuperElemOperands(target, EmitElemOption::Ref))
+                return false;
+            *emitted = 3;
+        } else {
+            if (!emitElemOperands(target, EmitElemOption::Ref))
+                return false;
+            *emitted = 2;
+        }
+        break;
+      }
+
+      case PNK_CALL:
+        MOZ_ASSERT_UNREACHABLE("Parser::reportIfNotValidSimpleAssignmentTarget "
+                               "rejects function calls as assignment "
+                               "targets in destructuring assignments");
+        break;
+
+      default:
+        MOZ_CRASH("emitDestructuringLHSRef: bad lhs kind");
+    }
+
+    MOZ_ASSERT(stackDepth == depth + int(*emitted));
+
+    return true;
+}
+
+bool
+BytecodeEmitter::emitSetOrInitializeDestructuring(ParseNode* target, DestructuringFlavor flav)
 {
     // Now emit the lvalue opcode sequence. If the lvalue is a nested
     // destructuring initialiser-form, call ourselves to handle it, then pop
@@ -4403,44 +4764,28 @@ BytecodeEmitter::emitDestructuringLHS(ParseNode* target, DestructuringFlavor fla
           }
 
           case PNK_DOT: {
-            // See the (PNK_NAME, JSOP_SETNAME) case above.
-            //
-            // In `a.x = b`, `a` is evaluated first, then `b`, then a
-            // JSOP_SETPROP instruction.
-            //
-            // In `[a.x] = [b]`, per spec, `b` is evaluated before `a`. Then we
-            // need a property set -- but the operands are on the stack in the
-            // wrong order for JSOP_SETPROP, so we have to add a JSOP_SWAP.
+            // The reference is already pushed by emitDestructuringLHSRef.
             JSOp setOp;
-            if (target->as<PropertyAccess>().isSuper()) {
-                if (!emitSuperPropLHS(&target->as<PropertyAccess>().expression()))
-                    return false;
-                if (!emit2(JSOP_PICK, 2))
-                    return false;
+            if (target->as<PropertyAccess>().isSuper())
                 setOp = sc->strict() ? JSOP_STRICTSETPROP_SUPER : JSOP_SETPROP_SUPER;
-            } else {
-                if (!emitTree(target->pn_expr))
-                    return false;
-                if (!emit1(JSOP_SWAP))
-                    return false;
+            else
                 setOp = sc->strict() ? JSOP_STRICTSETPROP : JSOP_SETPROP;
-            }
             if (!emitAtomOp(target, setOp))
                 return false;
             break;
           }
 
           case PNK_ELEM: {
-            // See the comment at `case PNK_DOT:` above. This case,
-            // `[a[x]] = [b]`, is handled much the same way. The JSOP_SWAP
-            // is emitted by emitElemOperands.
+            // The reference is already pushed by emitDestructuringLHSRef.
             if (target->as<PropertyByValue>().isSuper()) {
                 JSOp setOp = sc->strict() ? JSOP_STRICTSETELEM_SUPER : JSOP_SETELEM_SUPER;
-                if (!emitSuperElemOp(target, setOp))
+                // emitDestructuringLHSRef already did emitSuperElemOperands
+                // part of emitSuperElemOp.  Perform remaining part here.
+                if (!emitElemOpBase(setOp))
                     return false;
             } else {
                 JSOp setOp = sc->strict() ? JSOP_STRICTSETELEM : JSOP_SETELEM;
-                if (!emitElemOp(target, setOp))
+                if (!emitElemOpBase(setOp))
                     return false;
             }
             break;
@@ -4453,7 +4798,7 @@ BytecodeEmitter::emitDestructuringLHS(ParseNode* target, DestructuringFlavor fla
             break;
 
           default:
-            MOZ_CRASH("emitDestructuringLHS: bad lhs kind");
+            MOZ_CRASH("emitSetOrInitializeDestructuring: bad lhs kind");
         }
 
         // Pop the assigned value.
@@ -4482,6 +4827,152 @@ BytecodeEmitter::emitIteratorNext(ParseNode* pn, bool allowSelfHosted)
     if (!emitCheckIsObj(CheckIsObjectKind::IteratorNext)) // ... RESULT
         return false;
     checkTypeSet(JSOP_CALL);
+    return true;
+}
+
+bool
+BytecodeEmitter::emitIteratorClose(Maybe<JumpTarget> yieldStarTryStart, bool allowSelfHosted)
+{
+    MOZ_ASSERT(allowSelfHosted || emitterMode != BytecodeEmitter::SelfHosting,
+               ".close() on iterators is prohibited in self-hosted code because it "
+               "can run user-modifiable iteration code");
+
+    // Generate inline logic corresponding to IteratorClose (ES 7.4.6).
+    //
+    // Callers need to ensure that the iterator object is at the top of the
+    // stack.
+
+    if (!emit1(JSOP_DUP))                                 // ... ITER ITER
+        return false;
+
+    // Step 3.
+    //
+    // Get the "return" method.
+    if (!emitAtomOp(cx->names().return_, JSOP_CALLPROP))  // ... ITER RET
+        return false;
+
+    // Step 4.
+    //
+    // Do nothing if "return" is null or undefined.
+    IfThenElseEmitter ifReturnMethodIsDefined(this);
+    if (!emit1(JSOP_DUP))                                 // ... ITER RET RET
+        return false;
+    if (!emit1(JSOP_UNDEFINED))                           // ... ITER RET RET UNDEFINED
+        return false;
+    if (!emit1(JSOP_NE))                                  // ... ITER RET ?NEQL
+        return false;
+    if (!ifReturnMethodIsDefined.emitIfElse())
+        return false;
+
+    // Steps 5, 8.
+    //
+    // Call "return" if it is not undefined or null, and check that it returns
+    // an Object.
+    if (!emit1(JSOP_SWAP))                                // ... RET ITER
+        return false;
+
+    // ES 14.4.13, yield * AssignmentExpression, step 5.c
+    //
+    // When emitting iterator.return() for yield* forced return, we need to
+    // pass the argument passed to Generator.prototype.return to the return
+    // method.
+    if (yieldStarTryStart) {
+        IfThenElseEmitter ifGeneratorClosing(this);
+        if (!emitDupAt(2))                                // ... FTYPE FVALUE RET ITER FVALUE
+            return false;
+        if (!emit1(JSOP_ISGENCLOSING))                    // ... FTYPE FVALUE RET ITER FVALUE CLOSING
+            return false;
+        if (!emit1(JSOP_SWAP))                            // ... FTYPE FVALUE RET ITER CLOSING FVALUE
+            return false;
+        if (!emit1(JSOP_POP))                             // ... FTYPE FVALUE RET ITER CLOSING
+            return false;
+        if (!ifGeneratorClosing.emitIfElse())             // ... FTYPE FVALUE RET ITER
+            return false;
+
+        if (!emit1(JSOP_GETRVAL))                         // ... FTYPE FVALUE RET ITER RVAL
+            return false;
+        if (!emitAtomOp(cx->names().value, JSOP_GETPROP)) // ... FTYPE FVALUE RET ITER VALUE
+            return false;
+        if (!emitCall(JSOP_CALL, 1))                      // ... FTYPE FVALUE RESULT
+            return false;
+        checkTypeSet(JSOP_CALL);
+        if (!emitCheckIsObj(CheckIsObjectKind::IteratorReturn)) // ... FTYPE FVALUE RESULT
+            return false;
+
+        IfThenElseEmitter ifReturnDone(this);
+        if (!emit1(JSOP_DUP))                             // ITER OLDRESULT FTYPE FVALUE RESULT RESULT
+            return false;
+        if (!emitAtomOp(cx->names().done, JSOP_GETPROP))  // ITER OLDRESULT FTYPE FVALUE RESULT DONE
+            return false;
+        if (!ifReturnDone.emitIfElse())                   // ITER OLDRESULT FTYPE FVALUE RESULT
+            return false;
+        if (!emitAtomOp(cx->names().value, JSOP_GETPROP)) // ITER OLDRESULT FTYPE FVALUE VALUE
+            return false;
+        if (!emitPrepareIteratorResult())                 // ITER OLDRESULT FTYPE FVALUE VALUE RESULT
+            return false;
+        if (!emit1(JSOP_SWAP))                            // ITER OLDRESULT FTYPE FVALUE RESULT VALUE
+            return false;
+        if (!emitFinishIteratorResult(true))              // ITER OLDRESULT FTYPE FVALUE RESULT
+            return false;
+        if (!emit1(JSOP_DUP))                             // ITER OLDRESULT FTYPE FVALUE RESULT RESULT
+            return false;
+        if (!emit1(JSOP_SETRVAL))                         // ITER OLDRESULT FTYPE FVALUE RESULT
+            return false;
+        if (!ifReturnDone.emitElse())                     // ITER OLDRESULT FTYPE FVALUE RESULT
+            return false;
+        int32_t savedDepth = this->stackDepth;
+        if (!emit2(JSOP_UNPICK, 3))                       // ITER RESULT OLDRESULT FTYPE FVALUE
+            return false;
+        if (!emitUint16Operand(JSOP_POPN, 3))             // ITER RESULT
+            return false;
+        JumpList beq;
+        JumpTarget breakTarget{ -1 };
+        if (!emitBackwardJump(JSOP_GOTO, *yieldStarTryStart, &beq, &breakTarget)) // ITER RESULT
+            return false;
+        this->stackDepth = savedDepth;
+        if (!ifReturnDone.emitEnd())
+            return false;
+
+        if (!ifGeneratorClosing.emitElse())               // ... FTYPE FVALUE RET ITER
+            return false;
+        if (!emitCall(JSOP_CALL, 0))                      // ... FTYPE FVALUE RESULT
+            return false;
+        checkTypeSet(JSOP_CALL);
+        if (!emitCheckIsObj(CheckIsObjectKind::IteratorReturn)) // ... FTYPE FVALUE RESULT
+            return false;
+
+        if (!ifGeneratorClosing.emitEnd())
+            return false;
+    } else {
+        if (!emitCall(JSOP_CALL, 0))                      // ... RESULT
+            return false;
+        checkTypeSet(JSOP_CALL);
+        if (!emitCheckIsObj(CheckIsObjectKind::IteratorReturn)) // ... RESULT
+            return false;
+    }
+
+    if (!ifReturnMethodIsDefined.emitElse())
+        return false;
+    if (!emit1(JSOP_POP))                                 // ... ITER
+        return false;
+    if (!ifReturnMethodIsDefined.emitEnd())
+        return false;
+
+    return emit1(JSOP_POP);                               // ...
+}
+
+template <typename InnerEmitter>
+bool
+BytecodeEmitter::wrapWithDestructuringIteratorCloseTryNote(int32_t iterDepth, InnerEmitter emitter)
+{
+    MOZ_ASSERT(this->stackDepth >= iterDepth);
+
+    ptrdiff_t start = offset();
+    if (!emitter(this))
+        return false;
+    ptrdiff_t end = offset();
+    if (start != end)
+        return tryNoteList.append(JSTRY_DESTRUCTURING_ITERCLOSE, iterDepth, start, end);
     return true;
 }
 
@@ -4573,156 +5064,6 @@ BytecodeEmitter::emitInitializerInBranch(ParseNode* initializer, ParseNode* patt
     return emitInitializer(initializer, pattern);
 }
 
-class MOZ_STACK_CLASS IfThenElseEmitter
-{
-    BytecodeEmitter* bce_;
-    JumpList jumpAroundThen_;
-    JumpList jumpsAroundElse_;
-    unsigned noteIndex_;
-    int32_t thenDepth_;
-#ifdef DEBUG
-    int32_t pushed_;
-    bool calculatedPushed_;
-#endif
-    enum State {
-        Start,
-        If,
-        Cond,
-        IfElse,
-        Else,
-        End
-    };
-    State state_;
-
-  public:
-    explicit IfThenElseEmitter(BytecodeEmitter* bce)
-      : bce_(bce),
-        noteIndex_(-1),
-        thenDepth_(0),
-#ifdef DEBUG
-        pushed_(0),
-        calculatedPushed_(false),
-#endif
-        state_(Start)
-    {}
-
-    ~IfThenElseEmitter()
-    {}
-
-  private:
-    bool emitIf(State nextState) {
-        MOZ_ASSERT(state_ == Start || state_ == Else);
-        MOZ_ASSERT(nextState == If || nextState == IfElse || nextState == Cond);
-
-        // Clear jumpAroundThen_ offset that points previous JSOP_IFEQ.
-        if (state_ == Else)
-            jumpAroundThen_ = JumpList();
-
-        // Emit an annotated branch-if-false around the then part.
-        SrcNoteType type = nextState == If ? SRC_IF : nextState == IfElse ? SRC_IF_ELSE : SRC_COND;
-        if (!bce_->newSrcNote(type, &noteIndex_))
-            return false;
-        if (!bce_->emitJump(JSOP_IFEQ, &jumpAroundThen_))
-            return false;
-
-        // To restore stack depth in else part, save depth of the then part.
-#ifdef DEBUG
-        // If DEBUG, this is also necessary to calculate |pushed_|.
-        thenDepth_ = bce_->stackDepth;
-#else
-        if (nextState == IfElse || nextState == Cond)
-            thenDepth_ = bce_->stackDepth;
-#endif
-        state_ = nextState;
-        return true;
-    }
-
-  public:
-    bool emitIf() {
-        return emitIf(If);
-    }
-
-    bool emitCond() {
-        return emitIf(Cond);
-    }
-
-    bool emitIfElse() {
-        return emitIf(IfElse);
-    }
-
-    bool emitElse() {
-        MOZ_ASSERT(state_ == IfElse || state_ == Cond);
-
-        calculateOrCheckPushed();
-
-        // Emit a jump from the end of our then part around the else part. The
-        // patchJumpsToTarget call at the bottom of this function will fix up
-        // the offset with jumpsAroundElse value.
-        if (!bce_->emitJump(JSOP_GOTO, &jumpsAroundElse_))
-            return false;
-
-        // Ensure the branch-if-false comes here, then emit the else.
-        if (!bce_->emitJumpTargetAndPatch(jumpAroundThen_))
-            return false;
-
-        // Annotate SRC_IF_ELSE or SRC_COND with the offset from branch to
-        // jump, for IonMonkey's benefit.  We can't just "back up" from the pc
-        // of the else clause, because we don't know whether an extended
-        // jump was required to leap from the end of the then clause over
-        // the else clause.
-        if (!bce_->setSrcNoteOffset(noteIndex_, 0,
-                                    jumpsAroundElse_.offset - jumpAroundThen_.offset))
-        {
-            return false;
-        }
-
-        // Restore stack depth of the then part.
-        bce_->stackDepth = thenDepth_;
-        state_ = Else;
-        return true;
-    }
-
-    bool emitEnd() {
-        MOZ_ASSERT(state_ == If || state_ == Else);
-
-        calculateOrCheckPushed();
-
-        if (state_ == If) {
-            // No else part, fixup the branch-if-false to come here.
-            if (!bce_->emitJumpTargetAndPatch(jumpAroundThen_))
-                return false;
-        }
-
-        // Patch all the jumps around else parts.
-        if (!bce_->emitJumpTargetAndPatch(jumpsAroundElse_))
-            return false;
-
-        state_ = End;
-        return true;
-    }
-
-    void calculateOrCheckPushed() {
-#ifdef DEBUG
-        if (!calculatedPushed_) {
-            pushed_ = bce_->stackDepth - thenDepth_;
-            calculatedPushed_ = true;
-        } else {
-            MOZ_ASSERT(pushed_ == bce_->stackDepth - thenDepth_);
-        }
-#endif
-    }
-
-#ifdef DEBUG
-    int32_t pushed() const {
-        return pushed_;
-    }
-
-    int32_t popped() const {
-        return -pushed_;
-    }
-#endif
-};
-
 bool
 BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlavor flav)
 {
@@ -4732,13 +5073,18 @@ BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlav
 
     // Here's pseudo code for |let [a, b, , c=y, ...d] = x;|
     //
+    // Lines that are annotated "covered by trynote" mean that upon throwing
+    // an exception, IteratorClose is called on iter only if done is false.
+    //
     //   let x, y;
     //   let a, b, c, d;
-    //   let iter, result, done, value; // stack values
+    //   let iter, lref, result, done, value; // stack values
     //
     //   iter = x[Symbol.iterator]();
     //
     //   // ==== emitted by loop for a ====
+    //   lref = GetReference(a);              // covered by trynote
+    //
     //   result = iter.next();
     //   done = result.done;
     //
@@ -4747,9 +5093,11 @@ BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlav
     //   else
     //     value = result.value;
     //
-    //   a = value;
+    //   SetOrInitialize(lref, value);        // covered by trynote
     //
     //   // ==== emitted by loop for b ====
+    //   lref = GetReference(b);              // covered by trynote
+    //
     //   if (done) {
     //     value = undefined;
     //   } else {
@@ -4761,7 +5109,7 @@ BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlav
     //       value = result.value;
     //   }
     //
-    //   b = value;
+    //   SetOrInitialize(lref, value);        // covered by trynote
     //
     //   // ==== emitted by loop for elision ====
     //   if (done) {
@@ -4776,6 +5124,8 @@ BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlav
     //   }
     //
     //   // ==== emitted by loop for c ====
+    //   lref = GetReference(c);              // covered by trynote
+    //
     //   if (done) {
     //     value = undefined;
     //   } else {
@@ -4788,17 +5138,23 @@ BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlav
     //   }
     //
     //   if (value === undefined)
-    //     value = y;
+    //     value = y;                         // covered by trynote
     //
-    //   c = value;
+    //   SetOrInitialize(lref, value);        // covered by trynote
     //
     //   // ==== emitted by loop for d ====
+    //   lref = GetReference(d);              // covered by trynote
+    //
     //   if (done)
     //     value = [];
     //   else
     //     value = [...iter];
     //
-    //   d = value;
+    //   SetOrInitialize(lref, value);        // covered by trynote
+    //
+    //   // === emitted after loop ===
+    //   if (!done)
+    //      IteratorClose(iter);
 
     // Use an iterator to destructure the RHS, instead of index lookup. We
     // must leave the *original* value on the stack.
@@ -4807,45 +5163,99 @@ BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlav
     if (!emitIterator())                                          // ... OBJ ITER
         return false;
 
+    // For an empty pattern [], call IteratorClose unconditionally. Nothing
+    // else needs to be done.
+    if (!pattern->pn_head)
+        return emitIteratorClose();                               // ... OBJ
+
+    // Push an initial FALSE value for DONE.
+    if (!emit1(JSOP_FALSE))                                       // ... OBJ ITER FALSE
+        return false;
+
+    // JSTRY_DESTRUCTURING_ITERCLOSE expects the iterator and the done value
+    // to be the second to top and the top of the stack, respectively.
+    // IteratorClose is called upon exception only if done is false.
+    int32_t tryNoteDepth = stackDepth;
+
     for (ParseNode* member = pattern->pn_head; member; member = member->pn_next) {
-        bool isHead = member == pattern->pn_head;
-        bool hasNext = !!member->pn_next;
+        bool isFirst = member == pattern->pn_head;
+        DebugOnly<bool> hasNext = !!member->pn_next;
+
+        size_t emitted = 0;
+
+        // Spec requires LHS reference to be evaluated first.
+        ParseNode* lhsPattern = member;
+        if (lhsPattern->isKind(PNK_ASSIGN))
+            lhsPattern = lhsPattern->pn_left;
+
+        bool isElision = lhsPattern->isKind(PNK_ELISION);
+        if (!isElision) {
+            auto emitLHSRef = [lhsPattern, &emitted](BytecodeEmitter* bce) {
+                return bce->emitDestructuringLHSRef(lhsPattern, &emitted); // ... OBJ ITER DONE *LREF
+            };
+            if (!wrapWithDestructuringIteratorCloseTryNote(tryNoteDepth, emitLHSRef))
+                return false;
+        }
+
+        // Pick the DONE value to the top of the stack.
+        if (emitted) {
+            if (!emit2(JSOP_PICK, emitted))                       // ... OBJ ITER *LREF DONE
+                return false;
+        }
+
+        if (isFirst) {
+            // If this element is the first, DONE is always FALSE, so pop it.
+            //
+            // Non-first elements should emit if-else depending on the
+            // member pattern, below.
+            if (!emit1(JSOP_POP))                                 // ... OBJ ITER *LREF
+                return false;
+        }
 
         if (member->isKind(PNK_SPREAD)) {
             IfThenElseEmitter ifThenElse(this);
-            if (!isHead) {
+            if (!isFirst) {
                 // If spread is not the first element of the pattern,
                 // iterator can already be completed.
-                //                                                   ... OBJ ITER DONE
-                if (!ifThenElse.emitIfElse())                     // ... OBJ ITER
+                                                                  // ... OBJ ITER *LREF DONE
+                if (!ifThenElse.emitIfElse())                     // ... OBJ ITER *LREF
                     return false;
 
-                if (!emitUint32Operand(JSOP_NEWARRAY, 0))         // ... OBJ ITER ARRAY
+                if (!emitUint32Operand(JSOP_NEWARRAY, 0))         // ... OBJ ITER *LREF ARRAY
                     return false;
-                if (!ifThenElse.emitElse())                       // ... OBJ ITER
+                if (!ifThenElse.emitElse())                       // ... OBJ ITER *LREF
                     return false;
             }
 
             // If iterator is not completed, create a new array with the rest
             // of the iterator.
-            if (!emit1(JSOP_DUP))                                 // ... OBJ ITER
+            if (!emitDupAt(emitted))                              // ... OBJ ITER *LREF ITER
                 return false;
-            if (!emitUint32Operand(JSOP_NEWARRAY, 0))             // ... OBJ ITER ITER ARRAY
+            if (!emitUint32Operand(JSOP_NEWARRAY, 0))             // ... OBJ ITER *LREF ITER ARRAY
                 return false;
-            if (!emitNumberOp(0))                                 // ... OBJ ITER ITER ARRAY INDEX
+            if (!emitNumberOp(0))                                 // ... OBJ ITER *LREF ITER ARRAY INDEX
                 return false;
-            if (!emitSpread())                                    // ... OBJ ITER ARRAY INDEX
+            if (!emitSpread())                                    // ... OBJ ITER *LREF ARRAY INDEX
                 return false;
-            if (!emit1(JSOP_POP))                                 // ... OBJ ITER ARRAY
+            if (!emit1(JSOP_POP))                                 // ... OBJ ITER *LREF ARRAY
                 return false;
 
-            if (!isHead) {
+            if (!isFirst) {
                 if (!ifThenElse.emitEnd())
                     return false;
                 MOZ_ASSERT(ifThenElse.pushed() == 1);
             }
 
-            if (!emitDestructuringLHS(member, flav))              // ... OBJ ITER
+            // At this point the iterator is done. Unpick a TRUE value for DONE above ITER.
+            if (!emit1(JSOP_TRUE))                                // ... OBJ ITER *LREF ARRAY TRUE
+                return false;
+            if (!emit2(JSOP_UNPICK, emitted + 1))                 // ... OBJ ITER TRUE *LREF ARRAY
+                return false;
+
+            auto emitAssignment = [member, flav](BytecodeEmitter* bce) {
+                return bce->emitSetOrInitializeDestructuring(member, flav); // ... OBJ ITER TRUE
+            };
+            if (!wrapWithDestructuringIteratorCloseTryNote(tryNoteDepth, emitAssignment))
                 return false;
 
             MOZ_ASSERT(!hasNext);
@@ -4853,106 +5263,113 @@ BytecodeEmitter::emitDestructuringOpsArray(ParseNode* pattern, DestructuringFlav
         }
 
         ParseNode* pndefault = nullptr;
-        ParseNode* subpattern = member;
-        if (subpattern->isKind(PNK_ASSIGN)) {
-            pndefault = subpattern->pn_right;
-            subpattern = subpattern->pn_left;
-        }
+        if (member->isKind(PNK_ASSIGN))
+            pndefault = member->pn_right;
 
-        bool isElision = subpattern->isKind(PNK_ELISION);
-
-        MOZ_ASSERT(!subpattern->isKind(PNK_SPREAD));
+        MOZ_ASSERT(!member->isKind(PNK_SPREAD));
 
         IfThenElseEmitter ifAlreadyDone(this);
-        if (!isHead) {
-            // If this element is not the first element of the pattern,
-            // iterator can already be completed.
-            //                                                       ... OBJ ITER DONE
-            if (hasNext) {
-                if (!emit1(JSOP_DUP))                             // ... OBJ ITER DONE DONE
-                    return false;
-            }
-            if (!ifAlreadyDone.emitIfElse())                      // ... OBJ ITER ?DONE
+        if (!isFirst) {
+                                                                  // ... OBJ ITER *LREF DONE
+            if (!ifAlreadyDone.emitIfElse())                      // ... OBJ ITER *LREF
                 return false;
 
-            if (!emit1(JSOP_UNDEFINED))                           // ... OBJ ITER ?DONE UNDEF
+            if (!emit1(JSOP_UNDEFINED))                           // ... OBJ ITER *LREF UNDEF
                 return false;
-            if (!emit1(JSOP_NOP_DESTRUCTURING))                   // ... OBJ ITER ?DONE UNDEF
-                return false;
-
-            if (!ifAlreadyDone.emitElse())                        // ... OBJ ITER ?DONE
+            if (!emit1(JSOP_NOP_DESTRUCTURING))                   // ... OBJ ITER *LREF UNDEF
                 return false;
 
-            if (hasNext) {
-                if (!emit1(JSOP_POP))                             // ... OBJ ITER
-                    return false;
-            }
-        }
+            // The iterator is done. Unpick a TRUE value for DONE above ITER.
+            if (!emit1(JSOP_TRUE))                                // ... OBJ ITER *LREF UNDEF TRUE
+                return false;
+            if (!emit2(JSOP_UNPICK, emitted + 1))                 // ... OBJ ITER TRUE *LREF UNDEF
+                return false;
 
-        if (!emit1(JSOP_DUP))                                     // ... OBJ ITER ITER
-            return false;
-        if (!emitIteratorNext(pattern))                           // ... OBJ ITER RESULT
-            return false;
-        if (!emit1(JSOP_DUP))                                     // ... OBJ ITER RESULT RESULT
-            return false;
-        if (!emitAtomOp(cx->names().done, JSOP_GETPROP))          // ... OBJ ITER RESULT DONE
-            return false;
-
-        if (hasNext) {
-            if (!emit1(JSOP_DUP))                                 // ... OBJ ITER RESULT DONE DONE
+            if (!ifAlreadyDone.emitElse())                        // ... OBJ ITER *LREF
                 return false;
         }
+
+        if (emitted) {
+            if (!emitDupAt(emitted))                              // ... OBJ ITER *LREF ITER
+                return false;
+        } else {
+            if (!emit1(JSOP_DUP))                                 // ... OBJ ITER *LREF ITER
+                return false;
+        }
+        if (!emitIteratorNext(pattern))                           // ... OBJ ITER *LREF RESULT
+            return false;
+        if (!emit1(JSOP_DUP))                                     // ... OBJ ITER *LREF RESULT RESULT
+            return false;
+        if (!emitAtomOp(cx->names().done, JSOP_GETPROP))          // ... OBJ ITER *LREF RESULT DONE
+            return false;
+
+        if (!emit1(JSOP_DUP))                                     // ... OBJ ITER *LREF RESULT DONE DONE
+            return false;
+        if (!emit2(JSOP_UNPICK, emitted + 2))                     // ... OBJ ITER DONE *LREF RESULT DONE
+            return false;
 
         IfThenElseEmitter ifDone(this);
-        if (!ifDone.emitIfElse())                                 // ... OBJ ITER RESULT ?DONE
+        if (!ifDone.emitIfElse())                                 // ... OBJ ITER DONE *LREF RESULT
             return false;
 
-        if (hasNext) {
-            if (!emit1(JSOP_SWAP))                                // ... OBJ ITER ?DONE RESULT
-                return false;
-        }
-        if (!emit1(JSOP_POP))                                     // ... OBJ ITER ?DONE
+        if (!emit1(JSOP_POP))                                     // ... OBJ ITER DONE *LREF
             return false;
-        if (!emit1(JSOP_UNDEFINED))                               // ... OBJ ITER ?DONE UNDEF
+        if (!emit1(JSOP_UNDEFINED))                               // ... OBJ ITER DONE *LREF UNDEF
             return false;
-        if (!emit1(JSOP_NOP_DESTRUCTURING))                       // ... OBJ ITER ?DONE UNDEF
+        if (!emit1(JSOP_NOP_DESTRUCTURING))                       // ... OBJ ITER DONE *LREF UNDEF
             return false;
 
-        if (!ifDone.emitElse())                                   // ... OBJ ITER RESULT ?DONE
+        if (!ifDone.emitElse())                                   // ... OBJ ITER DONE *LREF RESULT
             return false;
 
-        if (hasNext) {
-            if (!emit1(JSOP_SWAP))                                // ... OBJ ITER ?DONE RESULT
-                return false;
-        }
-        if (!emitAtomOp(cx->names().value, JSOP_GETPROP))         // ... OBJ ITER ?DONE VALUE
+        if (!emitAtomOp(cx->names().value, JSOP_GETPROP))         // ... OBJ ITER DONE *LREF VALUE
             return false;
 
         if (!ifDone.emitEnd())
             return false;
         MOZ_ASSERT(ifDone.pushed() == 0);
 
-        if (!isHead) {
+        if (!isFirst) {
             if (!ifAlreadyDone.emitEnd())
                 return false;
-            MOZ_ASSERT(ifAlreadyDone.pushed() == 1);
+            MOZ_ASSERT(ifAlreadyDone.pushed() == 2);
         }
 
         if (pndefault) {
-            if (!emitDefault(pndefault, subpattern))              // ... OBJ ITER ?DONE VALUE
+            auto emitDefault = [pndefault, lhsPattern](BytecodeEmitter* bce) {
+                return bce->emitDefault(pndefault, lhsPattern);    // ... OBJ ITER DONE *LREF VALUE
+            };
+
+            if (!wrapWithDestructuringIteratorCloseTryNote(tryNoteDepth, emitDefault))
                 return false;
         }
 
         if (!isElision) {
-            if (!emitDestructuringLHS(subpattern, flav))          // ... OBJ ITER ?DONE
+            auto emitAssignment = [lhsPattern, flav](BytecodeEmitter* bce) {
+                return bce->emitSetOrInitializeDestructuring(lhsPattern, flav); // ... OBJ ITER DONE
+            };
+
+            if (!wrapWithDestructuringIteratorCloseTryNote(tryNoteDepth, emitAssignment))
                 return false;
         } else {
-            if (!emit1(JSOP_POP))                                 // ... OBJ ITER ?DONE
+            if (!emit1(JSOP_POP))                                 // ... OBJ ITER DONE
                 return false;
         }
     }
 
+    // The last DONE value is on top of the stack. If not DONE, call
+    // IteratorClose.
+                                                                  // ... OBJ ITER DONE
+    IfThenElseEmitter ifDone(this);
+    if (!ifDone.emitIfElse())                                     // ... OBJ ITER
+        return false;
     if (!emit1(JSOP_POP))                                         // ... OBJ
+        return false;
+    if (!ifDone.emitElse())                                       // ... OBJ ITER
+        return false;
+    if (!emitIteratorClose())                                     // ... OBJ
+        return false;
+    if (!ifDone.emitEnd())
         return false;
 
     return true;
@@ -4977,27 +5394,43 @@ BytecodeEmitter::emitDestructuringOpsObject(ParseNode* pattern, DestructuringFla
         return false;
 
     for (ParseNode* member = pattern->pn_head; member; member = member->pn_next) {
-        // Duplicate the value being destructured to use as a reference base.
-        if (!emit1(JSOP_DUP))                                     // ... RHS RHS
+        ParseNode* subpattern;
+        if (member->isKind(PNK_MUTATEPROTO))
+            subpattern = member->pn_kid;
+        else
+            subpattern = member->pn_right;
+        ParseNode* lhs = subpattern;
+        if (lhs->isKind(PNK_ASSIGN))
+            lhs = lhs->pn_left;
+
+        size_t emitted;
+        if (!emitDestructuringLHSRef(lhs, &emitted))              // ... RHS *LREF
             return false;
+
+        // Duplicate the value being destructured to use as a reference base.
+        if (emitted) {
+            if (!emitDupAt(emitted))                              // ... RHS *LREF RHS
+                return false;
+        } else {
+            if (!emit1(JSOP_DUP))                                 // ... RHS RHS
+                return false;
+        }
 
         // Now push the property name currently being matched, which is the
         // current property name "label" on the left of a colon in the object
         // initialiser.
         bool needsGetElem = true;
 
-        ParseNode* subpattern;
         if (member->isKind(PNK_MUTATEPROTO)) {
-            if (!emitAtomOp(cx->names().proto, JSOP_GETPROP))     // ... RHS PROP
+            if (!emitAtomOp(cx->names().proto, JSOP_GETPROP))     // ... RHS *LREF PROP
                 return false;
             needsGetElem = false;
-            subpattern = member->pn_kid;
         } else {
             MOZ_ASSERT(member->isKind(PNK_COLON) || member->isKind(PNK_SHORTHAND));
 
             ParseNode* key = member->pn_left;
             if (key->isKind(PNK_NUMBER)) {
-                if (!emitNumberOp(key->pn_dval))                  // ... RHS RHS KEY
+                if (!emitNumberOp(key->pn_dval))                  // ... RHS *LREF RHS KEY
                     return false;
             } else if (key->isKind(PNK_OBJECT_PROPERTY_NAME) || key->isKind(PNK_STRING)) {
                 PropertyName* name = key->pn_atom->asPropertyName();
@@ -5007,33 +5440,30 @@ BytecodeEmitter::emitDestructuringOpsObject(ParseNode* pattern, DestructuringFla
                 // as indexes for simplification of downstream analysis.
                 jsid id = NameToId(name);
                 if (id != IdToTypeId(id)) {
-                    if (!emitTree(key))                           // ... RHS RHS KEY
+                    if (!emitTree(key))                           // ... RHS *LREF RHS KEY
                         return false;
                 } else {
-                    if (!emitAtomOp(name, JSOP_GETPROP))          // ...RHS PROP
+                    if (!emitAtomOp(name, JSOP_GETPROP))          // ... RHS *LREF PROP
                         return false;
                     needsGetElem = false;
                 }
             } else {
-                if (!emitComputedPropertyName(key))               // ... RHS RHS KEY
+                if (!emitComputedPropertyName(key))               // ... RHS *LREF RHS KEY
                     return false;
             }
-
-            subpattern = member->pn_right;
         }
 
         // Get the property value if not done already.
-        if (needsGetElem && !emitElemOpBase(JSOP_GETELEM))        // ... RHS PROP
+        if (needsGetElem && !emitElemOpBase(JSOP_GETELEM))        // ... RHS *LREF PROP
             return false;
 
         if (subpattern->isKind(PNK_ASSIGN)) {
-            if (!emitDefault(subpattern->pn_right, subpattern->pn_left))
+            if (!emitDefault(subpattern->pn_right, lhs))          // ... RHS *LREF VALUE
                 return false;
-            subpattern = subpattern->pn_left;
         }
 
-        // Destructure PROP per this member's subpattern.
-        if (!emitDestructuringLHS(subpattern, flav))
+        // Destructure PROP per this member's lhs.
+        if (!emitSetOrInitializeDestructuring(subpattern, flav))  // ... RHS
             return false;
     }
 
@@ -5611,7 +6041,7 @@ BytecodeEmitter::emitCatch(ParseNode* pn)
             return false;
 
         {
-            NonLocalExitControl nle(this);
+            NonLocalExitControl nle(this, NonLocalExitControl::Throw);
 
             // Move exception back to cx->exception to prepare for
             // the next catch.
@@ -6204,12 +6634,14 @@ BytecodeEmitter::emitForOf(ParseNode* forOfLoop, EmitterScope* headLexicalEmitte
     if (!emitIterator())                                  // ITER
         return false;
 
+    int32_t iterDepth = stackDepth;
+
     // For-of loops have both the iterator and the value on the stack. Push
     // undefined to balance the stack.
     if (!emit1(JSOP_UNDEFINED))                           // ITER RESULT
         return false;
 
-    LoopControl loopInfo(this, StatementKind::ForOfLoop);
+    ForOfLoopControl loopInfo(this, iterDepth);
 
     // Annotate so IonMonkey can find the loop-closing jump.
     unsigned noteIndex;
@@ -6255,10 +6687,15 @@ BytecodeEmitter::emitForOf(ParseNode* forOfLoop, EmitterScope* headLexicalEmitte
 #endif
 
         // Emit code to assign result.value to the iteration variable.
+        //
+        // Note that ES 13.7.5.13, step 5.c says getting result.value does not
+        // call IteratorClose, so start JSTRY_ITERCLOSE after the GETPROP.
         if (!emit1(JSOP_DUP))                             // ITER RESULT RESULT
             return false;
         if (!emitAtomOp(cx->names().value, JSOP_GETPROP)) // ITER RESULT VALUE
             return false;
+
+        loopInfo.startNewIterCloseTryNote(this);
 
         if (!emitInitializeForInOrOfTarget(forOfHead))    // ITER RESULT VALUE
             return false;
@@ -6266,13 +6703,16 @@ BytecodeEmitter::emitForOf(ParseNode* forOfLoop, EmitterScope* headLexicalEmitte
         if (!emit1(JSOP_POP))                             // ITER RESULT
             return false;
 
-        MOZ_ASSERT(this->stackDepth == loopDepth,
+        MOZ_ASSERT(stackDepth == loopDepth,
                    "the stack must be balanced around the initializing "
                    "operation");
 
         // Perform the loop body.
         ParseNode* forBody = forOfLoop->pn_right;
         if (!emitTree(forBody))                           // ITER RESULT
+            return false;
+
+        if (!loopInfo.finishIterCloseTryNote(this))
             return false;
 
         // Set offset for continues.
@@ -6286,7 +6726,17 @@ BytecodeEmitter::emitForOf(ParseNode* forOfLoop, EmitterScope* headLexicalEmitte
         if (!emit1(JSOP_DUP))                             // ITER ITER
             return false;
 
-        if (!emitIteratorNext(forOfHead))                 // ITER RESULT
+        // Certain builtins (e.g. Array.from) are implemented in self-hosting
+        // as for-of loops.
+        bool allowSelfHostedIter = false;
+        if (emitterMode == BytecodeEmitter::SelfHosting &&
+            forHeadExpr->isKind(PNK_CALL) &&
+            forHeadExpr->pn_head->name() == cx->names().allowContentIter)
+        {
+            allowSelfHostedIter = true;
+        }
+
+        if (!emitIteratorNext(forOfHead, allowSelfHostedIter)) // ITER RESULT
             return false;
         if (!emit1(JSOP_DUP))                             // ITER RESULT RESULT
             return false;
@@ -7510,7 +7960,7 @@ BytecodeEmitter::emitReturn(ParseNode* pn)
             return false;
     }
 
-    NonLocalExitControl nle(this);
+    NonLocalExitControl nle(this, NonLocalExitControl::Return);
 
     if (!nle.prepareForNonLocalJumpToOutermost())
         return false;
@@ -7625,61 +8075,77 @@ BytecodeEmitter::emitYieldStar(ParseNode* iter, ParseNode* gen)
 
     // Catch location.
     stackDepth = uint32_t(depth);                                // ITER RESULT
-    if (!emit1(JSOP_POP))                                        // ITER
+    if (!emit1(JSOP_EXCEPTION))                                  // ITER RESULT EXCEPTION
         return false;
-    // THROW? = 'throw' in ITER
-    if (!emit1(JSOP_EXCEPTION))                                  // ITER EXCEPTION
+    if (!emitDupAt(2))                                           // ITER RESULT EXCEPTION ITER
         return false;
-    if (!emit1(JSOP_SWAP))                                       // EXCEPTION ITER
+    if (!emit1(JSOP_DUP))                                        // ITER RESULT EXCEPTION ITER ITER
         return false;
-    if (!emit1(JSOP_DUP))                                        // EXCEPTION ITER ITER
+    if (!emitAtomOp(cx->names().throw_, JSOP_CALLPROP))          // ITER RESULT EXCEPTION ITER THROW
         return false;
-    if (!emitAtomOp(cx->names().throw_, JSOP_STRING))            // EXCEPTION ITER ITER "throw"
+    if (!emit1(JSOP_DUP))                                        // ITER RESULT EXCEPTION ITER THROW THROW
         return false;
-    if (!emit1(JSOP_SWAP))                                       // EXCEPTION ITER "throw" ITER
+    if (!emit1(JSOP_UNDEFINED))                                  // ITER RESULT EXCEPTION ITER THROW THROW UNDEFINED
         return false;
-    if (!emit1(JSOP_IN))                                         // EXCEPTION ITER THROW?
-        return false;
-    // if (THROW?) goto delegate
-    JumpList checkThrow;
-    if (!emitJump(JSOP_IFNE, &checkThrow))                       // EXCEPTION ITER
-        return false;
-    if (!emit1(JSOP_POP))                                        // EXCEPTION
-        return false;
-    if (!emit1(JSOP_THROW))                                      // throw EXCEPTION
+    if (!emit1(JSOP_EQ))                                         // ITER RESULT EXCEPTION ITER THROW ?EQL
         return false;
 
-    if (!emitJumpTargetAndPatch(checkThrow))                     // delegate:
+    IfThenElseEmitter ifThrowMethodIsNotDefined(this);
+    if (!ifThrowMethodIsNotDefined.emitIf())                     // ITER RESULT EXCEPTION ITER THROW
         return false;
-    // RESULT = ITER.throw(EXCEPTION)                            // EXCEPTION ITER
-    stackDepth = uint32_t(depth);
-    if (!emit1(JSOP_DUP))                                        // EXCEPTION ITER ITER
+    if (!emitUint16Operand(JSOP_THROWMSG, JSMSG_ITERATOR_NO_THROW)) // throw
         return false;
-    if (!emit1(JSOP_DUP))                                        // EXCEPTION ITER ITER ITER
+    if (!ifThrowMethodIsNotDefined.emitEnd())                    // ITER OLDRESULT EXCEPTION ITER THROW
         return false;
-    if (!emitAtomOp(cx->names().throw_, JSOP_CALLPROP))          // EXCEPTION ITER ITER THROW
+    // ES 14.4.13, YieldExpression : yield * AssignmentExpression, step 5.b.iii.4.
+    // RESULT = ITER.throw(EXCEPTION)                            // ITER OLDRESULT EXCEPTION ITER THROW
+    if (!emit1(JSOP_SWAP))                                       // ITER OLDRESULT EXCEPTION THROW ITER
         return false;
-    if (!emit1(JSOP_SWAP))                                       // EXCEPTION ITER THROW ITER
+    if (!emit2(JSOP_PICK, 2))                                    // ITER OLDRESULT THROW ITER EXCEPTION
         return false;
-    if (!emit2(JSOP_PICK, 3))                                    // ITER THROW ITER EXCEPTION
-        return false;
-    if (!emitCall(JSOP_CALL, 1, iter))                           // ITER RESULT
+    if (!emitCall(JSOP_CALL, 1, iter))                           // ITER OLDRESULT RESULT
         return false;
     checkTypeSet(JSOP_CALL);
+    if (!emitCheckIsObj(CheckIsObjectKind::IteratorThrow))       // ITER OLDRESULT RESULT
+        return false;
+    if (!emit1(JSOP_SWAP))                                       // ITER RESULT OLDRESULT
+        return false;
+    if (!emit1(JSOP_POP))                                        // ITER RESULT
+        return false;
     MOZ_ASSERT(this->stackDepth == depth);
     JumpList checkResult;
+    // Note that there is no GOSUB to the finally block here. If the iterator has a
+    // "throw" method, it does not perform IteratorClose per
+    // ES 14.4.13, YieldExpression : yield * AssignmentExpression, step 5.b.ii.
     if (!emitJump(JSOP_GOTO, &checkResult))                      // goto checkResult
         return false;
 
-    // Catch epilogue.
+    // The finally block, IteratorClose logic.
+
+    JumpTarget finallyStart{ 0 };
+    if (!emitJumpTarget(&finallyStart))
+        return false;
+    if (!emit1(JSOP_FINALLY))                                    // ITER RESULT FTYPE FVALUE
+        return false;
+    if (!emitDupAt(3))                                           // ITER RESULT FTYPE FVALUE ITER
+        return false;
+    if (!emitIteratorClose(Some(tryStart)))                      // ITER RESULT FTYPE FVALUE
+        return false;
+    if (!emit1(JSOP_RETSUB))                                     // ITER RESULT
+        return false;
+
+    // Catch and finally epilogue.
 
     // This is a peace offering to ReconstructPCStack.  See the note in EmitTry.
     if (!emit1(JSOP_NOP))
         return false;
-    if (!tryNoteList.append(JSTRY_CATCH, depth, tryStart.offset + JSOP_TRY_LENGTH, tryEnd.offset))
+    size_t tryStartOffset = tryStart.offset + JSOP_TRY_LENGTH;
+    if (!tryNoteList.append(JSTRY_CATCH, depth, tryStartOffset, tryEnd.offset))
+        return false;
+    if (!tryNoteList.append(JSTRY_FINALLY, depth, tryStartOffset, finallyStart.offset))
         return false;
 
-    // After the try/catch block: send the received value to the iterator.
+    // After the try-catch-finally block: send the received value to the iterator.
     if (!emitJumpTargetAndPatch(send))                           // send:
         return false;
 
@@ -7817,13 +8283,13 @@ BytecodeEmitter::emitStatement(ParseNode* pn)
             }
 
             if (directive) {
-                if (!reportStrictWarning(pn2, JSMSG_CONTRARY_NONDIRECTIVE, directive))
+                if (!reportExtraWarning(pn2, JSMSG_CONTRARY_NONDIRECTIVE, directive))
                     return false;
             }
         } else {
             current->currentLine = parser->tokenStream.srcCoords.lineNum(pn2->pn_pos.begin);
             current->lastColumn = 0;
-            if (!reportStrictWarning(pn2, JSMSG_USELESS_EXPR))
+            if (!reportExtraWarning(pn2, JSMSG_USELESS_EXPR))
                 return false;
         }
     }
@@ -8048,10 +8514,10 @@ BytecodeEmitter::emitSelfHostedForceInterpreter(ParseNode* pn)
 }
 
 bool
-BytecodeEmitter::emitSelfHostedAllowContentSpread(ParseNode* pn)
+BytecodeEmitter::emitSelfHostedAllowContentIter(ParseNode* pn)
 {
     if (pn->pn_count != 2) {
-        reportError(pn, JSMSG_MORE_ARGS_NEEDED, "allowContentSpread", "1", "");
+        reportError(pn, JSMSG_MORE_ARGS_NEEDED, "allowContentIter", "1", "");
         return false;
     }
 
@@ -8077,7 +8543,7 @@ BytecodeEmitter::isRestParameter(ParseNode* pn, bool* result)
     if (!pn->isKind(PNK_NAME)) {
         if (emitterMode == BytecodeEmitter::SelfHosting && pn->isKind(PNK_CALL)) {
             ParseNode* pn2 = pn->pn_head;
-            if (pn2->getKind() == PNK_NAME && pn2->name() == cx->names().allowContentSpread)
+            if (pn2->getKind() == PNK_NAME && pn2->name() == cx->names().allowContentIter)
                 return isRestParameter(pn2->pn_next, result);
         }
         *result = false;
@@ -8185,8 +8651,8 @@ BytecodeEmitter::emitCallOrNew(ParseNode* pn)
                 return emitSelfHostedResumeGenerator(pn);
             if (pn2->name() == cx->names().forceInterpreter)
                 return emitSelfHostedForceInterpreter(pn);
-            if (pn2->name() == cx->names().allowContentSpread)
-                return emitSelfHostedAllowContentSpread(pn);
+            if (pn2->name() == cx->names().allowContentIter)
+                return emitSelfHostedAllowContentIter(pn);
             // Fall through.
         }
         if (!emitGetName(pn2, callop))
@@ -8841,7 +9307,7 @@ BytecodeEmitter::emitArray(ParseNode* pn, uint32_t count, JSOp op)
         if (!updateSourceCoordNotes(pn2->pn_pos.begin))
             return false;
 
-        bool allowSelfHostedSpread = false;
+        bool allowSelfHostedIter = false;
         if (pn2->isKind(PNK_ELISION)) {
             if (!emit1(JSOP_HOLE))
                 return false;
@@ -8852,9 +9318,9 @@ BytecodeEmitter::emitArray(ParseNode* pn, uint32_t count, JSOp op)
 
                 if (emitterMode == BytecodeEmitter::SelfHosting &&
                     expr->isKind(PNK_CALL) &&
-                    expr->pn_head->name() == cx->names().allowContentSpread)
+                    expr->pn_head->name() == cx->names().allowContentIter)
                 {
-                    allowSelfHostedSpread = true;
+                    allowSelfHostedIter = true;
                 }
             } else {
                 expr = pn2;
@@ -8869,7 +9335,7 @@ BytecodeEmitter::emitArray(ParseNode* pn, uint32_t count, JSOp op)
                 return false;
             if (!emit2(JSOP_PICK, 2))                                    // ITER ARRAY INDEX
                 return false;
-            if (!emitSpread(allowSelfHostedSpread))                      // ARRAY INDEX
+            if (!emitSpread(allowSelfHostedIter))                        // ARRAY INDEX
                 return false;
         } else if (afterSpread) {
             if (!emit1(JSOP_INITELEM_INC))

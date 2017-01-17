@@ -28,6 +28,7 @@
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/ipc/SharedMemory.h"
 #include "mozilla/layers/CompositorController.h"
+#include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/CompositorVsyncSchedulerOwner.h"
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/ISurfaceAllocator.h" // for ShmemAllocator
@@ -90,14 +91,7 @@ class CompositorBridgeParentBase : public PCompositorBridgeParent,
 {
 public:
   virtual void ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
-                                   const uint64_t& aTransactionId,
-                                   const TargetConfig& aTargetConfig,
-                                   const InfallibleTArray<PluginWindowData>& aPlugins,
-                                   bool aIsFirstPaint,
-                                   bool aScheduleComposite,
-                                   uint32_t aPaintSequenceNumber,
-                                   bool aIsRepeatTransaction,
-                                   int32_t aPaintSyncId,
+                                   const TransactionInfo& aInfo,
                                    bool aHitTestUpdate) = 0;
 
   virtual AsyncCompositionManager* GetCompositionManager(LayerTransactionParent* aLayerTree) { return nullptr; }
@@ -162,6 +156,7 @@ public:
 
   explicit CompositorBridgeParent(CSSToLayoutDeviceScale aScale,
                                   const TimeDuration& aVsyncRate,
+                                  const CompositorOptions& aOptions,
                                   bool aUseExternalSurfaceSize,
                                   const gfx::IntSize& aSurfaceSize);
 
@@ -169,8 +164,7 @@ public:
   // IPC channel is active and RecvWillStop/ActorDestroy must be called to
   // free the compositor.
   void InitSameProcess(widget::CompositorWidget* aWidget,
-                       const uint64_t& aLayerTreeId,
-                       bool aUseAPZ);
+                       const uint64_t& aLayerTreeId);
 
   // Must only be called by GPUParent. After invoking this, the IPC channel
   // is active and RecvWillStop/ActorDestroy must be called to free the
@@ -220,14 +214,7 @@ public:
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
   virtual void ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
-                                   const uint64_t& aTransactionId,
-                                   const TargetConfig& aTargetConfig,
-                                   const InfallibleTArray<PluginWindowData>& aPlugins,
-                                   bool aIsFirstPaint,
-                                   bool aScheduleComposite,
-                                   uint32_t aPaintSequenceNumber,
-                                   bool aIsRepeatTransaction,
-                                   int32_t aPaintSyncId,
+                                   const TransactionInfo& aInfo,
                                    bool aHitTestUpdate) override;
   virtual void ForceComposite(LayerTransactionParent* aLayerTree) override;
   virtual bool SetTestSampleTime(LayerTransactionParent* aLayerTree,
@@ -445,12 +432,13 @@ public:
   PAPZParent* AllocPAPZParent(const uint64_t& aLayersId) override;
   bool DeallocPAPZParent(PAPZParent* aActor) override;
 
-  mozilla::ipc::IPCResult RecvAsyncPanZoomEnabled(const uint64_t& aLayersId, bool* aHasAPZ) override;
+  mozilla::ipc::IPCResult RecvGetCompositorOptions(const uint64_t& aLayersId,
+                                                   CompositorOptions* aOptions) override;
 
   RefPtr<APZCTreeManager> GetAPZCTreeManager();
 
-  bool AsyncPanZoomEnabled() const {
-    return !!mApzcTreeManager;
+  CompositorOptions GetOptions() const {
+    return mOptions;
   }
 
 private:
@@ -562,6 +550,8 @@ protected:
 
   bool mUseExternalSurfaceSize;
   gfx::IntSize mEGLSurfaceSize;
+
+  CompositorOptions mOptions;
 
   mozilla::Monitor mPauseCompositionMonitor;
   mozilla::Monitor mResumeCompositionMonitor;

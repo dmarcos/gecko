@@ -238,7 +238,7 @@ function tunnelToInnerBrowser(outer, inner) {
       // outside the main focus of RDM.
       let { detail } = event;
       event.preventDefault();
-      let uri = Services.io.newURI(detail.url, null, null);
+      let uri = Services.io.newURI(detail.url);
       // This API is used mainly because it's near the path used for <a target/> with
       // regular browser tabs (which calls `openURIInFrame`).  The more elaborate APIs
       // that support openers, window features, etc. didn't seem callable from JS and / or
@@ -488,13 +488,11 @@ MessageManagerTunnel.prototype = {
 
   init() {
     for (let method of this.PASS_THROUGH_METHODS) {
-      // Workaround bug 449811 to ensure a fresh binding each time through the loop
-      let _method = method;
-      this[_method] = (...args) => {
+      this[method] = (...args) => {
         if (!this.outerParentMM) {
           return null;
         }
-        return this.outerParentMM[_method](...args);
+        return this.outerParentMM[method](...args);
       };
     }
 
@@ -538,13 +536,11 @@ MessageManagerTunnel.prototype = {
     // ensure it keeps working after tunnel close, rewrite the overidden methods as pass
     // through methods.
     for (let method of this.OVERRIDDEN_METHODS) {
-      // Workaround bug 449811 to ensure a fresh binding each time through the loop
-      let _method = method;
-      this[_method] = (...args) => {
+      this[method] = (...args) => {
         if (!this.outerParentMM) {
           return null;
         }
-        return this.outerParentMM[_method](...args);
+        return this.outerParentMM[method](...args);
       };
     }
   },

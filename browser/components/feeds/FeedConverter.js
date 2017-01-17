@@ -97,8 +97,7 @@ function safeGetCharPref(pref, defaultValue) {
       getService(Ci.nsIPrefBranch);
   try {
     return prefs.getCharPref(pref);
-  }
-  catch (e) {
+  } catch (e) {
   }
   return defaultValue;
 }
@@ -252,7 +251,7 @@ FeedConverter.prototype = {
         feedService.addFeedResult(result);
 
         // Now load the actual XUL document.
-        let aboutFeedsURI = ios.newURI("about:feeds", null, null);
+        let aboutFeedsURI = ios.newURI("about:feeds");
         chromeChannel = ios.newChannelFromURIWithLoadInfo(aboutFeedsURI, loadInfo);
         chromeChannel.originalURI = result.uri;
 
@@ -265,9 +264,8 @@ FeedConverter.prototype = {
       }
 
       chromeChannel.loadGroup = this._request.loadGroup;
-      chromeChannel.asyncOpen(this._listener, null);
-    }
-    finally {
+      chromeChannel.asyncOpen2(this._listener);
+    } finally {
       this._releaseHandles();
     }
   },
@@ -302,8 +300,7 @@ FeedConverter.prototype = {
 
       // Note: this throws if the header is not set.
       httpChannel.getResponseHeader("X-Moz-Is-Feed");
-    }
-    catch (ex) {
+    } catch (ex) {
       this._sniffed = true;
     }
 

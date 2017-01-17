@@ -117,6 +117,7 @@ pref("browser.download.forbid_open_with", false);
 
 // Whether or not testing features are enabled.
 pref("dom.quotaManager.testing", false);
+pref("dom.select_popup_in_parent.enabled", false);
 
 // Whether or not indexedDB is enabled.
 pref("dom.indexedDB.enabled", true);
@@ -305,12 +306,7 @@ pref("mathml.disabled",    false);
 // Enable scale transform for stretchy MathML operators. See bug 414277.
 pref("mathml.scale_stretchy_operators.enabled", true);
 
-// Enabled on nightly only until we fix mochitest failures.
-#ifdef NIGHTLY_BUILD
 pref("media.dormant-on-pause-timeout-ms", 5000);
-#else
-pref("media.dormant-on-pause-timeout-ms", -1);
-#endif
 
 // Media cache size in kilobytes
 pref("media.cache_size", 512000);
@@ -351,8 +347,9 @@ pref("media.wmf.decoder.thread-count", -1);
 pref("media.wmf.low-latency.enabled", false);
 pref("media.wmf.skip-blacklist", false);
 pref("media.wmf.vp9.enabled", true);
+pref("media.wmf.allow-unsupported-resolutions", false);
 pref("media.windows-media-foundation.allow-d3d11-dxva", true);
-pref("media.wmf.disable-d3d11-for-dlls", "igd10iumd32.dll: 20.19.15.4444, 20.19.15.4424, 20.19.15.4409, 20.19.15.4390, 20.19.15.4380, 20.19.15.4360, 10.18.10.4358, 20.19.15.4331, 20.19.15.4312, 20.19.15.4300, 10.18.15.4281, 10.18.15.4279, 10.18.10.4276, 10.18.15.4268, 10.18.15.4256, 10.18.10.4252, 10.18.15.4248, 10.18.14.4112, 10.18.10.3958, 10.18.10.3496, 10.18.10.3431, 10.18.10.3412, 10.18.10.3355, 9.18.10.3234, 9.18.10.3071, 9.18.10.3055, 9.18.10.3006; igd10umd32.dll: 9.17.10.4229, 9.17.10.3040, 9.17.10.2857, 8.15.10.2274, 8.15.10.2272, 8.15.10.2246, 8.15.10.1840, 8.15.10.1808; igd10umd64.dll: 9.17.10.4229, 9.17.10.2857, 10.18.10.3496; isonyvideoprocessor.dll: 4.1.2247.8090, 4.1.2153.6200; tosqep.dll: 1.2.15.526, 1.1.12.201, 1.0.11.318, 1.0.11.215, 1.0.10.1224; tosqep64.dll: 1.1.12.201, 1.0.11.215; nvwgf2um.dll: 10.18.13.6510, 10.18.13.5891, 10.18.13.5887, 10.18.13.5582, 10.18.13.5382, 9.18.13.4195, 9.18.13.3165; atidxx32.dll: 21.19.151.3, 21.19.137.1, 21.19.134.1, 20.19.0.32837, 20.19.0.32832, 8.17.10.682, 8.17.10.671, 8.17.10.661, 8.17.10.648, 8.17.10.644, 8.17.10.625, 8.17.10.605, 8.17.10.581, 8.17.10.569, 8.17.10.560, 8.17.10.545, 8.17.10.539, 8.17.10.531, 8.17.10.525, 8.17.10.520, 8.17.10.519, 8.17.10.514, 8.17.10.511, 8.17.10.494, 8.17.10.489, 8.17.10.483, 8.17.10.453, 8.17.10.451, 8.17.10.441, 8.17.10.436, 8.17.10.432, 8.17.10.425, 8.17.10.418, 8.17.10.414, 8.17.10.401, 8.17.10.395, 8.17.10.385, 8.17.10.378, 8.17.10.362, 8.17.10.355, 8.17.10.342, 8.17.10.331, 8.17.10.318, 8.17.10.310, 8.17.10.286, 8.17.10.269, 8.17.10.261, 8.17.10.247, 8.17.10.240, 8.15.10.212; atidxx64.dll: 21.19.151.3, 21.19.137.1, 21.19.134.1, 20.19.0.32832, 8.17.10.682, 8.17.10.661, 8.17.10.644, 8.17.10.625; nvumdshim.dll: 10.18.13.6822");
+pref("media.wmf.disable-d3d11-for-dlls", "igd11dxva64.dll: 20.19.15.4463, 20.19.15.4454, 20.19.15.4444, 20.19.15.4416, 20.19.15.4404, 20.19.15.4390, 20.19.15.4380, 20.19.15.4377, 20.19.15.4364, 20.19.15.4360, 20.19.15.4352, 20.19.15.4331, 20.19.15.4326, 20.19.15.4300; igd10iumd32.dll: 20.19.15.4444, 20.19.15.4424, 20.19.15.4409, 20.19.15.4390, 20.19.15.4380, 20.19.15.4360, 10.18.10.4358, 20.19.15.4331, 20.19.15.4312, 20.19.15.4300, 10.18.15.4281, 10.18.15.4279, 10.18.10.4276, 10.18.15.4268, 10.18.15.4256, 10.18.10.4252, 10.18.15.4248, 10.18.14.4112, 10.18.10.3958, 10.18.10.3496, 10.18.10.3431, 10.18.10.3412, 10.18.10.3355, 9.18.10.3234, 9.18.10.3071, 9.18.10.3055, 9.18.10.3006; igd10umd32.dll: 9.17.10.4229, 9.17.10.3040, 9.17.10.2857, 8.15.10.2274, 8.15.10.2272, 8.15.10.2246, 8.15.10.1840, 8.15.10.1808; igd10umd64.dll: 9.17.10.4229, 9.17.10.2857, 10.18.10.3496; isonyvideoprocessor.dll: 4.1.2247.8090, 4.1.2153.6200; tosqep.dll: 1.2.15.526, 1.1.12.201, 1.0.11.318, 1.0.11.215, 1.0.10.1224; tosqep64.dll: 1.1.12.201, 1.0.11.215; nvwgf2um.dll: 10.18.13.6510, 10.18.13.5891, 10.18.13.5887, 10.18.13.5582, 10.18.13.5382, 9.18.13.4195, 9.18.13.3165; atidxx32.dll: 21.19.151.3, 21.19.137.1, 21.19.134.1, 20.19.0.32837, 20.19.0.32832, 8.17.10.682, 8.17.10.671, 8.17.10.661, 8.17.10.648, 8.17.10.644, 8.17.10.625, 8.17.10.605, 8.17.10.581, 8.17.10.569, 8.17.10.560, 8.17.10.545, 8.17.10.539, 8.17.10.531, 8.17.10.525, 8.17.10.520, 8.17.10.519, 8.17.10.514, 8.17.10.511, 8.17.10.494, 8.17.10.489, 8.17.10.483, 8.17.10.453, 8.17.10.451, 8.17.10.441, 8.17.10.436, 8.17.10.432, 8.17.10.425, 8.17.10.418, 8.17.10.414, 8.17.10.401, 8.17.10.395, 8.17.10.385, 8.17.10.378, 8.17.10.362, 8.17.10.355, 8.17.10.342, 8.17.10.331, 8.17.10.318, 8.17.10.310, 8.17.10.286, 8.17.10.269, 8.17.10.261, 8.17.10.247, 8.17.10.240, 8.15.10.212; atidxx64.dll: 21.19.151.3, 21.19.137.1, 21.19.134.1, 20.19.0.32832, 8.17.10.682, 8.17.10.661, 8.17.10.644, 8.17.10.625; nvumdshim.dll: 10.18.13.6822");
 pref("media.wmf.disable-d3d9-for-dlls", "igdumd64.dll: 8.15.10.2189, 8.15.10.2119, 8.15.10.2104, 8.15.10.2102, 8.771.1.0; atiumd64.dll: 7.14.10.833, 7.14.10.867, 7.14.10.885, 7.14.10.903, 7.14.10.911, 8.14.10.768, 9.14.10.1001, 9.14.10.1017, 9.14.10.1080, 9.14.10.1128, 9.14.10.1162, 9.14.10.1171, 9.14.10.1183, 9.14.10.1197, 9.14.10.945, 9.14.10.972, 9.14.10.984, 9.14.10.996");
 #endif
 #if defined(MOZ_FFMPEG)
@@ -547,8 +544,6 @@ pref("media.getusermedia.screensharing.allowed_domains", "webex.com,*.webex.com,
  // includes Mozilla's test domain: mozilla.github.io (not intended for release)
 pref("media.getusermedia.screensharing.allowed_domains", "mozilla.github.io,webex.com,*.webex.com,ciscospark.com,*.ciscospark.com,projectsquared.com,*.projectsquared.com,*.room.co,room.co,beta.talky.io,talky.io,*.clearslide.com,appear.in,*.appear.in,tokbox.com,*.tokbox.com,*.sso.francetelecom.fr,*.si.francetelecom.fr,*.sso.infra.ftgroup,*.multimedia-conference.orange-business.com,*.espacecollaboration.orange-business.com,free.gotomeeting.com,g2m.me,*.g2m.me,*.mypurecloud.com,*.mypurecloud.com.au,spreed.me,*.spreed.me,*.spreed.com,air.mozilla.org,*.circuit.com,*.yourcircuit.com,circuit.siemens.com,yourcircuit.siemens.com,circuitsandbox.net,*.unify.com,tandi.circuitsandbox.net,*.ericsson.net,*.cct.ericsson.net,*.opentok.com,*.conf.meetecho.com,meet.jit.si,*.meet.jit.si,web.stage.speakeasyapp.net,web.speakeasyapp.net,*.hipchat.me,*.beta-wspbx.com,*.wspbx.com,*.unifiedcloudit.com,*.smartboxuc.com,*.smartbox-uc.com,*.panterranetworks.com,pexipdemo.com,*.pexipdemo.com,pex.me,*.pex.me,*.rd.pexip.com,1click.io,*.1click.io,*.fuze.com,*.fuzemeeting.com,*.thinkingphones.com,gotomeeting.com,*.gotomeeting.com,gotowebinar.com,*.gotowebinar.com,gototraining.com,*.gototraining.com,citrix.com,*.citrix.com,expertcity.com,*.expertcity.com,citrixonline.com,*.citrixonline.com,g2m.me,*.g2m.me,gotomeet.me,*.gotomeet.me,gotomeet.at,*.gotomeet.at,miriadaxdes.miriadax.net,certificacion.miriadax.net,miriadax.net,*.wire.com,sylaps.com,*.sylaps.com,bluejeans.com,*.bluejeans.com,*.a.bluejeans.com,*.bbcollab.com");
 #endif
-// OS/X 10.6 and XP have screen/window sharing off by default due to various issues - Caveat emptor
-pref("media.getusermedia.screensharing.allow_on_old_platforms", false);
 
 pref("media.getusermedia.audiocapture.enabled", false);
 
@@ -612,6 +607,12 @@ pref("layers.async-pan-zoom.enabled", true);
 // Whether to enable event region building during painting
 pref("layout.event-regions.enabled", false);
 
+// Whether to enable arbitrary layer geometry for OpenGL compositor
+pref("layers.geometry.opengl.enabled", true);
+
+// Whether to enable arbitrary layer geometry for Basic compositor
+pref("layers.geometry.basic.enabled", true);
+
 // APZ preferences. For documentation/details on what these prefs do, check
 // gfx/layers/apz/src/AsyncPanZoomController.cpp.
 pref("apz.allow_checkerboarding", true);
@@ -628,7 +629,11 @@ pref("apz.axis_lock.breakout_threshold", "0.03125");  // 1/32 inches
 pref("apz.axis_lock.breakout_angle", "0.3926991");    // PI / 8 (22.5 degrees)
 pref("apz.axis_lock.direct_pan_angle", "1.047197");   // PI / 3 (60 degrees)
 pref("apz.content_response_timeout", 400);
+#ifdef NIGHTLY_BUILD
+pref("apz.drag.enabled", true);
+#else
 pref("apz.drag.enabled", false);
+#endif
 pref("apz.danger_zone_x", 50);
 pref("apz.danger_zone_y", 100);
 pref("apz.disable_for_scroll_linked_effects", false);
@@ -853,8 +858,6 @@ pref("canvas.imagebitmap_extensions.enabled", true);
 // Values are -1 always on. 1 always off, 0 is auto as some platform perform
 // further checks.
 pref("accessibility.force_disabled", 0);
-
-pref("accessibility.ipc_architecture.enabled", true);
 
 pref("accessibility.AOM.enabled", false);
 
@@ -1106,7 +1109,7 @@ pref("print.print_edge_right", 0);
 pref("print.print_edge_bottom", 0);
 
 // Print via the parent process. This is only used when e10s is enabled.
-#if defined(XP_WIN) || defined(XP_MACOSX)
+#if defined(XP_WIN) || defined(XP_MACOSX) || defined(XP_LINUX)
 pref("print.print_via_parent", true);
 #else
 pref("print.print_via_parent", false);
@@ -1154,6 +1157,7 @@ pref("dom.disable_open_click_delay", 1000);
 
 pref("dom.storage.enabled", true);
 pref("dom.storage.default_quota",      5120);
+pref("dom.storage.testing", false);
 
 pref("dom.send_after_paint_to_content", false);
 
@@ -1215,10 +1219,13 @@ pref("privacy.trackingprotection.enabled",  false);
 pref("privacy.trackingprotection.pbmode.enabled",  true);
 // Annotate channels based on the tracking protection list in all modes
 pref("privacy.trackingprotection.annotate_channels",  false);
+// Lower the priority of network loads for resources on the tracking protection list.
+// Note that this requires the privacy.trackingprotection.annotate_channels pref to be on in order to have any effect.
+pref("privacy.trackingprotection.lower_network_priority",  false);
 
 pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.clipboardevents.enabled",   true);
-#if defined(XP_WIN) && !defined(RELEASE_OR_BETA) || defined(MOZ_WIDGET_GTK) && !defined(RELEASE_OR_BETA)
+#if defined(XP_WIN) && !defined(RELEASE_OR_BETA) || defined(MOZ_WIDGET_GTK) && !defined(RELEASE_OR_BETA) || defined(XP_MACOSX) && !defined(RELEASE_OR_BETA)
 pref("dom.event.highrestimestamp.enabled",  true);
 #else
 pref("dom.event.highrestimestamp.enabled",  false);
@@ -1286,7 +1293,7 @@ pref("javascript.options.mem.gc_max_empty_chunk_count", 30);
 
 pref("javascript.options.showInConsole", false);
 
-#ifdef RELEASE_BUILD
+#ifdef RELEASE_OR_BETA
 // Disabled in Beta and Release for now, see bug 1225406
 pref("javascript.options.shared_memory", false);
 #else
@@ -1450,6 +1457,9 @@ pref("network.http.accept.default", "text/html,application/xhtml+xml,application
 // Prefs allowing granular control of referers
 // 0=don't send any, 1=send only on clicks, 2=send on image requests as well
 pref("network.http.sendRefererHeader",      2);
+// 0=no referrer, 1=same origin, 2=strict-origin-when-cross-origin,
+// 3=no-referre-when-downgrade(default)
+pref("network.http.referer.userControlPolicy", 3);
 // false=real referer, true=spoof referer (use target URI as referer)
 pref("network.http.referer.spoofSource", false);
 // 0=full URI, 1=scheme+host+port+path, 2=scheme+host+port
@@ -1804,7 +1814,7 @@ pref("network.IDN.whitelist.xn--zckzah", true);
 // override the settings "network.IDN_show_punycode" and
 // "network.IDN.whitelist.*".  (please keep this value in sync with the
 // built-in fallback in intl/uconv/nsTextToSubURI.cpp)
-pref("network.IDN.blacklist_chars", "\u0020\u00A0\u00BC\u00BD\u00BE\u01C3\u02D0\u0337\u0338\u0589\u05C3\u05F4\u0609\u060A\u066A\u06D4\u0701\u0702\u0703\u0704\u115F\u1160\u1735\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u200E\u200F\u2024\u2027\u2028\u2029\u202A\u202B\u202C\u202D\u202E\u202F\u2039\u203A\u2041\u2044\u2052\u205F\u2153\u2154\u2155\u2156\u2157\u2158\u2159\u215A\u215B\u215C\u215D\u215E\u215F\u2215\u2236\u23AE\u2571\u29F6\u29F8\u2AFB\u2AFD\u2FF0\u2FF1\u2FF2\u2FF3\u2FF4\u2FF5\u2FF6\u2FF7\u2FF8\u2FF9\u2FFA\u2FFB\u3000\u3002\u3014\u3015\u3033\u3164\u321D\u321E\u33AE\u33AF\u33C6\u33DF\uA789\uFE14\uFE15\uFE3F\uFE5D\uFE5E\uFEFF\uFF0E\uFF0F\uFF61\uFFA0\uFFF9\uFFFA\uFFFB\uFFFC\uFFFD");
+pref("network.IDN.blacklist_chars", "\u0020\u00A0\u00BC\u00BD\u00BE\u01C3\u02D0\u0337\u0338\u0589\u058A\u05C3\u05F4\u0609\u060A\u066A\u06D4\u0701\u0702\u0703\u0704\u115F\u1160\u1735\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u200E\u200F\u2010\u2019\u2024\u2027\u2028\u2029\u202A\u202B\u202C\u202D\u202E\u202F\u2039\u203A\u2041\u2044\u2052\u205F\u2153\u2154\u2155\u2156\u2157\u2158\u2159\u215A\u215B\u215C\u215D\u215E\u215F\u2215\u2236\u23AE\u2571\u29F6\u29F8\u2AFB\u2AFD\u2FF0\u2FF1\u2FF2\u2FF3\u2FF4\u2FF5\u2FF6\u2FF7\u2FF8\u2FF9\u2FFA\u2FFB\u3000\u3002\u3014\u3015\u3033\u30A0\u3164\u321D\u321E\u33AE\u33AF\u33C6\u33DF\uA789\uFE14\uFE15\uFE3F\uFE5D\uFE5E\uFEFF\uFF0E\uFF0F\uFF61\uFFA0\uFFF9\uFFFA\uFFFB\uFFFC\uFFFD");
 
 // This preference specifies a list of domains for which DNS lookups will be
 // IPv4 only. Works around broken DNS servers which can't handle IPv6 lookups
@@ -1839,14 +1849,6 @@ pref("network.dns.localDomains", "");
 
 // Contols whether or not "localhost" should resolve when offline
 pref("network.dns.offline-localhost", true);
-
-// This preference controls whether or not URLs with UTF-8 characters are
-// escaped.  Set this preference to TRUE for strict RFC2396 conformance.
-pref("network.standard-url.escape-utf8", true);
-
-// This preference controls whether or not URLs are always encoded and sent as
-// UTF-8.
-pref("network.standard-url.encode-utf8", true);
 
 // The maximum allowed length for a URL - 1MB default
 pref("network.standard-url.max-length", 1048576);
@@ -2207,6 +2209,10 @@ pref("services.blocklist.addons.collection", "addons");
 pref("services.blocklist.addons.checked", 0);
 pref("services.blocklist.plugins.collection", "plugins");
 pref("services.blocklist.plugins.checked", 0);
+pref("services.blocklist.pinning.enabled", true);
+pref("services.blocklist.pinning.bucket", "pinning");
+pref("services.blocklist.pinning.collection", "pins");
+pref("services.blocklist.pinning.checked", 0);
 pref("services.blocklist.gfx.collection", "gfx");
 pref("services.blocklist.gfx.checked", 0);
 
@@ -2616,6 +2622,9 @@ pref("layout.css.grid-template-subgrid-value.enabled", false);
 // Is support for CSS contain enabled?
 pref("layout.css.contain.enabled", false);
 
+// Is support for CSS display:flow-root enabled?
+pref("layout.css.display-flow-root.enabled", true);
+
 // Is support for CSS box-decoration-break enabled?
 pref("layout.css.box-decoration-break.enabled", true);
 
@@ -2870,6 +2879,9 @@ pref("dom.ipc.plugins.asyncdrawing.enabled", true);
 #endif
 
 pref("dom.ipc.processCount", 1);
+
+// Disable support for SVG
+pref("svg.disabled", false);
 
 // Override default dom.ipc.processCount for some remote content process types.
 pref("dom.ipc.processCount.webLargeAllocation", 2);
@@ -4275,7 +4287,7 @@ pref("font.name.serif.he", "Droid Serif");
 pref("font.name.sans-serif.he", "Clear Sans");
 pref("font.name.monospace.he", "Droid Sans Mono");
 pref("font.name-list.serif.he", "Noto Serif");
-pref("font.name-list.sans-serif.he", "Droid Sans Hebrew, Clear Sans, Droid Sans");
+pref("font.name-list.sans-serif.he", "Droid Sans Hebrew, Clear Sans, Droid Sans, Arial");
 
 pref("font.name.serif.ja", "Charis SIL Compact");
 pref("font.name.sans-serif.ja", "Clear Sans");
@@ -4367,7 +4379,7 @@ pref("font.name.monospace.x-unicode", "dt-interface user-ucs2.cjk_japan-0");
 pref("signon.rememberSignons",              true);
 pref("signon.rememberSignons.visibilityToggle", true);
 pref("signon.autofillForms",                true);
-pref("signon.autofillForms.http",           true);
+pref("signon.autofillForms.http",           false);
 pref("signon.autologin.proxy",              false);
 pref("signon.formlessCapture.enabled",      true);
 pref("signon.storeWhenAutocompleteOff",     true);
@@ -4556,8 +4568,8 @@ pref("layers.acceleration.disabled", false);
 // and output the result to stderr.
 pref("layers.bench.enabled", false);
 
-#if defined(XP_WIN) && defined(NIGHTLY_BUILD)
-pref("layers.gpu-process.dev.enabled", true);
+#if defined(XP_WIN)
+pref("layers.gpu-process.enabled", true);
 pref("media.gpu-process-decoder", true);
 #endif
 
@@ -4640,9 +4652,6 @@ pref("layers.bufferrotation.enabled", true);
 pref("layers.componentalpha.enabled", true);
 pref("layers.draw-mask-debug", false);
 
-// Use the DT-backend implemented PushLayer
-pref("gfx.content.use-native-pushlayer", false);
-
 pref("gfx.content.always-paint", false);
 
 #ifdef ANDROID
@@ -4650,15 +4659,12 @@ pref("gfx.apitrace.enabled",false);
 #endif
 
 #ifdef MOZ_X11
-pref("gfx.content.use-native-pushlayer", true);
 #ifdef MOZ_WIDGET_GTK
 pref("gfx.xrender.enabled",false);
 #endif
 #endif
 
 #ifdef XP_WIN
-pref("gfx.content.use-native-pushlayer", true);
-
 // Whether to disable the automatic detection and use of direct2d.
 pref("gfx.direct2d.disabled", false);
 
@@ -4673,10 +4679,15 @@ pref("layers.allow-d3d9-fallback", false);
 #endif
 
 // Copy-on-write canvas
+pref("layers.shared-buffer-provider.enabled", true);
+
 #ifdef XP_WIN
 pref("layers.shared-buffer-provider.enabled", false);
-#else
-pref("layers.shared-buffer-provider.enabled", true);
+#endif
+
+#ifdef XP_MACOSX
+// cf. Bug 1324908
+pref("layers.shared-buffer-provider.enabled", false);
 #endif
 
 // Force all possible layers to be always active layers
@@ -5053,9 +5064,6 @@ pref("dom.forms.inputmode", false);
 pref("dom.forms.inputmode", true);
 #endif
 
-// InputMethods for soft keyboards in B2G
-pref("dom.mozInputMethod.enabled", false);
-
 pref("dom.flyweb.enabled", false);
 
 // Enable mapped array buffer by default.
@@ -5133,7 +5141,8 @@ pref("browser.safebrowsing.provider.google.reportURL", "https://safebrowsing.goo
 pref("browser.safebrowsing.provider.google4.pver", "4");
 pref("browser.safebrowsing.provider.google4.lists", "goog-phish-proto,googpub-phish-proto,goog-malware-proto,goog-unwanted-proto");
 pref("browser.safebrowsing.provider.google4.updateURL", "https://safebrowsing.googleapis.com/v4/threatListUpdates:fetch?$ct=application/x-protobuf&key=%GOOGLE_API_KEY%");
-pref("browser.safebrowsing.provider.google4.gethashURL", "https://safebrowsing.googleapis.com/v4/fullHashes:find?$ct=application/x-protobuf&key=%GOOGLE_API_KEY%");
+// Leave it empty until we roll out v4 hash completion feature. See Bug 1323856.
+pref("browser.safebrowsing.provider.google4.gethashURL", "");
 pref("browser.safebrowsing.provider.google4.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
 
 pref("browser.safebrowsing.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
@@ -5253,9 +5262,6 @@ pref("camera.control.low_memory_thresholdMB", 404);
 
 // UDPSocket API
 pref("dom.udpsocket.enabled", false);
-
-// Disable before keyboard events and after keyboard events by default.
-pref("dom.beforeAfterKeyboardEvent.enabled", false);
 
 // Presentation API
 pref("dom.presentation.enabled", false);
@@ -5427,6 +5433,9 @@ pref("media.gmp.insecure.allow", false);
 
 pref("dom.audiochannel.mutedByDefault", false);
 
+// HTML <dialog> element
+pref("dom.dialog_element.enabled", false);
+
 // Secure Element API
 #ifdef MOZ_SECUREELEMENT
 pref("dom.secureelement.enabled", false);
@@ -5489,13 +5498,6 @@ pref("layout.css.color-adjust.enabled", true);
 
 pref("dom.audiochannel.audioCompeting", false);
 
-// Disable Node.rootNode in release builds.
-#ifdef RELEASE_OR_BETA
-pref("dom.node.rootNode.enabled", false);
-#else
-pref("dom.node.rootNode.enabled", true);
-#endif
-
 // Default media volume
 pref("media.default_volume", "1.0");
 
@@ -5520,7 +5522,12 @@ pref("dom.webkitBlink.dirPicker.enabled", true);
 pref("dom.webkitBlink.filesystem.enabled", true);
 #endif
 
+#ifdef NIGHTLY_BUILD
 pref("media.block-autoplay-until-in-foreground", true);
+#else
+pref("media.block-autoplay-until-in-foreground", false);
+#endif
+
 #ifdef MOZ_STYLO
 // Is the Servo-backed style system enabled?
 pref("layout.css.servo.enabled", true);
@@ -5539,8 +5546,11 @@ pref("security.mixed_content.use_hsts", false);
 // mixed-content blocking
 pref("security.mixed_content.use_hsts", true);
 #endif
-// Approximately 1 week default cache for HSTS priming failures
+// Approximately 1 week default cache for HSTS priming failures, in seconds
 pref ("security.mixed_content.hsts_priming_cache_timeout", 10080);
+// Force the channel to timeout in 3 seconds if we have not received
+// expects a time in milliseconds
+pref ("security.mixed_content.hsts_priming_request_timeout", 3000);
 
 // Disable Storage api in release builds.
 #ifdef NIGHTLY_BUILD
@@ -5549,8 +5559,13 @@ pref("dom.storageManager.enabled", true);
 pref("dom.storageManager.enabled", false);
 #endif
 
+// When a user cancels this number of authentication dialogs coming from
+// a single web page in a row, all following authentication dialogs will
+// be blocked (automatically canceled) for that page. The counter resets
+// when the page is reloaded. To turn this feature off, just set the limit to 0.
+pref("prompts.authentication_dialog_abuse_limit", 3);
+
 // Enable the Storage management in about:preferences and persistent-storage permission request
 // To enable the DOM implementation, turn on "dom.storageManager.enabled"
 pref("browser.storageManager.enabled", false);
-
-pref("dom.IntersectionObserver.enabled", true);
+pref("dom.IntersectionObserver.enabled", false);

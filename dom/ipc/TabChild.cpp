@@ -151,12 +151,11 @@ NS_IMPL_ISUPPORTS(TabChildSHistoryListener,
                   nsIPartialSHistoryListener,
                   nsISupportsWeakReference)
 
-static const CSSSize kDefaultViewportSize(980, 480);
-
 static const char BEFORE_FIRST_PAINT[] = "before-first-paint";
 
 typedef nsDataHashtable<nsUint64HashKey, TabChild*> TabChildMap;
 static TabChildMap* sTabChildren;
+bool TabChild::sWasFreshProcess = false;
 
 TabChildBase::TabChildBase()
   : mTabChildGlobal(nullptr)
@@ -182,7 +181,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(TabChildBase)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTabChildGlobal)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlobal)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWebBrowserChrome)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -354,7 +352,7 @@ TabChild::Create(nsIContentChild* aManager,
 {
     RefPtr<TabChild> iframe = new TabChild(aManager, aTabId,
                                              aContext, aChromeFlags);
-    return NS_SUCCEEDED(iframe->Init()) ? iframe.forget() : nullptr;
+    return iframe.forget();
 }
 
 TabChild::TabChild(nsIContentChild* aManager,
@@ -384,18 +382,12 @@ TabChild::TabChild(nsIContentChild* aManager,
   , mDidSetRealShowInfo(false)
   , mDidLoadURLInit(false)
   , mIsFreshProcess(false)
+  , mSkipKeyPress(false)
   , mLayerObserverEpoch(0)
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
   , mNativeWindowHandle(0)
 #endif
 {
-  // In the general case having the TabParent tell us if APZ is enabled or not
-  // doesn't really work because the TabParent itself may not have a reference
-  // to the owning widget during initialization. Instead we assume that this
-  // TabChild corresponds to a widget type that would have APZ enabled, and just
-  // check the other conditions necessary for enabling APZ.
-  mAsyncPanZoomEnabled = gfxPlatform::AsyncPanZoomEnabled();
-
   nsWeakPtr weakPtrThis(do_GetWeakReference(static_cast<nsITabChild*>(this)));  // for capture by the lambda
   mSetAllowedTouchBehaviorCallback = [weakPtrThis](uint64_t aInputBlockId,
                                                    const nsTArray<TouchBehaviorFlags>& aFlags)
@@ -430,6 +422,15 @@ TabChild::TabChild(nsIContentChild* aManager,
   for (uint32_t idx = 0; idx < NUMBER_OF_AUDIO_CHANNELS; idx++) {
     mAudioChannelsActive.AppendElement(false);
   }
+}
+
+bool
+TabChild::AsyncPanZoomEnabled() const
+{
+  // If we have received the CompositorOptions we can answer definitively. If
+  // not, return a best guess based on gfxPlaform values.
+  return mCompositorOptions ? mCompositorOptions->UseAPZ()
+                            : gfxPlatform::AsyncPanZoomEnabled();
 }
 
 NS_IMETHODIMP
@@ -1201,7 +1202,7 @@ TabChild::ApplyShowInfo(const ShowInfo& aInfo)
             NS_LITERAL_CSTRING("mozprivatebrowsing"),
             nullptr);
         } else {
-          DocShellOriginAttributes attrs(nsDocShell::Cast(docShell)->GetOriginAttributes());
+          OriginAttributes attrs(nsDocShell::Cast(docShell)->GetOriginAttributes());
           attrs.SyncAttributesWithPrivateBrowsing(true);
           nsDocShell::Cast(docShell)->SetOriginAttributes(attrs);
         }
@@ -1501,7 +1502,7 @@ TabChild::RecvMenuKeyboardListenerInstalled(const bool& aInstalled)
 }
 
 mozilla::ipc::IPCResult
-TabChild::RecvNotifyAttachGroupedSessionHistory(const uint32_t& aOffset)
+TabChild::RecvNotifyAttachGroupedSHistory(const uint32_t& aOffset)
 {
   // nsISHistory uses int32_t
   if (NS_WARN_IF(aOffset > INT32_MAX)) {
@@ -1511,15 +1512,15 @@ TabChild::RecvNotifyAttachGroupedSessionHistory(const uint32_t& aOffset)
   nsCOMPtr<nsISHistory> shistory = GetRelatedSHistory();
   NS_ENSURE_TRUE(shistory, IPC_FAIL_NO_REASON(this));
 
-  if (NS_FAILED(shistory->OnAttachGroupedSessionHistory(aOffset))) {
+  if (NS_FAILED(shistory->OnAttachGroupedSHistory(aOffset))) {
     return IPC_FAIL_NO_REASON(this);
   }
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
-TabChild::RecvNotifyPartialSessionHistoryActive(const uint32_t& aGlobalLength,
-                                                const uint32_t& aTargetLocalIndex)
+TabChild::RecvNotifyPartialSHistoryActive(const uint32_t& aGlobalLength,
+                                          const uint32_t& aTargetLocalIndex)
 {
   // nsISHistory uses int32_t
   if (NS_WARN_IF(aGlobalLength > INT32_MAX || aTargetLocalIndex > INT32_MAX)) {
@@ -1529,20 +1530,20 @@ TabChild::RecvNotifyPartialSessionHistoryActive(const uint32_t& aGlobalLength,
   nsCOMPtr<nsISHistory> shistory = GetRelatedSHistory();
   NS_ENSURE_TRUE(shistory, IPC_FAIL_NO_REASON(this));
 
-  if (NS_FAILED(shistory->OnPartialSessionHistoryActive(aGlobalLength,
-                                                        aTargetLocalIndex))) {
+  if (NS_FAILED(shistory->OnPartialSHistoryActive(aGlobalLength,
+                                                  aTargetLocalIndex))) {
     return IPC_FAIL_NO_REASON(this);
   }
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
-TabChild::RecvNotifyPartialSessionHistoryDeactive()
+TabChild::RecvNotifyPartialSHistoryDeactive()
 {
   nsCOMPtr<nsISHistory> shistory = GetRelatedSHistory();
   NS_ENSURE_TRUE(shistory, IPC_FAIL_NO_REASON(this));
 
-  if (NS_FAILED(shistory->OnPartialSessionHistoryDeactive())) {
+  if (NS_FAILED(shistory->OnPartialSHistoryDeactive())) {
     return IPC_FAIL_NO_REASON(this);
   }
   return IPC_OK();
@@ -1558,7 +1559,8 @@ TabChild::RecvMouseEvent(const nsString& aType,
                          const bool&     aIgnoreRootScrollFrame)
 {
   APZCCallbackHelper::DispatchMouseEvent(GetPresShell(), aType, CSSPoint(aX, aY),
-      aButton, aClickCount, aModifiers, aIgnoreRootScrollFrame, nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN);
+      aButton, aClickCount, aModifiers, aIgnoreRootScrollFrame,
+      nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN, 0 /* Use the default value here. */);
   return IPC_OK();
 }
 
@@ -1595,14 +1597,18 @@ TabChild::RecvRealMouseButtonEvent(const WidgetMouseEvent& aEvent,
   // actually go through the APZ code and so their mHandledByAPZ flag is false.
   // Since thos events didn't go through APZ, we don't need to send notifications
   // for them.
+  bool pendingLayerization = false;
   if (aInputBlockId && aEvent.mFlags.mHandledByAPZ) {
     nsCOMPtr<nsIDocument> document(GetDocument());
-    APZCCallbackHelper::SendSetTargetAPZCNotification(
+    pendingLayerization = APZCCallbackHelper::SendSetTargetAPZCNotification(
       mPuppetWidget, document, aEvent, aGuid, aInputBlockId);
   }
 
   nsEventStatus unused;
   InputAPZContext context(aGuid, aInputBlockId, unused);
+  if (pendingLayerization) {
+    context.SetPendingLayerization();
+  }
 
   WidgetMouseEvent localEvent(aEvent);
   localEvent.mWidget = mPuppetWidget;
@@ -1772,10 +1778,52 @@ TabChild::RecvNativeSynthesisResponse(const uint64_t& aObserverId,
   return IPC_OK();
 }
 
+// In case handling repeated keys takes much time, we skip firing new ones.
+bool
+TabChild::SkipRepeatedKeyEvent(const WidgetKeyboardEvent& aEvent)
+{
+  if (mRepeatedKeyEventTime.IsNull() ||
+      !aEvent.mIsRepeat ||
+      (aEvent.mMessage != eKeyDown && aEvent.mMessage != eKeyPress)) {
+    mRepeatedKeyEventTime = TimeStamp();
+    mSkipKeyPress = false;
+    return false;
+  }
+
+  if ((aEvent.mMessage == eKeyDown &&
+       (mRepeatedKeyEventTime > aEvent.mTimeStamp)) ||
+      (mSkipKeyPress && (aEvent.mMessage == eKeyPress))) {
+    // If we skip a keydown event, also the following keypress events should be
+    // skipped.
+    mSkipKeyPress |= aEvent.mMessage == eKeyDown;
+    return true;
+  }
+
+  if (aEvent.mMessage == eKeyDown) {
+    // If keydown wasn't skipped, nor should the possible following keypress.
+    mRepeatedKeyEventTime = TimeStamp();
+    mSkipKeyPress = false;
+  }
+  return false;
+}
+
+void
+TabChild::UpdateRepeatedKeyEventEndTime(const WidgetKeyboardEvent& aEvent)
+{
+  if (aEvent.mIsRepeat &&
+      (aEvent.mMessage == eKeyDown || aEvent.mMessage == eKeyPress)) {
+    mRepeatedKeyEventTime = TimeStamp::Now();
+  }
+}
+
 mozilla::ipc::IPCResult
 TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
                            const MaybeNativeKeyBinding& aBindings)
 {
+  if (SkipRepeatedKeyEvent(event)) {
+    return IPC_OK();
+  }
+
   AutoCacheNativeKeyCommands autoCache(mPuppetWidget);
 
   if (event.mMessage == eKeyPress) {
@@ -1798,6 +1846,10 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
   localEvent.mWidget = mPuppetWidget;
   nsEventStatus status = APZCCallbackHelper::DispatchWidgetEvent(localEvent);
 
+  // Update the end time of the possible repeated event so that we can skip
+  // some incoming events in case event handling took long time.
+  UpdateRepeatedKeyEventEndTime(localEvent);
+
   if (event.mMessage == eKeyDown) {
     mIgnoreKeyPressEvent = status == nsEventStatus_eConsumeNoDefault;
   }
@@ -1815,10 +1867,6 @@ TabChild::RecvRealKeyEvent(const WidgetKeyboardEvent& event,
 
   if (localEvent.mAccessKeyForwardedToChild) {
     SendAccessKeyNotHandled(localEvent);
-  }
-
-  if (PresShell::BeforeAfterKeyboardEventEnabled()) {
-    SendDispatchAfterKeyboardEvent(localEvent);
   }
 
   return IPC_OK();
@@ -2502,6 +2550,10 @@ TabChild::InitRenderingState(const TextureFactoryIdentifier& aTextureFactoryIden
       return;
     }
 
+    CompositorOptions options;
+    Unused << compositorChild->SendGetCompositorOptions(aLayersId, &options);
+    mCompositorOptions = Some(options);
+
     ShadowLayerForwarder* lf =
         mPuppetWidget->GetLayerManager(
             nullptr, mTextureFactoryIdentifier.mParentBackend)
@@ -2550,11 +2602,10 @@ TabChild::InitRenderingState(const TextureFactoryIdentifier& aTextureFactoryIden
 void
 TabChild::InitAPZState()
 {
-  auto cbc = CompositorBridgeChild::Get();
-
-  if (!cbc->GetAPZEnabled(mLayersId)) {
+  if (!mCompositorOptions->UseAPZ()) {
     return;
   }
+  auto cbc = CompositorBridgeChild::Get();
 
   // Initialize the ApzcTreeManager. This takes multiple casts because of ugly multiple inheritance.
   PAPZCTreeManagerChild* baseProtocol = cbc->SendPAPZCTreeManagerConstructor(mLayersId);
@@ -2894,6 +2945,12 @@ TabChild::ReinitRendering()
 
   RefPtr<CompositorBridgeChild> cb = CompositorBridgeChild::Get();
 
+  // Refresh the compositor options since we may now be attached to a different
+  // compositor than we were previously.
+  CompositorOptions options;
+  Unused << cb->SendGetCompositorOptions(mLayersId, &options);
+  mCompositorOptions = Some(options);
+
   bool success;
   nsTArray<LayersBackend> ignored;
   PLayerTransactionChild* shadowManager =
@@ -3012,6 +3069,7 @@ TabChild::RecvThemeChanged(nsTArray<LookAndFeelInt>&& aLookAndFeelIntCache)
 mozilla::ipc::IPCResult
 TabChild::RecvSetFreshProcess()
 {
+  MOZ_ASSERT(!sWasFreshProcess, "Can only be a fresh process once!");
   mIsFreshProcess = true;
   return IPC_OK();
 }
@@ -3119,6 +3177,14 @@ TabChildSHistoryListener::SHistoryDidUpdate(bool aTruncate /* = false */)
   // an update, and wait for the state to become consistent.
   NS_ENSURE_TRUE(tabChild->SendSHistoryUpdate(count, index, aTruncate), NS_ERROR_FAILURE);
   return NS_OK;
+}
+
+mozilla::dom::TabGroup*
+TabChild::TabGroup()
+{
+  nsCOMPtr<nsPIDOMWindowOuter> window = do_GetInterface(WebNavigation());
+  MOZ_ASSERT(window);
+  return window->TabGroup();
 }
 
 /*******************************************************************************

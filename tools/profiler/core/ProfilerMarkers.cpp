@@ -13,21 +13,20 @@
 #include "mozilla/Sprintf.h"
 #endif
 
-ProfilerMarkerPayload::ProfilerMarkerPayload(ProfilerBacktrace* aStack)
-  : mStack(aStack)
+ProfilerMarkerPayload::ProfilerMarkerPayload(UniqueProfilerBacktrace aStack)
+  : mStack(mozilla::Move(aStack))
 {}
 
 ProfilerMarkerPayload::ProfilerMarkerPayload(const mozilla::TimeStamp& aStartTime,
                                              const mozilla::TimeStamp& aEndTime,
-                                             ProfilerBacktrace* aStack)
+                                             UniqueProfilerBacktrace aStack)
   : mStartTime(aStartTime)
   , mEndTime(aEndTime)
-  , mStack(aStack)
+  , mStack(mozilla::Move(aStack))
 {}
 
 ProfilerMarkerPayload::~ProfilerMarkerPayload()
 {
-  profiler_free_backtrace(mStack);
 }
 
 void
@@ -62,12 +61,12 @@ ProfilerMarkerTracing::ProfilerMarkerTracing(const char* aCategory, TracingMetad
 }
 
 ProfilerMarkerTracing::ProfilerMarkerTracing(const char* aCategory, TracingMetadata aMetaData,
-                                             ProfilerBacktrace* aCause)
+                                             UniqueProfilerBacktrace aCause)
   : mCategory(aCategory)
   , mMetaData(aMetaData)
 {
   if (aCause) {
-    SetStack(aCause);
+    SetStack(mozilla::Move(aCause));
   }
 }
 
@@ -132,8 +131,9 @@ IOMarkerPayload::IOMarkerPayload(const char* aSource,
                                  const char* aFilename,
                                  const mozilla::TimeStamp& aStartTime,
                                  const mozilla::TimeStamp& aEndTime,
-                                 ProfilerBacktrace* aStack)
-  : ProfilerMarkerPayload(aStartTime, aEndTime, aStack),
+                                 UniqueProfilerBacktrace aStack)
+  : ProfilerMarkerPayload(aStartTime, aEndTime,
+                          mozilla::Move(aStack)),
     mSource(aSource)
 {
   mFilename = aFilename ? strdup(aFilename) : nullptr;
@@ -152,6 +152,27 @@ IOMarkerPayload::StreamPayload(SpliceableJSONWriter& aWriter, UniqueStacks& aUni
   if (mFilename != nullptr) {
     aWriter.StringProperty("filename", mFilename);
   }
+}
+
+DOMEventMarkerPayload::DOMEventMarkerPayload(const nsAString& aType, uint16_t aPhase,
+                                             const mozilla::TimeStamp& aStartTime,
+                                             const mozilla::TimeStamp& aEndTime)
+  : ProfilerMarkerPayload(aStartTime, aEndTime, nullptr)
+  , mType(aType)
+  , mPhase(aPhase)
+{
+}
+
+DOMEventMarkerPayload::~DOMEventMarkerPayload()
+{
+}
+
+void
+DOMEventMarkerPayload::StreamPayload(SpliceableJSONWriter& aWriter, UniqueStacks& aUniqueStacks)
+{
+  streamCommonProps("DOMEvent", aWriter, aUniqueStacks);
+  aWriter.StringProperty("type", NS_ConvertUTF16toUTF8(mType).get());
+  aWriter.IntProperty("phase", mPhase);
 }
 
 void

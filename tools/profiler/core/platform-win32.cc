@@ -37,9 +37,7 @@
 // Memory profile
 #include "nsMemoryReporterManager.h"
 
-#ifdef MOZ_STACKWALKING
 #include "mozilla/StackWalk_windows.h"
-#endif
 
 
 class PlatformData {
@@ -49,7 +47,8 @@ class PlatformData {
   // going to use it in the sampler thread. Using GetThreadHandle() will
   // not work in this case. We're using OpenThread because DuplicateHandle
   // for some reason doesn't work in Chrome's sandbox.
-  PlatformData(int aThreadId) : profiled_thread_(OpenThread(THREAD_GET_CONTEXT |
+  explicit PlatformData(int aThreadId) : profiled_thread_(OpenThread(
+                                               THREAD_GET_CONTEXT |
                                                THREAD_SUSPEND_RESUME |
                                                THREAD_QUERY_INFORMATION,
                                                false,
@@ -68,14 +67,14 @@ class PlatformData {
   HANDLE profiled_thread_;
 };
 
-/* static */ PlatformData*
-Sampler::AllocPlatformData(int aThreadId)
+/* static */ auto
+Sampler::AllocPlatformData(int aThreadId) -> UniquePlatformData
 {
-  return new PlatformData(aThreadId);
+  return UniquePlatformData(new PlatformData(aThreadId));
 }
 
-/* static */ void
-Sampler::FreePlatformData(PlatformData* aData)
+void
+Sampler::PlatformDataDestructor::operator()(PlatformData* aData)
 {
   delete aData;
 }
@@ -128,7 +127,7 @@ class SamplerThread : public Thread {
 
       if (!sampler_->IsPaused()) {
         ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-        std::vector<ThreadInfo*> threads =
+        const std::vector<ThreadInfo*>& threads =
           sampler_->GetRegisteredThreads();
         bool isFirstProfiledThread = true;
         for (uint32_t i = 0; i < threads.size(); i++) {
@@ -209,7 +208,6 @@ class SamplerThread : public Thread {
       return;
     }
 
-#ifdef MOZ_STACKWALKING
     // Threads that may invoke JS require extra attention. Since, on windows,
     // the jits also need to modify the same dynamic function table that we need
     // to get a stack trace, we have to be wary of that to avoid deadlock.
@@ -232,7 +230,6 @@ class SamplerThread : public Thread {
       // we cannot deadlock with them, and should let them run as they please.
       ReleaseStackWalkWorkaroundLock();
     }
-#endif
 
 #if V8_HOST_ARCH_X64
     sample->pc = reinterpret_cast<Address>(context.Rip);
@@ -344,71 +341,6 @@ void OS::Startup() {
 
 void OS::Sleep(int milliseconds) {
   ::Sleep(milliseconds);
-}
-
-bool Sampler::RegisterCurrentThread(const char* aName,
-                                    PseudoStack* aPseudoStack,
-                                    bool aIsMainThread, void* stackTop)
-{
-  if (!Sampler::sRegisteredThreadsMutex)
-    return false;
-
-
-  ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-
-  int id = GetCurrentThreadId();
-
-  for (uint32_t i = 0; i < sRegisteredThreads->size(); i++) {
-    ThreadInfo* info = sRegisteredThreads->at(i);
-    if (info->ThreadId() == id && !info->IsPendingDelete()) {
-      // Thread already registered. This means the first unregister will be
-      // too early.
-      ASSERT(false);
-      return false;
-    }
-  }
-
-  set_tls_stack_top(stackTop);
-
-  ThreadInfo* info = new StackOwningThreadInfo(aName, id,
-    aIsMainThread, aPseudoStack, stackTop);
-
-  if (sActiveSampler) {
-    sActiveSampler->RegisterThread(info);
-  }
-
-  sRegisteredThreads->push_back(info);
-
-  return true;
-}
-
-void Sampler::UnregisterCurrentThread()
-{
-  if (!Sampler::sRegisteredThreadsMutex)
-    return;
-
-  tlsStackTop.set(nullptr);
-
-  ::MutexAutoLock lock(*Sampler::sRegisteredThreadsMutex);
-
-  int id = GetCurrentThreadId();
-
-  for (uint32_t i = 0; i < sRegisteredThreads->size(); i++) {
-    ThreadInfo* info = sRegisteredThreads->at(i);
-    if (info->ThreadId() == id && !info->IsPendingDelete()) {
-      if (profiler_is_active()) {
-        // We still want to show the results of this thread if you
-        // save the profile shortly after a thread is terminated.
-        // For now we will defer the delete to profile stop.
-        info->SetPendingDelete();
-        break;
-      } else {
-        delete info;
-        sRegisteredThreads->erase(sRegisteredThreads->begin() + i);
-        break;
-      }
-    }
-  }
 }
 
 void TickSample::PopulateContext(void* aContext)
