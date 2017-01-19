@@ -38,7 +38,7 @@ interface GlobalEventHandlers {
            attribute EventHandler oncanplaythrough;
            attribute EventHandler onchange;
            attribute EventHandler onclick;
-           //(Not implemented)attribute EventHandler onclose;
+           attribute EventHandler onclose;
            attribute EventHandler oncontextmenu;
            //(Not implemented)attribute EventHandler oncuechange;
            attribute EventHandler ondblclick;
@@ -131,6 +131,7 @@ interface GlobalEventHandlers {
            attribute EventHandler onanimationend;
            attribute EventHandler onanimationiteration;
            attribute EventHandler onanimationstart;
+           attribute EventHandler ontransitioncancel;
            attribute EventHandler ontransitionend;
            attribute EventHandler ontransitionrun;
            attribute EventHandler ontransitionstart;
@@ -158,6 +159,13 @@ interface WindowEventHandlers {
            attribute EventHandler onpopstate;
            attribute EventHandler onstorage;
            attribute EventHandler onunload;
+};
+
+[NoInterfaceObject]
+interface DocumentAndElementEventHandlers {
+  attribute EventHandler oncopy;
+  attribute EventHandler oncut;
+  attribute EventHandler onpaste;
 };
 
 // The spec has |attribute OnErrorEventHandler onerror;| on

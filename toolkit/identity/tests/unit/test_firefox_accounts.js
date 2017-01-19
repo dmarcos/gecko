@@ -18,17 +18,17 @@ function MockFXAManager() {
   this.signedInUser = true;
 }
 MockFXAManager.prototype = {
-  getAssertion: function(audience) {
+  getAssertion(audience) {
     let result = this.signedInUser ? TEST_ASSERTION : null;
     return Promise.resolve(result);
   },
 
-  signOut: function() {
+  signOut() {
     this.signedInUser = false;
     return Promise.resolve(null);
   },
 
-  signIn: function(user) {
+  signIn(user) {
     this.signedInUser = user;
     return Promise.resolve(user);
   },
@@ -46,7 +46,7 @@ function withNobodySignedIn() {
 }
 
 function withSomebodySignedIn() {
-  return FirefoxAccounts.fxAccountsManager.signIn('Pertelote');
+  return FirefoxAccounts.fxAccountsManager.signIn("Pertelote");
 }
 
 function test_overall() {

@@ -116,7 +116,7 @@ function waitForEvent(aSubject, aEventName, aTimeoutMs, aTarget) {
     aSubject.removeEventListener(aEventName, listener);
     return aEventOrError;
   }
-  aSubject.addEventListener(aEventName, listener, false);
+  aSubject.addEventListener(aEventName, listener);
   return eventDeferred.promise.then(cleanup, cleanup);
 }
 
@@ -136,7 +136,7 @@ function openPreferencesViaOpenPreferencesAPI(aPane, aAdvancedTab, aOptions) {
       let selectedAdvancedTab = aAdvancedTab && doc.getElementById("advancedPrefs").selectedTab.id;
       if (!aOptions || !aOptions.leaveOpen)
         gBrowser.removeCurrentTab();
-      deferred.resolve({selectedPane: selectedPane, selectedAdvancedTab: selectedAdvancedTab});
+      deferred.resolve({selectedPane, selectedAdvancedTab});
     });
   }, true);
 

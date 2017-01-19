@@ -10,6 +10,7 @@ DIRS += [
     'pdfjs',
     'pocket',
     'webcompat',
+    'shield-recipe-client',
 ]
 
 # Only include the following system add-ons if building Aurora or Nightly
@@ -18,4 +19,10 @@ if 'a' in CONFIG['GRE_MILESTONE']:
         'flyweb',
         'formautofill',
         'presentation',
+    ]
+
+# Only include mortar system add-ons if we locally enable it
+if CONFIG['MOZ_MORTAR']:
+    DIRS += [
+        'mortar',
     ]

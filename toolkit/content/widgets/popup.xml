@@ -331,6 +331,19 @@
         var prevFocus = this._prevFocus ? this._prevFocus.get() : null;
         this._currentFocus = null;
         this._prevFocus = null;
+
+        // Avoid changing focus if focus changed while we hide the popup
+        // (This can happen e.g. if the popup is hiding as a result of a
+        // click/keypress that focused something)
+        let nowFocus;
+        try {
+          nowFocus = document.commandDispatcher.focusedElement;
+        } catch (e) {
+          nowFocus = document.activeElement;
+        }
+        if (nowFocus && nowFocus != currentFocus)
+          return;
+
         if (prevFocus && this.getAttribute("norestorefocus") != "true") {
           // Try to restore focus
           try {
@@ -424,13 +437,11 @@
           if (position.indexOf("start_") == 0) {
             container.dir = "reverse";
             this.setAttribute("side", isRTL ? "left" : "right");
-          }
-          else {
+          } else {
             container.dir = "";
             this.setAttribute("side", isRTL ? "right" : "left");
           }
-        }
-        else if (position.indexOf("before_") == 0 || position.indexOf("after_") == 0) {
+        } else if (position.indexOf("before_") == 0 || position.indexOf("after_") == 0) {
           container.orient = "";
           arrowbox.orient = "";
           if (position.indexOf("_end") > 0) {
@@ -443,8 +454,7 @@
           if (position.indexOf("before_") == 0) {
             container.dir = "reverse";
             this.setAttribute("side", "bottom");
-          }
-          else {
+          } else {
             container.dir = "";
             this.setAttribute("side", "top");
           }
@@ -472,11 +482,9 @@
         var fadeDelay = 0;
         if (fade == "fast") {
           fadeDelay = 1;
-        }
-        else if (fade == "slow") {
+        } else if (fade == "slow") {
           fadeDelay = 4000;
-        }
-        else {
+        } else {
           return;
         }
 
@@ -491,8 +499,7 @@
           if (animate) {
             this.setAttribute("animate", "fade");
           }
-        }
-        else if (animate) {
+        } else if (animate) {
           this.setAttribute("animate", "cancel");
         }
       </handler>

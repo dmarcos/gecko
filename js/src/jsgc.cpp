@@ -189,6 +189,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/TimeStamp.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -245,6 +246,7 @@ using namespace js::gc;
 
 using mozilla::ArrayLength;
 using mozilla::Get;
+using mozilla::HashCodeScrambler;
 using mozilla::Maybe;
 using mozilla::Swap;
 
@@ -509,8 +511,6 @@ FinalizeTypedArenas(FreeOp* fop,
     size_t thingSize = Arena::thingSize(thingKind);
     size_t thingsPerArena = Arena::thingsPerArena(thingKind);
 
-    JSContext* cx = fop->onMainThread() ? fop->runtime()->contextFromMainThread() : nullptr;
-
     while (Arena* arena = *src) {
         *src = arena->next;
         size_t nmarked = arena->finalize<T>(fop, thingKind, thingSize);
@@ -524,7 +524,7 @@ FinalizeTypedArenas(FreeOp* fop,
             fop->runtime()->gc.releaseArena(arena, maybeLock.ref());
 
         budget.step(thingsPerArena);
-        if (budget.isOverBudget(cx))
+        if (budget.isOverBudget())
             return false;
     }
 
@@ -813,15 +813,12 @@ GCRuntime::GCRuntime(JSRuntime* rt) :
     nextCellUniqueId_(LargestTaggedNullCellPointer + 1), // Ensure disjoint from null tagged pointers.
     numArenasFreeCommitted(0),
     verifyPreData(nullptr),
-    interruptCallbackRequested(false),
-    currentBudget(nullptr),
     chunkAllocationSinceLastGC(false),
     lastGCTime(PRMJ_Now()),
     mode(JSGC_MODE_INCREMENTAL),
     numActiveZoneIters(0),
     cleanUpEverything(false),
     grayBufferState(GCRuntime::GrayBufferState::Unused),
-    grayBitsValid(false),
     majorGCTriggerReason(JS::gcreason::NO_REASON),
     minorGCTriggerReason(JS::gcreason::NO_REASON),
     fullGCForAtomsRequested_(false),
@@ -1382,16 +1379,12 @@ namespace {
 class AutoNotifyGCActivity {
   public:
     explicit AutoNotifyGCActivity(GCRuntime& gc) : gc_(gc) {
-        if (!gc_.isIncrementalGCInProgress()) {
-            gcstats::AutoPhase ap(gc_.stats, gcstats::PHASE_GC_BEGIN);
+        if (!gc_.isIncrementalGCInProgress())
             gc_.callGCCallback(JSGC_BEGIN);
-        }
     }
     ~AutoNotifyGCActivity() {
-        if (!gc_.isIncrementalGCInProgress()) {
-            gcstats::AutoPhase ap(gc_.stats, gcstats::PHASE_GC_END);
+        if (!gc_.isIncrementalGCInProgress())
             gc_.callGCCallback(JSGC_END);
-        }
     }
 
   private:
@@ -2101,7 +2094,7 @@ void
 MovingTracer::onObjectEdge(JSObject** objp)
 {
     JSObject* obj = *objp;
-    if (IsForwarded(obj))
+    if (obj->runtimeFromAnyThread() == runtime() && IsForwarded(obj))
         *objp = Forwarded(obj);
 }
 
@@ -2109,7 +2102,7 @@ void
 MovingTracer::onShapeEdge(Shape** shapep)
 {
     Shape* shape = *shapep;
-    if (IsForwarded(shape))
+    if (shape->runtimeFromAnyThread() == runtime() && IsForwarded(shape))
         *shapep = Forwarded(shape);
 }
 
@@ -2117,7 +2110,7 @@ void
 MovingTracer::onStringEdge(JSString** stringp)
 {
     JSString* string = *stringp;
-    if (IsForwarded(string))
+    if (string->runtimeFromAnyThread() == runtime() && IsForwarded(string))
         *stringp = Forwarded(string);
 }
 
@@ -2125,7 +2118,7 @@ void
 MovingTracer::onScriptEdge(JSScript** scriptp)
 {
     JSScript* script = *scriptp;
-    if (IsForwarded(script))
+    if (script->runtimeFromAnyThread() == runtime() && IsForwarded(script))
         *scriptp = Forwarded(script);
 }
 
@@ -2133,7 +2126,7 @@ void
 MovingTracer::onLazyScriptEdge(LazyScript** lazyp)
 {
     LazyScript* lazy = *lazyp;
-    if (IsForwarded(lazy))
+    if (lazy->runtimeFromAnyThread() == runtime() && IsForwarded(lazy))
         *lazyp = Forwarded(lazy);
 }
 
@@ -2141,7 +2134,7 @@ void
 MovingTracer::onBaseShapeEdge(BaseShape** basep)
 {
     BaseShape* base = *basep;
-    if (IsForwarded(base))
+    if (base->runtimeFromAnyThread() == runtime() && IsForwarded(base))
         *basep = Forwarded(base);
 }
 
@@ -2149,7 +2142,7 @@ void
 MovingTracer::onScopeEdge(Scope** scopep)
 {
     Scope* scope = *scopep;
-    if (IsForwarded(scope))
+    if (scope->runtimeFromAnyThread() == runtime() && IsForwarded(scope))
         *scopep = Forwarded(scope);
 }
 
@@ -2914,11 +2907,8 @@ SliceBudget::describe(char* buffer, size_t maxlen) const
 }
 
 bool
-SliceBudget::checkOverBudget(JSContext* cx)
+SliceBudget::checkOverBudget()
 {
-    if (cx)
-        cx->gc.checkInterruptCallback(cx);
-
     bool over = PRMJ_Now() >= deadline;
     if (!over)
         counter = CounterReset;
@@ -4166,7 +4156,7 @@ js::gc::MarkingValidator::nonIncrementalMark(AutoLockForExclusiveAccess& lock)
      * For saving, smush all of the keys into one big table and split them back
      * up into per-zone tables when restoring.
      */
-    gc::WeakKeyTable savedWeakKeys;
+    gc::WeakKeyTable savedWeakKeys(SystemAllocPolicy(), runtime->randomHashCodeScrambler());
     if (!savedWeakKeys.init())
         return;
 
@@ -4873,6 +4863,8 @@ MAKE_GC_SWEEP_TASK(SweepMiscTask);
 SweepAtomsTask::run()
 {
     runtime->sweepAtoms();
+    for (CompartmentsIter comp(runtime, SkipAtoms); !comp.done(); comp.next())
+        comp->sweepVarNames();
 }
 
 /* virtual */ void
@@ -5450,7 +5442,7 @@ GCRuntime::endSweepPhase(bool destroyingRuntime, AutoLockForExclusiveAccess& loc
 
         /* If we finished a full GC, then the gray bits are correct. */
         if (isFull)
-            grayBitsValid = true;
+            rt->setGCGrayBitsValid(true);
     }
 
     finishMarkingValidation();
@@ -5510,7 +5502,7 @@ GCRuntime::compactPhase(JS::gcreason::Reason reason, SliceBudget& sliceBudget,
             updatePointersToRelocatedCells(zone, lock);
         zone->setGCState(Zone::Finished);
         zonesToMaybeCompact.removeFront();
-        if (sliceBudget.isOverBudget(rt->contextFromMainThread()))
+        if (sliceBudget.isOverBudget())
             break;
     }
 
@@ -5892,7 +5884,7 @@ GCRuntime::incrementalCollectSlice(SliceBudget& budget, JS::gcreason::Reason rea
          * now exhasted.
          */
         beginSweepPhase(destroyingRuntime, lock);
-        if (budget.isOverBudget(rt->contextFromMainThread()))
+        if (budget.isOverBudget())
             break;
 
         /*
@@ -6316,16 +6308,6 @@ GCRuntime::collect(bool nonincrementalByAPI, SliceBudget budget, JS::gcreason::R
     // Check if we are allowed to GC at this time before proceeding.
     if (!checkIfGCAllowedInCurrentState(reason))
         return;
-
-    interruptCallbackRequested = false;
-    {
-        AutoLockGC lock(rt);
-        currentBudget = &budget;
-    }
-    auto guard = mozilla::MakeScopeExit([&] {
-            AutoLockGC lock(rt);
-            currentBudget = nullptr;
-    });
 
     AutoTraceLog logGC(TraceLoggerForMainThread(rt), TraceLogger_GC);
     AutoStopVerifyingBarriers av(rt, IsShutdownGC(reason));
@@ -7693,48 +7675,3 @@ js::gc::Cell::dump() const
     dump(stderr);
 }
 #endif
-
-bool
-JS::AddGCInterruptCallback(JSContext* cx, GCInterruptCallback callback)
-{
-    return cx->runtime()->gc.addInterruptCallback(callback);
-}
-
-void
-JS::RequestGCInterruptCallback(JSContext* cx)
-{
-    cx->runtime()->gc.requestInterruptCallback();
-}
-
-bool
-GCRuntime::addInterruptCallback(JS::GCInterruptCallback callback)
-{
-    return interruptCallbacks.append(callback);
-}
-
-void
-GCRuntime::requestInterruptCallback()
-{
-    AutoLockGC lock(rt);
-    if (currentBudget) {
-        interruptCallbackRequested = true;
-        currentBudget->requestFullCheck();
-    }
-}
-
-void
-GCRuntime::invokeInterruptCallback(JSContext* cx)
-{
-    interruptCallbackRequested = false;
-
-    stats.suspendPhases();
-
-    JS::AutoAssertNoGC nogc(cx);
-    JS::AutoAssertOnBarrier nobarrier(cx);
-    JS::AutoSuppressGCAnalysis suppress(cx);
-    for (JS::GCInterruptCallback callback : interruptCallbacks) {
-        (*callback)(cx);
-    }
-
-    stats.resumePhases();
-}

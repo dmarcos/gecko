@@ -416,6 +416,8 @@ MediaDecoder::MediaDecoder(MediaDecoderOwner* aOwner)
   , INIT_CANONICAL(mDecoderPosition, 0)
   , INIT_CANONICAL(mIsVisible, !aOwner->IsHidden())
   , mTelemetryReported(false)
+  , mIsMediaElement(!!aOwner->GetMediaElement())
+  , mElement(aOwner->GetMediaElement())
 {
   MOZ_ASSERT(NS_IsMainThread());
   MediaMemoryTracker::AddMediaDecoder(this);
@@ -631,9 +633,6 @@ void
 MediaDecoder::SetStateMachineParameters()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  if (mMinimizePreroll) {
-    mDecoderStateMachine->DispatchMinimizePrerollUntilPlaybackStarts();
-  }
   if (mPlaybackRate != 1 && mPlaybackRate != 0) {
     mDecoderStateMachine->DispatchSetPlaybackRate(mPlaybackRate);
   }
@@ -753,10 +752,10 @@ MediaDecoder::CallSeek(const SeekTarget& aTarget, dom::Promise* aPromise)
   DiscardOngoingSeekIfExists();
 
   mSeekDOMPromise = aPromise;
-  mSeekRequest.Begin(
-    mDecoderStateMachine->InvokeSeek(aTarget)
-    ->Then(AbstractThread::MainThread(), __func__, this,
-           &MediaDecoder::OnSeekResolved, &MediaDecoder::OnSeekRejected));
+  mDecoderStateMachine->InvokeSeek(aTarget)
+  ->Then(AbstractThread::MainThread(), __func__, this,
+         &MediaDecoder::OnSeekResolved, &MediaDecoder::OnSeekRejected)
+  ->Track(mSeekRequest);
 }
 
 double
@@ -1650,6 +1649,8 @@ MediaDecoderOwner*
 MediaDecoder::GetOwner() const
 {
   MOZ_ASSERT(NS_IsMainThread());
+  // Check object lifetime when mOwner points to a media element.
+  MOZ_DIAGNOSTIC_ASSERT(!mOwner || !mIsMediaElement || mElement);
   // mOwner is valid until shutdown.
   return mOwner;
 }

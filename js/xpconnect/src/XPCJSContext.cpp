@@ -1166,6 +1166,7 @@ AutoLockWatchdog::~AutoLockWatchdog()
 static void
 WatchdogMain(void* arg)
 {
+    mozilla::AutoProfilerRegister registerThread("JS Watchdog");
     PR_SetCurrentThreadName("JS Watchdog");
 
     Watchdog* self = static_cast<Watchdog*>(arg);
@@ -1448,6 +1449,9 @@ ReloadPrefsCallback(const char* pref, void* data)
                                                  "baselinejit.unsafe_eager_compilation");
     bool useIonEager = Preferences::GetBool(JS_OPTIONS_DOT_STR "ion.unsafe_eager_compilation");
 
+    int32_t baselineThreshold = Preferences::GetInt(JS_OPTIONS_DOT_STR "baselinejit.threshold", -1);
+    int32_t ionThreshold = Preferences::GetInt(JS_OPTIONS_DOT_STR "ion.threshold", -1);
+
     sDiscardSystemSource = Preferences::GetBool(JS_OPTIONS_DOT_STR "discardSystemSource");
 
     bool useAsyncStack = Preferences::GetBool(JS_OPTIONS_DOT_STR "asyncstack");
@@ -1494,9 +1498,9 @@ ReloadPrefsCallback(const char* pref, void* data)
     JS_SetParallelParsingEnabled(cx, parallelParsing);
     JS_SetOffthreadIonCompilationEnabled(cx, offthreadIonCompilation);
     JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_BASELINE_WARMUP_TRIGGER,
-                                  useBaselineEager ? 0 : -1);
+                                  useBaselineEager ? 0 : baselineThreshold);
     JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_ION_WARMUP_TRIGGER,
-                                  useIonEager ? 0 : -1);
+                                  useIonEager ? 0 : ionThreshold);
 }
 
 XPCJSContext::~XPCJSContext()
@@ -1551,9 +1555,6 @@ XPCJSContext::~XPCJSContext()
 
     delete mThisTranslatorMap;
     mThisTranslatorMap = nullptr;
-
-    delete mNativeScriptableSharedMap;
-    mNativeScriptableSharedMap = nullptr;
 
     delete mDyingWrappedNativeProtoMap;
     mDyingWrappedNativeProtoMap = nullptr;
@@ -3244,7 +3245,6 @@ XPCJSContext::XPCJSContext()
    mClassInfo2NativeSetMap(ClassInfo2NativeSetMap::newMap(XPC_NATIVE_SET_MAP_LENGTH)),
    mNativeSetMap(NativeSetMap::newMap(XPC_NATIVE_SET_MAP_LENGTH)),
    mThisTranslatorMap(IID2ThisTranslatorMap::newMap(XPC_THIS_TRANSLATOR_MAP_LENGTH)),
-   mNativeScriptableSharedMap(XPCNativeScriptableSharedMap::newMap(XPC_NATIVE_JSCLASS_MAP_LENGTH)),
    mDyingWrappedNativeProtoMap(XPCWrappedNativeProtoMap::newMap(XPC_DYING_NATIVE_PROTO_MAP_LENGTH)),
    mGCIsRunning(false),
    mNativesToReleaseArray(),
@@ -3490,7 +3490,6 @@ XPCJSContext::newXPCJSContext()
         self->GetClassInfo2NativeSetMap()       &&
         self->GetNativeSetMap()                 &&
         self->GetThisTranslatorMap()            &&
-        self->GetNativeScriptableSharedMap()    &&
         self->GetDyingWrappedNativeProtoMap()   &&
         self->mWatchdogManager) {
         return self;
@@ -3532,7 +3531,6 @@ bool
 XPCJSContext::DescribeCustomObjects(JSObject* obj, const js::Class* clasp,
                                     char (&name)[72]) const
 {
-    XPCNativeScriptableInfo* si = nullptr;
 
     if (!IS_PROTO_CLASS(clasp)) {
         return false;
@@ -3540,13 +3538,13 @@ XPCJSContext::DescribeCustomObjects(JSObject* obj, const js::Class* clasp,
 
     XPCWrappedNativeProto* p =
         static_cast<XPCWrappedNativeProto*>(xpc_GetJSPrivate(obj));
-    si = p->GetScriptableInfo();
-
-    if (!si) {
+    nsCOMPtr<nsIXPCScriptable> scr = p->GetScriptable();
+    if (!scr) {
         return false;
     }
 
-    SprintfLiteral(name, "JS Object (%s - %s)", clasp->name, si->GetJSClass()->name);
+    SprintfLiteral(name, "JS Object (%s - %s)",
+                   clasp->name, scr->GetJSClass()->name);
     return true;
 }
 

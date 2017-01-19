@@ -432,6 +432,8 @@ ToStyleAnimationValue(const Animatable& aAnimatable)
   StyleAnimationValue result;
 
   switch (aAnimatable.type()) {
+    case Animatable::Tnull_t:
+      break;
     case Animatable::TArrayOfTransformFunction: {
       const InfallibleTArray<TransformFunction>& transforms =
         aAnimatable.get_ArrayOfTransformFunction();
@@ -471,9 +473,8 @@ Layer::SetAnimations(const AnimationArray& aAnimations)
         break;
     }
 
-    if (animation.baseStyle().type() != BaseAnimationStyle::Tnull_t) {
-      mBaseAnimationStyle =
-        ToStyleAnimationValue(animation.baseStyle().get_Animatable());
+    if (animation.baseStyle().type() != Animatable::Tnull_t) {
+      mBaseAnimationStyle = ToStyleAnimationValue(animation.baseStyle());
     }
 
     AnimData* data = mAnimationData.AppendElement();
@@ -1181,6 +1182,43 @@ ContainerLayer::InsertAfter(Layer* aChild, Layer* aAfter)
   return true;
 }
 
+void
+ContainerLayer::RemoveAllChildren()
+{
+  // Optimizes "while (mFirstChild) ContainerLayer::RemoveChild(mFirstChild);"
+  Layer* current = mFirstChild;
+
+  // This is inlining DidRemoveChild() on each layer; we can skip the calls
+  // to NotifyPaintedLayerRemoved as it gets taken care of when as we call
+  // NotifyRemoved prior to removing any layers.
+  while (current) {
+    Layer* next = current->GetNextSibling();
+    if (current->GetType() == TYPE_READBACK) {
+      static_cast<ReadbackLayer*>(current)->NotifyRemoved();
+    }
+    current = next;
+  }
+
+  current = mFirstChild;
+  mFirstChild = nullptr;
+  while (current) {
+    MOZ_ASSERT(!current->GetPrevSibling());
+
+    Layer* next = current->GetNextSibling();
+    current->SetParent(nullptr);
+    current->SetNextSibling(nullptr);
+    if (next) {
+      next->SetPrevSibling(nullptr);
+    }
+    NS_RELEASE(current);
+    current = next;
+  }
+}
+
+// Note that ContainerLayer::RemoveAllChildren is an optimized
+// version of this code; if you make changes to ContainerLayer::RemoveChild
+// consider whether the matching changes need to be made to
+// ContainerLayer::RemoveAllChildren
 bool
 ContainerLayer::RemoveChild(Layer *aChild)
 {
@@ -1624,6 +1662,10 @@ ContainerLayer::HasOpaqueAncestorLayer(Layer* aLayer)
   return false;
 }
 
+// Note that ContainerLayer::RemoveAllChildren contains an optimized
+// version of this code; if you make changes to ContainerLayer::DidRemoveChild
+// consider whether the matching changes need to be made to
+// ContainerLayer::RemoveAllChildren
 void
 ContainerLayer::DidRemoveChild(Layer* aLayer)
 {
@@ -2096,6 +2138,9 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
       aStream << nsPrintfCString(" [metrics%d=", i).get();
       AppendToString(aStream, mScrollMetadata[i], "", "]");
     }
+  }
+  if (!mAnimations.IsEmpty()) {
+    aStream << nsPrintfCString(" [%d animations]", (int) mAnimations.Length()).get();
   }
 }
 

@@ -21,7 +21,7 @@ const HTTP_ENDPOINT_WITH_KEYS = "/browser/browser/base/content/test/general/brow
 var gTests = [
   {
     desc: "FxA OAuth - should open a new tab, complete OAuth flow",
-    run: function() {
+    run() {
       return new Promise(function(resolve, reject) {
         let tabOpened = false;
         let properURL = "http://example.com/browser/browser/base/content/test/general/browser_fxa_oauth.html";
@@ -74,7 +74,7 @@ var gTests = [
   },
   {
     desc: "FxA OAuth - should open a new tab, complete OAuth flow when forcing auth",
-    run: function() {
+    run() {
       return new Promise(function(resolve, reject) {
         let tabOpened = false;
         let properURL = "http://example.com/browser/browser/base/content/test/general/browser_fxa_oauth.html";
@@ -131,7 +131,7 @@ var gTests = [
   },
   {
     desc: "FxA OAuth - should receive an error when there's a state mismatch",
-    run: function() {
+    run() {
       return new Promise(function(resolve, reject) {
         let tabOpened = false;
 
@@ -140,7 +140,7 @@ var gTests = [
 
           // It should have passed in the expected non-matching state value.
           let queryString = gBrowser.currentURI.spec.split("?")[1];
-          Assert.ok(queryString.indexOf('state=different-state') >= 0);
+          Assert.ok(queryString.indexOf("state=different-state") >= 0);
 
           tabOpened = true;
         });
@@ -169,7 +169,7 @@ var gTests = [
   },
   {
     desc: "FxA OAuth - should be able to request keys during OAuth flow",
-    run: function() {
+    run() {
       return new Promise(function(resolve, reject) {
         let tabOpened = false;
 
@@ -177,8 +177,8 @@ var gTests = [
           Assert.ok("Tab successfully opened");
 
           // It should have asked for keys.
-          let queryString = gBrowser.currentURI.spec.split('?')[1];
-          Assert.ok(queryString.indexOf('keys=true') >= 0);
+          let queryString = gBrowser.currentURI.spec.split("?")[1];
+          Assert.ok(queryString.indexOf("keys=true") >= 0);
 
           tabOpened = true;
         });
@@ -211,7 +211,7 @@ var gTests = [
   },
   {
     desc: "FxA OAuth - should not receive keys if not explicitly requested",
-    run: function() {
+    run() {
       return new Promise(function(resolve, reject) {
         let tabOpened = false;
 
@@ -219,8 +219,8 @@ var gTests = [
           Assert.ok("Tab successfully opened");
 
           // It should not have asked for keys.
-          let queryString = gBrowser.currentURI.spec.split('?')[1];
-          Assert.ok(queryString.indexOf('keys=true') == -1);
+          let queryString = gBrowser.currentURI.spec.split("?")[1];
+          Assert.ok(queryString.indexOf("keys=true") == -1);
 
           tabOpened = true;
         });
@@ -252,7 +252,7 @@ var gTests = [
   },
   {
     desc: "FxA OAuth - should receive an error if keys could not be obtained",
-    run: function() {
+    run() {
       return new Promise(function(resolve, reject) {
         let tabOpened = false;
 
@@ -260,8 +260,8 @@ var gTests = [
           Assert.ok("Tab successfully opened");
 
           // It should have asked for keys.
-          let queryString = gBrowser.currentURI.spec.split('?')[1];
-          Assert.ok(queryString.indexOf('keys=true') >= 0);
+          let queryString = gBrowser.currentURI.spec.split("?")[1];
+          Assert.ok(queryString.indexOf("keys=true") >= 0);
 
           tabOpened = true;
         });
@@ -295,13 +295,13 @@ var gTests = [
 function waitForTab(aCallback) {
   let container = gBrowser.tabContainer;
   container.addEventListener("TabOpen", function tabOpener(event) {
-    container.removeEventListener("TabOpen", tabOpener, false);
+    container.removeEventListener("TabOpen", tabOpener);
     gBrowser.addEventListener("load", function listener() {
       gBrowser.removeEventListener("load", listener, true);
       let tab = event.target;
       aCallback(tab);
     }, true);
-  }, false);
+  });
 }
 
 function test() {

@@ -24,10 +24,6 @@
 #include "mozilla/dom/MediaKeyStatusMapBinding.h" // For MediaKeyStatus
 #include "mozilla/dom/MediaKeyMessageEventBinding.h" // For MediaKeyMessageType
 
-#if defined(XP_WIN)
-#include "mozilla/WindowsVersion.h"
-#endif
-
 using namespace std;
 
 using namespace mozilla;
@@ -474,7 +470,7 @@ GetNodeId(const nsAString& aOrigin,
   UniquePtr<GetNodeIdCallback> callback(new TestGetNodeIdCallback(nodeId,
                                                                   result));
 
-  PrincipalOriginAttributes attrs;
+  OriginAttributes attrs;
   attrs.mPrivateBrowsingId = aInPBMode ? 1 : 0;
 
   nsAutoCString suffix;
@@ -1535,11 +1531,6 @@ TEST(GeckoMediaPlugins, GMPPluginVoucher) {
 
 #if defined(XP_WIN)
 TEST(GeckoMediaPlugins, GMPOutputProtection) {
-  // Output Protection is not available pre-Vista.
-  if (!IsVistaOrLater()) {
-    return;
-  }
-
   RefPtr<GMPStorageTest> runner = new GMPStorageTest();
   runner->DoTest(&GMPStorageTest::TestOutputProtection);
 }

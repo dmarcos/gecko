@@ -2746,6 +2746,8 @@ private:
  */
 class nsDisplayBackgroundImage : public nsDisplayImageContainer {
 public:
+  typedef mozilla::StyleGeometryBox StyleGeometryBox;
+
   /**
    * aLayer signifies which background layer this item represents.
    * aIsThemed should be the value of aFrame->IsThemed.
@@ -2823,8 +2825,10 @@ public:
   virtual already_AddRefed<imgIContainer> GetImage() override;
   virtual nsRect GetDestRect() override;
 
-  static nsRegion GetInsideClipRegion(nsDisplayItem* aItem, uint8_t aClip,
-                                      const nsRect& aRect, const nsRect& aBackgroundRect);
+  static nsRegion GetInsideClipRegion(nsDisplayItem* aItem,
+                                      StyleGeometryBox aClip,
+                                      const nsRect& aRect,
+                                      const nsRect& aBackgroundRect);
 
   virtual bool ShouldFixToViewport(nsDisplayListBuilder* aBuilder) override;
 
@@ -4446,6 +4450,9 @@ public:
 
   virtual bool ShouldBuildLayerEvenIfInvisible(nsDisplayListBuilder* aBuilder) override
   {
+    if (!mList.GetChildren()->GetTop()) {
+      return false;
+    }
     return mList.GetChildren()->GetTop()->ShouldBuildLayerEvenIfInvisible(aBuilder);
   }
 
@@ -4472,7 +4479,9 @@ public:
 
   virtual void
   DoUpdateBoundsPreserves3D(nsDisplayListBuilder* aBuilder) override {
-    static_cast<nsDisplayTransform*>(mList.GetChildren()->GetTop())->DoUpdateBoundsPreserves3D(aBuilder);
+    if (mList.GetChildren()->GetTop()) {
+      static_cast<nsDisplayTransform*>(mList.GetChildren()->GetTop())->DoUpdateBoundsPreserves3D(aBuilder);
+    }
   }
 
 private:

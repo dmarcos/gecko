@@ -136,7 +136,7 @@ NS_NewSVGOuterSVGAnonChildFrame(nsIPresShell* aPresShell, nsStyleContext* aConte
 nsIFrame*
 NS_NewSVGInnerSVGFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
-NS_NewSVGPathGeometryFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+NS_NewSVGGeometryFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
 NS_NewSVGGFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
@@ -1539,7 +1539,6 @@ nsCSSFrameConstructor::nsCSSFrameConstructor(nsIDocument* aDocument,
   , mRootElementFrame(nullptr)
   , mRootElementStyleFrame(nullptr)
   , mDocElementContainingBlock(nullptr)
-  , mGfxScrollFrame(nullptr)
   , mPageSequenceFrame(nullptr)
   , mCurrentDepth(0)
 #ifdef DEBUG
@@ -1663,40 +1662,40 @@ nsCSSFrameConstructor::CreateGeneratedContent(nsFrameConstructorState& aState,
   // Get the content value
   const nsStyleContentData &data =
     aStyleContext->StyleContent()->ContentAt(aContentIndex);
-  nsStyleContentType type = data.mType;
-
-  if (eStyleContentType_Image == type) {
-    if (!data.mContent.mImage) {
-      // CSS had something specified that couldn't be converted to an
-      // image object
-      return nullptr;
-    }
-
-    // Create an image content object and pass it the image request.
-    // XXX Check if it's an image type we can handle...
-
-    RefPtr<NodeInfo> nodeInfo;
-    nodeInfo = mDocument->NodeInfoManager()->
-      GetNodeInfo(nsGkAtoms::mozgeneratedcontentimage, nullptr,
-                  kNameSpaceID_XHTML, nsIDOMNode::ELEMENT_NODE);
-
-    nsCOMPtr<nsIContent> content;
-    NS_NewGenConImageContent(getter_AddRefs(content), nodeInfo.forget(),
-                             data.mContent.mImage);
-    return content.forget();
-  }
+  nsStyleContentType type = data.GetType();
 
   switch (type) {
-  case eStyleContentType_String:
-    return CreateGenConTextNode(aState,
-                                nsDependentString(data.mContent.mString),
-                                nullptr, nullptr);
+    case eStyleContentType_Image: {
+      imgRequestProxy* image = data.GetImage();
+      if (!image) {
+        // CSS had something specified that couldn't be converted to an
+        // image object
+        return nullptr;
+      }
 
-  case eStyleContentType_Attr:
-    {
+      // Create an image content object and pass it the image request.
+      // XXX Check if it's an image type we can handle...
+
+      RefPtr<NodeInfo> nodeInfo;
+      nodeInfo = mDocument->NodeInfoManager()->
+        GetNodeInfo(nsGkAtoms::mozgeneratedcontentimage, nullptr,
+                    kNameSpaceID_XHTML, nsIDOMNode::ELEMENT_NODE);
+
+      nsCOMPtr<nsIContent> content;
+      NS_NewGenConImageContent(getter_AddRefs(content), nodeInfo.forget(),
+                               image);
+      return content.forget();
+    }
+
+    case eStyleContentType_String:
+      return CreateGenConTextNode(aState,
+                                  nsDependentString(data.GetString()),
+                                  nullptr, nullptr);
+
+    case eStyleContentType_Attr: {
       nsCOMPtr<nsIAtom> attrName;
       int32_t attrNameSpace = kNameSpaceID_None;
-      nsAutoString contentString(data.mContent.mString);
+      nsAutoString contentString(data.GetString());
 
       int32_t barIndex = contentString.FindChar('|'); // CSS namespace delimiter
       if (-1 != barIndex) {
@@ -1729,10 +1728,9 @@ nsCSSFrameConstructor::CreateGeneratedContent(nsFrameConstructorState& aState,
       return content.forget();
     }
 
-  case eStyleContentType_Counter:
-  case eStyleContentType_Counters:
-    {
-      nsCSSValue::Array* counters = data.mContent.mCounters;
+    case eStyleContentType_Counter:
+    case eStyleContentType_Counters: {
+      nsCSSValue::Array* counters = data.GetCounters();
       nsCounterList* counterList = mCounterManager.CounterListFor(
           nsDependentString(counters->Item(0).GetStringBufferValue()));
 
@@ -1748,15 +1746,10 @@ nsCSSFrameConstructor::CreateGeneratedContent(nsFrameConstructorState& aState,
                                   initializer);
     }
 
-  case eStyleContentType_Image:
-    NS_NOTREACHED("handled by if above");
-    return nullptr;
-
-  case eStyleContentType_OpenQuote:
-  case eStyleContentType_CloseQuote:
-  case eStyleContentType_NoOpenQuote:
-  case eStyleContentType_NoCloseQuote:
-    {
+    case eStyleContentType_OpenQuote:
+    case eStyleContentType_CloseQuote:
+    case eStyleContentType_NoOpenQuote:
+    case eStyleContentType_NoCloseQuote: {
       nsQuoteNode* node =
         new nsQuoteNode(type, aContentIndex);
 
@@ -1767,8 +1760,7 @@ nsCSSFrameConstructor::CreateGeneratedContent(nsFrameConstructorState& aState,
                                   initializer);
     }
 
-  case eStyleContentType_AltContent:
-    {
+    case eStyleContentType_AltContent: {
       // Use the "alt" attribute; if that fails and the node is an HTML
       // <input>, try the value attribute and then fall back to some default
       // localized text we have.
@@ -1799,10 +1791,10 @@ nsCSSFrameConstructor::CreateGeneratedContent(nsFrameConstructorState& aState,
       break;
     }
 
-  case eStyleContentType_Uninitialized:
-    NS_NOTREACHED("uninitialized content type");
-    return nullptr;
-  } // switch
+    case eStyleContentType_Uninitialized:
+      NS_NOTREACHED("uninitialized content type");
+      return nullptr;
+  }
 
   return nullptr;
 }
@@ -2444,7 +2436,6 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
   RefPtr<nsStyleContext> styleContext;
   styleContext = mPresShell->StyleSet()->ResolveStyleFor(aDocElement,
                                                          nullptr,
-                                                         ConsumeStyleBehavior::Consume,
                                                          LazyComputeBehavior::Allow);
 
   const nsStyleDisplay* display = styleContext->StyleDisplay();
@@ -2481,7 +2472,6 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
       // element.)
       styleContext = mPresShell->StyleSet()->ResolveStyleFor(aDocElement,
                                                              nullptr,
-                                                             ConsumeStyleBehavior::Consume,
                                                              LazyComputeBehavior::Allow);
       display = styleContext->StyleDisplay();
     }
@@ -2627,7 +2617,8 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
     newFrame = frameItems.FirstChild();
     NS_ASSERTION(frameItems.OnlyChild(), "multiple root element frames");
   } else {
-    MOZ_ASSERT(display->mDisplay == StyleDisplay::Block,
+    MOZ_ASSERT(display->mDisplay == StyleDisplay::Block ||
+               display->mDisplay == StyleDisplay::FlowRoot,
                "Unhandled display type for root element");
     contentFrame = NS_NewBlockFormattingContext(mPresShell, styleContext);
     nsFrameItems frameItems;
@@ -2791,7 +2782,7 @@ nsCSSFrameConstructor::SetUpDocElementContainingBlock(nsIContent* aDocElement)
       the root element.
     mDocElementContainingBlock is the parent of mRootElementFrame
       (i.e. nsCanvasFrame or nsRootBoxFrame)
-    mGfxScrollFrame is the nsHTMLScrollFrame mentioned above, or null if there isn't one
+
     mPageSequenceFrame is the nsSimplePageSequenceFrame, or null if there isn't one
   */
 
@@ -2910,7 +2901,6 @@ nsCSSFrameConstructor::SetUpDocElementContainingBlock(nsIContent* aDocElement)
                                                   true,
                                                   newFrame);
       parentFrame = newFrame;
-      mGfxScrollFrame = newFrame;
   }
 
   rootFrame->SetStyleContextWithoutNotification(rootPseudoStyle);
@@ -3664,13 +3654,13 @@ nsCSSFrameConstructor::FindInputData(Element* aElement,
                                  nsCSSAnonBoxes::buttonContent) },
     // TODO: this is temporary until a frame is written: bug 635240.
     SIMPLE_INT_CREATE(NS_FORM_INPUT_NUMBER, NS_NewNumberControlFrame),
-    // TODO: this is temporary until a frame is written: bug 888320.
-    SIMPLE_INT_CREATE(NS_FORM_INPUT_DATE, NS_NewTextControlFrame),
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
     // On Android/B2G, date/time input appears as a normal text box.
     SIMPLE_INT_CREATE(NS_FORM_INPUT_TIME, NS_NewTextControlFrame),
+    SIMPLE_INT_CREATE(NS_FORM_INPUT_DATE, NS_NewTextControlFrame),
 #else
     SIMPLE_INT_CREATE(NS_FORM_INPUT_TIME, NS_NewDateTimeControlFrame),
+    SIMPLE_INT_CREATE(NS_FORM_INPUT_DATE, NS_NewDateTimeControlFrame),
 #endif
     // TODO: this is temporary until a frame is written: bug 888320
     SIMPLE_INT_CREATE(NS_FORM_INPUT_MONTH, NS_NewTextControlFrame),
@@ -4721,6 +4711,15 @@ nsCSSFrameConstructor::FindDisplayData(const nsStyleDisplay* aDisplay,
                              &nsCSSFrameConstructor::ConstructScrollableBlock) };
         return &sScrollableBlockData[caption];
       }
+
+      // If the scrollable frame would have propagated its scrolling to the
+      // viewport, we still want to construct a regular block rather than a
+      // scrollframe so that it paginates correctly, but we don't want to set
+      // the bit on the block that tells it to clip at paint time.
+      if (mPresShell->GetPresContext()->
+            ElementWouldPropagateScrollbarStyles(aElement)) {
+        suppressScrollFrame = false;
+      }
     }
 
     // Handle various non-scrollable blocks.
@@ -4758,6 +4757,7 @@ nsCSSFrameConstructor::FindDisplayData(const nsStyleDisplay* aDisplay,
   static const FrameConstructionDataByDisplay sDisplayData[] = {
     FCDATA_FOR_DISPLAY(StyleDisplay::None, UNREACHABLE_FCDATA()),
     FCDATA_FOR_DISPLAY(StyleDisplay::Block, UNREACHABLE_FCDATA()),
+    FCDATA_FOR_DISPLAY(StyleDisplay::FlowRoot, UNREACHABLE_FCDATA()),
     // To keep the hash table small don't add inline frames (they're
     // typically things like FONT and B), because we can quickly
     // find them if we need to.
@@ -4943,7 +4943,7 @@ nsCSSFrameConstructor::ConstructNonScrollableBlockWithConstructor(
        StyleDisplay::InlineBlock == aDisplay->mDisplay ||
        clipPaginatedOverflow) &&
       !aParentFrame->IsSVGText()) {
-    flags = NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT;
+    flags = NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS;
     if (clipPaginatedOverflow) {
       flags |= NS_BLOCK_CLIP_PAGINATED_OVERFLOW;
     }
@@ -5047,13 +5047,11 @@ nsCSSFrameConstructor::ResolveStyleContext(nsStyleContext* aParentStyleContext,
     if (aState) {
       result = styleSet->ResolveStyleFor(aContent->AsElement(),
                                          aParentStyleContext,
-                                         ConsumeStyleBehavior::Consume,
                                          LazyComputeBehavior::Assert,
                                          aState->mTreeMatchContext);
     } else {
       result = styleSet->ResolveStyleFor(aContent->AsElement(),
                                          aParentStyleContext,
-                                         ConsumeStyleBehavior::Consume,
                                          LazyComputeBehavior::Assert);
     }
   } else {
@@ -5116,7 +5114,7 @@ nsCSSFrameConstructor::FlushAccumulatedBlock(nsFrameConstructorState& aState,
   // is not a suitable block.
   nsContainerFrame* blockFrame =
     NS_NewMathMLmathBlockFrame(mPresShell, blockContext);
-  blockFrame->AddStateBits(NS_BLOCK_FLOAT_MGR | NS_BLOCK_MARGIN_ROOT);
+  blockFrame->AddStateBits(NS_BLOCK_FORMATTING_CONTEXT_STATE_BITS);
 
   InitAndRestoreFrame(aState, aContent, aParentFrame, blockFrame);
   ReparentFrames(this, blockFrame, aBlockItems);
@@ -5493,13 +5491,13 @@ nsCSSFrameConstructor::FindSVGData(Element* aElement,
     SIMPLE_SVG_CREATE(svg, NS_NewSVGInnerSVGFrame),
     SIMPLE_SVG_CREATE(g, NS_NewSVGGFrame),
     SIMPLE_SVG_CREATE(svgSwitch, NS_NewSVGSwitchFrame),
-    SIMPLE_SVG_CREATE(polygon, NS_NewSVGPathGeometryFrame),
-    SIMPLE_SVG_CREATE(polyline, NS_NewSVGPathGeometryFrame),
-    SIMPLE_SVG_CREATE(circle, NS_NewSVGPathGeometryFrame),
-    SIMPLE_SVG_CREATE(ellipse, NS_NewSVGPathGeometryFrame),
-    SIMPLE_SVG_CREATE(line, NS_NewSVGPathGeometryFrame),
-    SIMPLE_SVG_CREATE(rect, NS_NewSVGPathGeometryFrame),
-    SIMPLE_SVG_CREATE(path, NS_NewSVGPathGeometryFrame),
+    SIMPLE_SVG_CREATE(polygon, NS_NewSVGGeometryFrame),
+    SIMPLE_SVG_CREATE(polyline, NS_NewSVGGeometryFrame),
+    SIMPLE_SVG_CREATE(circle, NS_NewSVGGeometryFrame),
+    SIMPLE_SVG_CREATE(ellipse, NS_NewSVGGeometryFrame),
+    SIMPLE_SVG_CREATE(line, NS_NewSVGGeometryFrame),
+    SIMPLE_SVG_CREATE(rect, NS_NewSVGGeometryFrame),
+    SIMPLE_SVG_CREATE(path, NS_NewSVGGeometryFrame),
     SIMPLE_SVG_CREATE(defs, NS_NewSVGContainerFrame),
     SIMPLE_SVG_CREATE(generic_, NS_NewSVGGenericContainerFrame),
     { &nsGkAtoms::foreignObject,
@@ -7368,30 +7366,37 @@ nsCSSFrameConstructor::ContentAppended(nsIContent*     aContainer,
     return rv;
   }
 
+  // The frame constructor uses this codepath both for bonafide newly-added
+  // content and for RestyleManager-driven frame construction (RECONSTRUCT_FRAME
+  // and lazy frame construction). If we're using the Servo style system, we
+  // want to ensure that styles get resolved in the first case, whereas for the
+  // second case they should have already been resolved if needed.
+  bool isNewlyAddedContentForServo = aContainer->IsStyledByServo() &&
+                                     !RestyleManager()->AsBase()->IsInStyleRefresh();
+
   // See comment in ContentRangeInserted for why this is necessary.
   if (!GetContentInsertionFrameFor(aContainer) &&
       !aContainer->IsActiveChildrenElement()) {
+    // We're punting on frame construction because there's no container frame.
+    // The Servo-backed style system handles this case like the lazy frame
+    // construction case.
+    if (isNewlyAddedContentForServo) {
+      aContainer->AsElement()->NoteDirtyDescendantsForServo();
+    }
     return NS_OK;
   }
 
   if (aAllowLazyConstruction &&
       MaybeConstructLazily(CONTENTAPPEND, aContainer, aFirstNewContent)) {
-    if (aContainer->IsStyledByServo()) {
+    if (isNewlyAddedContentForServo) {
       aContainer->AsElement()->NoteDirtyDescendantsForServo();
     }
     return NS_OK;
   }
 
   // We couldn't construct lazily. Make Servo eagerly traverse the subtree.
-  if (ServoStyleSet* set = mPresShell->StyleSet()->GetAsServo()) {
-    // We use the same codepaths to handle both of the following cases:
-    //   (a) Newly-appended content for which lazy frame construction is disallowed.
-    //   (b) Lazy frame construction driven by the restyle manager.
-    // We need the styles for (a). In the case of (b), the Servo traversal has
-    // already happened, so we don't need to do it again.
-    if (!RestyleManager()->AsBase()->IsInStyleRefresh()) {
-      set->StyleNewChildren(aContainer->AsElement());
-    }
+  if (isNewlyAddedContentForServo) {
+    mPresShell->StyleSet()->AsServo()->StyleNewChildren(aContainer->AsElement());
   }
 
   LAYOUT_PHASE_TEMP_EXIT();
@@ -7819,6 +7824,15 @@ nsCSSFrameConstructor::ContentRangeInserted(nsIContent*            aContainer,
     return rv;
   }
 
+  // The frame constructor uses this codepath both for bonafide newly-added
+  // content and for RestyleManager-driven frame construction (RECONSTRUCT_FRAME
+  // and lazy frame construction). If we're using the Servo style system, we
+  // want to ensure that styles get resolved in the first case, whereas for the
+  // second case they should have already been resolved if needed.
+  bool isNewlyAddedContentForServo = aContainer->IsStyledByServo() &&
+                                     !RestyleManager()->AsBase()->IsInStyleRefresh();
+
+
   // Put 'parentFrame' inside a scope so we don't confuse it with
   // 'insertion.mParentFrame' later.
   {
@@ -7827,6 +7841,12 @@ nsCSSFrameConstructor::ContentRangeInserted(nsIContent*            aContainer,
     // a parent. While its uncommon to change the structure of the default content itself, a label,
     // for example, can be reframed by having its value attribute set or removed.
     if (!parentFrame && !aContainer->IsActiveChildrenElement()) {
+      // We're punting on frame construction because there's no container frame.
+      // The Servo-backed style system handles this case like the lazy frame
+      // construction case.
+      if (isNewlyAddedContentForServo) {
+        aContainer->AsElement()->NoteDirtyDescendantsForServo();
+      }
       return NS_OK;
     }
 
@@ -7836,7 +7856,7 @@ nsCSSFrameConstructor::ContentRangeInserted(nsIContent*            aContainer,
 
     if (aAllowLazyConstruction &&
         MaybeConstructLazily(CONTENTINSERT, aContainer, aStartChild)) {
-      if (aContainer->IsStyledByServo()) {
+      if (isNewlyAddedContentForServo) {
         aContainer->AsElement()->NoteDirtyDescendantsForServo();
       }
       return NS_OK;
@@ -7844,15 +7864,8 @@ nsCSSFrameConstructor::ContentRangeInserted(nsIContent*            aContainer,
   }
 
   // We couldn't construct lazily. Make Servo eagerly traverse the subtree.
-  if (ServoStyleSet* set = mPresShell->StyleSet()->GetAsServo()) {
-    // We use the same codepaths to handle both of the following cases:
-    //   (a) Newly-appended content for which lazy frame construction is disallowed.
-    //   (b) Lazy frame construction driven by the restyle manager.
-    // We need the styles for (a). In the case of (b), the Servo traversal has
-    // already happened, so we don't need to do it again.
-    if (!RestyleManager()->AsBase()->IsInStyleRefresh()) {
-      set->StyleNewChildren(aContainer->AsElement());
-    }
+  if (isNewlyAddedContentForServo) {
+    mPresShell->StyleSet()->AsServo()->StyleNewChildren(aContainer->AsElement());
   }
 
   InsertionPoint insertion;
@@ -8547,7 +8560,6 @@ nsCSSFrameConstructor::ContentRemoved(nsIContent*  aContainer,
       mRootElementStyleFrame = nullptr;
       mDocElementContainingBlock = nullptr;
       mPageSequenceFrame = nullptr;
-      mGfxScrollFrame = nullptr;
       mHasRootAbsPosContainingBlock = false;
     }
 
@@ -8745,7 +8757,6 @@ nsCSSFrameConstructor::BeginUpdate() {
     rootPresContext->IncrementDOMGeneration();
   }
 
-  ++sGlobalGenerationNumber;
 #ifdef DEBUG
   ++mUpdateCount;
 #endif
@@ -9253,8 +9264,13 @@ nsCSSFrameConstructor::GetInsertionPoint(nsIContent* aContainer,
   }
 
   if (!insertionElement) {
-    insertionElement = aContainer;
+    // The FindNested{,Single}InsertionPoint methods return null in the case
+    // that there is a binding with anonymous content but no insertion point.
+    // In that case the element doesn't belong in the flattened tree, and we
+    // don't want to render it.
+    return InsertionPoint();
   }
+
   InsertionPoint insertion(GetContentInsertionFrameFor(insertionElement),
                            insertionElement);
 
@@ -9320,7 +9336,6 @@ nsCSSFrameConstructor::MaybeRecreateFramesForElement(Element* aElement)
   // The parent has a frame, so try resolving a new context.
   RefPtr<nsStyleContext> newContext = mPresShell->StyleSet()->
     ResolveStyleFor(aElement, oldContext->GetParent(),
-                    ConsumeStyleBehavior::Consume,
                     LazyComputeBehavior::Assert);
 
   if (oldDisplay == StyleDisplay::None) {
@@ -10595,13 +10610,38 @@ void nsCSSFrameConstructor::CreateNeededPseudoSiblings(
 }
 
 #ifdef DEBUG
+/**
+ * Returns true iff aFrame should be wrapped in an anonymous flex/grid item,
+ * rather than being a direct child of aContainerFrame.
+ *
+ * NOTE: aContainerFrame must be a flex or grid container - this function is
+ * purely for sanity-checking the children of these container types.
+ * NOTE: See also NeedsAnonFlexOrGridItem(), for the non-debug version of this
+ * logic (which operates a bit earlier, on FCData instead of frames).
+ */
 static bool
-FrameWantsToBeInAnonymousItem(const nsIAtom* aParentType, const nsIFrame* aFrame)
+FrameWantsToBeInAnonymousItem(const nsIFrame* aContainerFrame,
+                              const nsIFrame* aFrame)
 {
-  MOZ_ASSERT(aParentType == nsGkAtoms::flexContainerFrame ||
-             aParentType == nsGkAtoms::gridContainerFrame);
+  nsIAtom* containerType = aContainerFrame->GetType();
+  MOZ_ASSERT(containerType == nsGkAtoms::flexContainerFrame ||
+             containerType == nsGkAtoms::gridContainerFrame);
 
-  return aFrame->IsFrameOfType(nsIFrame::eLineParticipant);
+  // Any line-participant frames (e.g. text) definitely want to be wrapped in
+  // an anonymous flex/grid item.
+  if (aFrame->IsFrameOfType(nsIFrame::eLineParticipant)) {
+    return true;
+  }
+
+  // If the container is a -webkit-box/-webkit-inline-box, then placeholders
+  // also need to be wrapped, for compatibility.
+  if (containerType == nsGkAtoms::flexContainerFrame &&
+      aContainerFrame->HasAnyStateBits(NS_STATE_FLEX_IS_LEGACY_WEBKIT_BOX) &&
+      aFrame->GetType() == nsGkAtoms::placeholderFrame) {
+    return true;
+  }
+
+  return false;
 }
 #endif
 
@@ -10618,7 +10658,7 @@ VerifyGridFlexContainerChildren(nsIFrame* aParentFrame,
 
   bool prevChildWasAnonItem = false;
   for (const nsIFrame* child : aChildren) {
-    MOZ_ASSERT(!FrameWantsToBeInAnonymousItem(parentType, child),
+    MOZ_ASSERT(!FrameWantsToBeInAnonymousItem(aParentFrame, child),
                "frame wants to be inside an anonymous item, but it isn't");
     if (IsAnonymousFlexOrGridItem(child)) {
       AssertAnonymousFlexOrGridItemParent(child, aParentFrame);
@@ -12747,10 +12787,20 @@ nsCSSFrameConstructor::FrameConstructionItem::
     return true;
   }
 
-  if (aIsWebkitBox &&
-      mStyleContext->StyleDisplay()->IsInlineOutsideStyle()) {
-    // In a -webkit-box, all inline-level content gets wrapped in an anon item.
-    return true;
+  if (aIsWebkitBox) {
+    if (mStyleContext->StyleDisplay()->IsInlineOutsideStyle()) {
+      // In a -webkit-box, all inline-level content gets wrapped in anon item.
+      return true;
+    }
+    if (!(mFCData->mBits & FCDATA_DISALLOW_OUT_OF_FLOW) &&
+        aState.GetGeometricParent(mStyleContext->StyleDisplay(), nullptr)) {
+      // We're abspos or fixedpos, which means we'll spawn a placeholder which
+      // (because our container is a -webkit-box) we'll need to wrap in an
+      // anonymous flex item.  So, we just treat _this_ frame as if _it_ needs
+      // to be wrapped in an anonymous flex item, and then when we spawn the
+      // placeholder, it'll end up in the right spot.
+      return true;
+    }
   }
 
   return false;

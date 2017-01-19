@@ -287,7 +287,7 @@ add_task(function* checkAdvancedDetailsForHSTS() {
     };
   });
 
-  const badStsUri = Services.io.newURI(BAD_STS_CERT, null, null);
+  const badStsUri = Services.io.newURI(BAD_STS_CERT);
   is(message.ecTextContent, "SSL_ERROR_BAD_CERT_DOMAIN",
      "Correct error message found");
   is(message.ecTagName, "a", "Error message is a link");
@@ -376,19 +376,17 @@ function getCertChain(securityInfoAsString) {
   return certChain;
 }
 
-function getDERString(cert)
-{
+function getDERString(cert) {
   var length = {};
   var derArray = cert.getRawDER(length);
-  var derString = '';
+  var derString = "";
   for (var i = 0; i < derArray.length; i++) {
     derString += String.fromCharCode(derArray[i]);
   }
   return derString;
 }
 
-function getPEMString(cert)
-{
+function getPEMString(cert) {
   var derb64 = btoa(getDERString(cert));
   // Wrap the Base64 string into lines of 64 characters,
   // with CRLF line breaks (as specified in RFC 1421).

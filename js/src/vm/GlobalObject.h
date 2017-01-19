@@ -70,7 +70,6 @@ class GlobalObject : public NativeObject
     enum : unsigned {
         /* Various function values needed by the engine. */
         EVAL = APPLICATION_SLOTS + STANDARD_CLASS_SLOTS,
-        CREATE_DATAVIEW_FOR_THIS,
         THROWTYPEERROR,
 
         /*
@@ -104,6 +103,7 @@ class GlobalObject : public NativeObject
         COLLATOR_PROTO,
         NUMBER_FORMAT_PROTO,
         DATE_TIME_FORMAT_PROTO,
+        PLURAL_RULES_PROTO,
         MODULE_PROTO,
         IMPORT_ENTRY_PROTO,
         EXPORT_ENTRY_PROTO,
@@ -264,12 +264,6 @@ class GlobalObject : public NativeObject
     }
 
   public:
-    /* XXX Privatize me! */
-    void setCreateDataViewForThis(Handle<JSFunction*> fun) {
-        MOZ_ASSERT(getSlotRef(CREATE_DATAVIEW_FOR_THIS).isUndefined());
-        setSlot(CREATE_DATAVIEW_FOR_THIS, ObjectValue(*fun));
-    }
-
     template<typename T>
     inline void setCreateArrayFromBuffer(Handle<JSFunction*> fun);
 
@@ -484,6 +478,10 @@ class GlobalObject : public NativeObject
 
     JSObject* getOrCreateDateTimeFormatPrototype(JSContext* cx) {
         return getOrCreateObject(cx, DATE_TIME_FORMAT_PROTO, initIntlObject);
+    }
+
+    JSObject* getOrCreatePluralRulesPrototype(JSContext* cx) {
+        return getOrCreateObject(cx, PLURAL_RULES_PROTO, initIntlObject);
     }
 
     static bool ensureModulePrototypesCreated(JSContext *cx, Handle<GlobalObject*> global);
@@ -718,11 +716,6 @@ class GlobalObject : public NativeObject
         return &v.toObject();
     }
 
-    Value createDataViewForThis() const {
-        MOZ_ASSERT(dataViewClassInitialized());
-        return getSlot(CREATE_DATAVIEW_FOR_THIS);
-    }
-
     template<typename T>
     inline Value createArrayFromBuffer() const;
 
@@ -760,6 +753,7 @@ class GlobalObject : public NativeObject
 
     // Implemented in Intl.cpp.
     static bool initIntlObject(JSContext* cx, Handle<GlobalObject*> global);
+    static bool addPluralRulesConstructor(JSContext* cx, HandleObject intl);
 
     // Implemented in builtin/ModuleObject.cpp
     static bool initModuleProto(JSContext* cx, Handle<GlobalObject*> global);

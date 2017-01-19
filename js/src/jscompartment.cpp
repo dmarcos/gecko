@@ -77,6 +77,7 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     nonSyntacticLexicalEnvironments_(nullptr),
     gcIncomingGrayPointers(nullptr),
     debugModeBits(0),
+    randomKeyGenerator_(runtime_->forkRandomKeyGenerator()),
     watchpointMap(nullptr),
     scriptCountsMap(nullptr),
     debugScriptMap(nullptr),
@@ -163,6 +164,12 @@ JSRuntime::createJitRuntime(JSContext* cx)
     AutoLockForExclusiveAccess atomsLock(cx);
 
     MOZ_ASSERT(!jitRuntime_);
+
+    if (!CanLikelyAllocateMoreExecutableMemory()) {
+        // Report OOM instead of potentially hitting the MOZ_CRASH below.
+        ReportOutOfMemory(cx);
+        return nullptr;
+    }
 
     jit::JitRuntime* jrt = cx->new_<jit::JitRuntime>(cx->runtime());
     if (!jrt)
@@ -570,7 +577,10 @@ JSCompartment::getNonSyntacticLexicalEnvironment(JSObject* enclosing) const
 bool
 JSCompartment::addToVarNames(JSContext* cx, JS::Handle<JSAtom*> name)
 {
-    if (varNames_.put(name.get()))
+    MOZ_ASSERT(name);
+    MOZ_ASSERT(!isAtomsCompartment());
+
+    if (varNames_.put(name))
         return true;
 
     ReportOutOfMemory(cx);
@@ -719,8 +729,9 @@ JSCompartment::sweepAfterMinorGC(JSTracer* trc)
 {
     globalWriteBarriered = 0;
 
-    if (innerViews.needsSweepAfterMinorGC())
-        innerViews.sweepAfterMinorGC();
+    InnerViewTable& table = innerViews.get();
+    if (table.needsSweepAfterMinorGC())
+        table.sweepAfterMinorGC();
 
     crossCompartmentWrappers.sweepAfterMinorGC(trc);
 }
@@ -800,6 +811,12 @@ void
 JSCompartment::sweepCrossCompartmentWrappers()
 {
     crossCompartmentWrappers.sweep();
+}
+
+void
+JSCompartment::sweepVarNames()
+{
+    varNames_.sweep();
 }
 
 namespace {
@@ -1024,6 +1041,15 @@ AddLazyFunctionsForCompartment(JSContext* cx, AutoObjectVector& lazyFunctions, A
         {
             continue;
         }
+
+        // This creates a new reference to an object that an ongoing incremental
+        // GC may find to be unreachable. Treat as if we're reading a weak
+        // reference and trigger the read barrier.
+        if (cx->zone()->needsIncrementalBarrier())
+            fun->readBarrier(fun);
+
+        // TODO: The above checks should be rolled into the cell iterator (see
+        // bug 1322971).
 
         if (fun->isInterpretedLazy()) {
             LazyScript* lazy = fun->lazyScriptOrNull();
@@ -1266,6 +1292,20 @@ JSCompartment::addTelemetry(const char* filename, DeprecatedLanguageExtension e)
         return;
 
     sawDeprecatedLanguageExtension[e] = true;
+}
+
+HashNumber
+JSCompartment::randomHashCode()
+{
+    ensureRandomNumberGenerator();
+    return HashNumber(randomNumberGenerator.ref().next());
+}
+
+mozilla::HashCodeScrambler
+JSCompartment::randomHashCodeScrambler()
+{
+    return mozilla::HashCodeScrambler(randomKeyGenerator_.next(),
+                                      randomKeyGenerator_.next());
 }
 
 AutoSetNewObjectMetadata::AutoSetNewObjectMetadata(ExclusiveContext* ecx

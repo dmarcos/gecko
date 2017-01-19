@@ -289,6 +289,7 @@ CompositorLoop()
 
 CompositorBridgeParent::CompositorBridgeParent(CSSToLayoutDeviceScale aScale,
                                                const TimeDuration& aVsyncRate,
+                                               const CompositorOptions& aOptions,
                                                bool aUseExternalSurfaceSize,
                                                const gfx::IntSize& aSurfaceSize)
   : mWidget(nullptr)
@@ -299,6 +300,7 @@ CompositorBridgeParent::CompositorBridgeParent(CSSToLayoutDeviceScale aScale,
   , mPaused(false)
   , mUseExternalSurfaceSize(aUseExternalSurfaceSize)
   , mEGLSurfaceSize(aSurfaceSize)
+  , mOptions(aOptions)
   , mPauseCompositionMonitor("PauseCompositionMonitor")
   , mResumeCompositionMonitor("ResumeCompositionMonitor")
   , mResetCompositorMonitor("ResetCompositorMonitor")
@@ -320,12 +322,11 @@ CompositorBridgeParent::CompositorBridgeParent(CSSToLayoutDeviceScale aScale,
 
 void
 CompositorBridgeParent::InitSameProcess(widget::CompositorWidget* aWidget,
-                                        const uint64_t& aLayerTreeId,
-                                        bool aUseAPZ)
+                                        const uint64_t& aLayerTreeId)
 {
   mWidget = aWidget;
   mRootLayerTreeID = aLayerTreeId;
-  if (aUseAPZ) {
+  if (mOptions.UseAPZ()) {
     mApzcTreeManager = new APZCTreeManager();
   }
 
@@ -870,7 +871,7 @@ CompositorBridgeParent::SetShadowProperties(Layer* aLayer)
 void
 CompositorBridgeParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRect* aRect)
 {
-  profiler_tracing("Paint", "Composite", TRACING_INTERVAL_START);
+  GeckoProfilerTracingRAII tracer("Paint", "Composite");
   PROFILER_LABEL("CompositorBridgeParent", "Composite",
     js::ProfileEntry::Category::GRAPHICS);
 
@@ -1011,7 +1012,6 @@ CompositorBridgeParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRec
   mCompositor->SetCompositionTime(TimeStamp());
 
   mozilla::Telemetry::AccumulateTimeDelta(mozilla::Telemetry::COMPOSITE_TIME, start);
-  profiler_tracing("Paint", "Composite", TRACING_INTERVAL_END);
 }
 
 mozilla::ipc::IPCResult
@@ -1047,6 +1047,9 @@ CompositorBridgeParent::ForceComposeToTarget(DrawTarget* aTarget, const gfx::Int
 PAPZCTreeManagerParent*
 CompositorBridgeParent::AllocPAPZCTreeManagerParent(const uint64_t& aLayersId)
 {
+  // We should only ever get this if APZ is enabled in this compositor.
+  MOZ_ASSERT(mOptions.UseAPZ());
+
   // The main process should pass in 0 because we assume mRootLayerTreeID
   MOZ_ASSERT(aLayersId == 0);
 
@@ -1099,11 +1102,12 @@ CompositorBridgeParent::DeallocPAPZParent(PAPZParent* aActor)
 }
 
 mozilla::ipc::IPCResult
-CompositorBridgeParent::RecvAsyncPanZoomEnabled(const uint64_t& aLayersId, bool* aHasAPZ)
+CompositorBridgeParent::RecvGetCompositorOptions(const uint64_t& aLayersId,
+                                                 CompositorOptions* aOptions)
 {
   // The main process should pass in 0 because we assume mRootLayerTreeID
   MOZ_ASSERT(aLayersId == 0);
-  *aHasAPZ = AsyncPanZoomEnabled();
+  *aOptions = mOptions;
   return IPC_OK();
 }
 
@@ -1142,48 +1146,44 @@ CompositorBridgeParent::ScheduleRotationOnCompositorThread(const TargetConfig& a
 
 void
 CompositorBridgeParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
-                                            const uint64_t& aTransactionId,
-                                            const TargetConfig& aTargetConfig,
-                                            const InfallibleTArray<PluginWindowData>& aUnused,
-                                            bool aIsFirstPaint,
-                                            bool aScheduleComposite,
-                                            uint32_t aPaintSequenceNumber,
-                                            bool aIsRepeatTransaction,
-                                            int32_t aPaintSyncId,
+                                            const TransactionInfo& aInfo,
                                             bool aHitTestUpdate)
 {
-  ScheduleRotationOnCompositorThread(aTargetConfig, aIsFirstPaint);
+  const TargetConfig& targetConfig = aInfo.targetConfig();
+
+  ScheduleRotationOnCompositorThread(targetConfig, aInfo.isFirstPaint());
 
   // Instruct the LayerManager to update its render bounds now. Since all the orientation
   // change, dimension change would be done at the stage, update the size here is free of
   // race condition.
-  mLayerManager->UpdateRenderBounds(aTargetConfig.naturalBounds());
-  mLayerManager->SetRegionToClear(aTargetConfig.clearRegion());
+  mLayerManager->UpdateRenderBounds(targetConfig.naturalBounds());
+  mLayerManager->SetRegionToClear(targetConfig.clearRegion());
   if (mLayerManager->GetCompositor()) {
-    mLayerManager->GetCompositor()->SetScreenRotation(aTargetConfig.rotation());
+    mLayerManager->GetCompositor()->SetScreenRotation(targetConfig.rotation());
   }
 
-  mCompositionManager->Updated(aIsFirstPaint, aTargetConfig, aPaintSyncId);
+  mCompositionManager->Updated(aInfo.isFirstPaint(), targetConfig, aInfo.paintSyncId());
   Layer* root = aLayerTree->GetRoot();
   mLayerManager->SetRoot(root);
 
-  if (mApzcTreeManager && !aIsRepeatTransaction && aHitTestUpdate) {
+  if (mApzcTreeManager && !aInfo.isRepeatTransaction() && aHitTestUpdate) {
     AutoResolveRefLayers resolve(mCompositionManager);
 
-    mApzcTreeManager->UpdateHitTestingTree(mRootLayerTreeID, root, aIsFirstPaint,
-        mRootLayerTreeID, aPaintSequenceNumber);
+    mApzcTreeManager->UpdateHitTestingTree(
+      mRootLayerTreeID, root, aInfo.isFirstPaint(),
+      mRootLayerTreeID, aInfo.paintSequenceNumber());
   }
 
   // The transaction ID might get reset to 1 if the page gets reloaded, see
   // https://bugzilla.mozilla.org/show_bug.cgi?id=1145295#c41
   // Otherwise, it should be continually increasing.
-  MOZ_ASSERT(aTransactionId == 1 || aTransactionId > mPendingTransaction);
-  mPendingTransaction = aTransactionId;
+  MOZ_ASSERT(aInfo.id() == 1 || aInfo.id() > mPendingTransaction);
+  mPendingTransaction = aInfo.id();
 
   if (root) {
     SetShadowProperties(root);
   }
-  if (aScheduleComposite) {
+  if (aInfo.scheduleComposite()) {
     ScheduleComposition();
     if (mPaused) {
       TimeStamp now = TimeStamp::Now();
@@ -1526,10 +1526,7 @@ CompositorBridgeParent::RecvAdoptChild(const uint64_t& child)
     MonitorAutoLock lock(*sIndirectLayerTreesLock);
     NotifyChildCreated(child);
     if (sIndirectLayerTrees[child].mLayerTree) {
-      sIndirectLayerTrees[child].mLayerTree->mLayerManager = mLayerManager;
-    }
-    if (sIndirectLayerTrees[child].mRoot) {
-      sIndirectLayerTrees[child].mRoot->AsHostLayer()->SetLayerManager(static_cast<HostLayerManager*>(mLayerManager.get()));
+      sIndirectLayerTrees[child].mLayerTree->SetLayerManager(mLayerManager);
     }
     parent = sIndirectLayerTrees[child].mApzcTreeManagerParent;
   }
@@ -1656,7 +1653,7 @@ CompositorBridgeParent::AllocPCompositorWidgetParent(const CompositorWidgetInitD
   }
 
   widget::CompositorWidgetParent* widget =
-    new widget::CompositorWidgetParent(aInitData);
+    new widget::CompositorWidgetParent(aInitData, mOptions);
   widget->AddRef();
 
   // Sending the constructor acts as initialization as well.
@@ -1724,7 +1721,7 @@ CompositorBridgeParent::DidComposite(TimeStamp& aCompositeStart,
   mPendingTransaction = 0;
 
   if (mLayerManager) {
-    nsTArray<ImageCompositeNotification> notifications;
+    nsTArray<ImageCompositeNotificationInfo> notifications;
     mLayerManager->ExtractImageCompositeNotifications(&notifications);
     if (!notifications.IsEmpty()) {
       Unused << ImageBridgeParent::NotifyImageComposites(notifications);

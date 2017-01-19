@@ -4,6 +4,7 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/NetUtil.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "OfflineAppCacheHelper",
                                   "resource:///modules/offlineAppCache.jsm");
@@ -53,8 +54,8 @@ this.SiteDataManager = {
       if (status === Ci.nsIPermissionManager.ALLOW_ACTION ||
           status === Ci.nsIPermissionManager.DENY_ACTION) {
         this._sites.set(perm.principal.origin, {
-          perm: perm,
-          status: status,
+          perm,
+          status,
           quotaUsage: 0,
           appCacheList: [],
           diskCacheList: []
@@ -78,7 +79,7 @@ this.SiteDataManager = {
     for (let site of this._sites.values()) {
       promises.push(new Promise(resolve => {
         let callback = {
-          onUsageResult: function(request) {
+          onUsageResult(request) {
             site.quotaUsage = request.usage;
             resolve();
           }
@@ -106,7 +107,7 @@ this.SiteDataManager = {
     let groups = this._appCache.getGroups();
     for (let site of this._sites.values()) {
       for (let group of groups) {
-        let uri = Services.io.newURI(group, null, null);
+        let uri = Services.io.newURI(group);
         if (site.perm.matchesURI(uri, true)) {
           let cache = this._appCache.getActiveCache(group);
           site.appCacheList.push(cache);
@@ -120,7 +121,7 @@ this.SiteDataManager = {
       if (this._sites.size) {
         let sites = this._sites;
         let visitor = {
-          onCacheEntryInfo: function(uri, idEnhance, dataSize) {
+          onCacheEntryInfo(uri, idEnhance, dataSize) {
             for (let site of sites.values()) {
               if (site.perm.matchesURI(uri, true)) {
                 site.diskCacheList.push({
@@ -131,7 +132,7 @@ this.SiteDataManager = {
               }
             }
           },
-          onCacheEntryVisitCompleted: function() {
+          onCacheEntryVisitCompleted() {
             resolve();
           }
         };
@@ -177,5 +178,28 @@ this.SiteDataManager = {
     Services.cookies.removeAll();
     OfflineAppCacheHelper.clear();
     this.updateSites();
+  },
+
+  getSites() {
+    return Promise.all([this._updateQuotaPromise, this._updateDiskCachePromise])
+                  .then(() => {
+                    let list = [];
+                    for (let [origin, site] of this._sites) {
+                      let cache = null;
+                      let usage = site.quotaUsage;
+                      for (cache of site.appCacheList) {
+                        usage += cache.usage;
+                      }
+                      for (cache of site.diskCacheList) {
+                        usage += cache.dataSize;
+                      }
+                      list.push({
+                        usage,
+                        status: site.status,
+                        uri: NetUtil.newURI(origin)
+                      });
+                    }
+                    return list;
+                  });
   }
 };

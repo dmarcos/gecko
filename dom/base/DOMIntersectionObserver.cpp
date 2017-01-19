@@ -51,7 +51,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(DOMIntersectionObserver)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(DOMIntersectionObserver)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCallback)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRoot)
@@ -207,7 +206,9 @@ DOMIntersectionObserver::Disconnect()
   mObservationTargets.Clear();
   if (mOwner) {
     nsIDocument* document = mOwner->GetExtantDoc();
-    document->RemoveIntersectionObserver(this);
+    if (document) {
+      document->RemoveIntersectionObserver(this);
+    }
   }
 }
 

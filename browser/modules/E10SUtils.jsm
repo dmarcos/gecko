@@ -13,6 +13,8 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyPreferenceGetter(this, "useRemoteWebExtensions",
                                       "extensions.webextensions.remote", false);
+XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+                                  "resource://gre/modules/sessionstore/Utils.jsm");
 
 function getAboutModule(aURL) {
   // Needs to match NS_GetAboutModuleName
@@ -20,8 +22,7 @@ function getAboutModule(aURL) {
   let contract = "@mozilla.org/network/protocol/about;1?what=" + moduleName;
   try {
     return Cc[contract].getService(Ci.nsIAboutModule);
-  }
-  catch (e) {
+  } catch (e) {
     // Either the about module isn't defined or it is broken. In either case
     // ignore it.
     return null;
@@ -46,13 +47,13 @@ this.E10SUtils = {
   WEB_REMOTE_TYPE,
   FILE_REMOTE_TYPE,
 
-  canLoadURIInProcess: function(aURL, aProcess) {
+  canLoadURIInProcess(aURL, aProcess) {
     let remoteType = aProcess == Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT
                      ? DEFAULT_REMOTE_TYPE : NOT_REMOTE;
     return remoteType == this.getRemoteTypeForURI(aURL, true, remoteType);
   },
 
-  getRemoteTypeForURI: function(aURL, aMultiProcess,
+  getRemoteTypeForURI(aURL, aMultiProcess,
                                 aPreferredRemoteType = DEFAULT_REMOTE_TYPE) {
     if (!aMultiProcess) {
       return NOT_REMOTE;
@@ -86,7 +87,7 @@ this.E10SUtils = {
         return aPreferredRemoteType;
       }
 
-      let url = Services.io.newURI(aURL, null, null);
+      let url = Services.io.newURI(aURL);
       let module = getAboutModule(url);
       // If the module doesn't exist then an error page will be loading, that
       // should be ok to load in any process
@@ -112,7 +113,7 @@ this.E10SUtils = {
       try {
         // This can fail for invalid Chrome URIs, in which case we will end up
         // not loading anything anyway.
-        url = Services.io.newURI(aURL, null, null);
+        url = Services.io.newURI(aURL);
       } catch (ex) {
         return aPreferredRemoteType;
       }
@@ -143,21 +144,28 @@ this.E10SUtils = {
     return validatedWebRemoteType(aPreferredRemoteType);
   },
 
-  shouldLoadURIInThisProcess: function(aURI) {
+  shouldLoadURIInThisProcess(aURI) {
     let remoteType = Services.appinfo.remoteType;
     return remoteType == this.getRemoteTypeForURI(aURI.spec, true, remoteType);
   },
 
-  shouldLoadURI: function(aDocShell, aURI, aReferrer) {
+  shouldLoadURI(aDocShell, aURI, aReferrer) {
     // Inner frames should always load in the current process
     if (aDocShell.QueryInterface(Ci.nsIDocShellTreeItem).sameTypeParent)
       return true;
+
+    // If we are in a fresh process, and it wouldn't be content visible to
+    // change processes, we want to load into a new process so that we can throw
+    // this one out.
+    if (aDocShell.inFreshProcess && aDocShell.isOnlyToplevelInTabGroup) {
+      return false;
+    }
 
     // If the URI can be loaded in the current process then continue
     return this.shouldLoadURIInThisProcess(aURI);
   },
 
-  redirectLoad: function(aDocShell, aURI, aReferrer, aFreshProcess) {
+  redirectLoad(aDocShell, aURI, aReferrer, aTriggeringPrincipal, aFreshProcess) {
     // Retarget the load to the correct process
     let messageManager = aDocShell.QueryInterface(Ci.nsIInterfaceRequestor)
                                   .getInterface(Ci.nsIContentFrameMessageManager);
@@ -168,6 +176,9 @@ this.E10SUtils = {
         uri: aURI.spec,
         flags: Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
         referrer: aReferrer ? aReferrer.spec : null,
+        triggeringPrincipal: aTriggeringPrincipal
+                             ? Utils.serializePrincipal(aTriggeringPrincipal)
+                             : null,
         reloadInFreshProcess: !!aFreshProcess,
       },
       historyIndex: sessionHistory.requestedIndex,
@@ -175,7 +186,7 @@ this.E10SUtils = {
     return false;
   },
 
-  wrapHandlingUserInput: function(aWindow, aIsHandling, aCallback) {
+  wrapHandlingUserInput(aWindow, aIsHandling, aCallback) {
     var handlingUserInput;
     try {
       handlingUserInput = aWindow.QueryInterface(Ci.nsIInterfaceRequestor)

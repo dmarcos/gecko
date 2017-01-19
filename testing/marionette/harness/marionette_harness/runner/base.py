@@ -442,13 +442,6 @@ class BaseMarionetteArguments(ArgumentParser):
 
         args.prefs = self._get_preferences(args.prefs_files, args.prefs_args)
 
-        if args.e10s:
-            args.prefs.update({
-                'browser.tabs.remote.autostart': True,
-                'browser.tabs.remote.force-enable': True,
-                'extensions.e10sBlocksEnabling': False
-            })
-
         for container in self.argument_containers:
             if hasattr(container, 'verify_usage_handler'):
                 container.verify_usage_handler(args)
@@ -550,8 +543,18 @@ class BaseMarionetteTestRunner(object):
         self.workspace_path = workspace or os.getcwd()
         self.verbose = verbose
         self.e10s = e10s
+        if self.e10s:
+            self.prefs.update({
+                'browser.tabs.remote.autostart': True,
+                'browser.tabs.remote.force-enable': True,
+                'extensions.e10sBlocksEnabling': False
+            })
 
         def gather_debug(test, status):
+            # No screenshots and page source for skipped tests
+            if status == "SKIP":
+                return
+
             rv = {}
             marionette = test._marionette_weakref()
 
@@ -828,10 +831,13 @@ class BaseMarionetteTestRunner(object):
             except Exception:
                 self.logger.warning('Could not get device info', exc_info=True)
 
-        if self.e10s:
-            self.logger.info("e10s is enabled")
-        else:
-            self.logger.info("e10s is disabled")
+        appinfo_e10s = self.appinfo.get('browserTabsRemoteAutostart', False)
+        self.logger.info("e10s is {}".format("enabled" if appinfo_e10s else "disabled"))
+        if self.e10s != appinfo_e10s:
+            message_e10s = ("BaseMarionetteTestRunner configuration (self.e10s) does "
+                            "not match browser appinfo")
+            self.cleanup()
+            raise AssertionError(message_e10s)
 
         self.logger.suite_start(self.tests,
                                 version_info=self.version_info,
@@ -929,18 +935,25 @@ class BaseMarionetteTestRunner(object):
             manifest = TestManifest()
             manifest.read(filepath)
 
+            json_path = update_mozinfo(filepath)
+            self.logger.info("mozinfo updated from: {}".format(json_path))
+            self.logger.info("mozinfo is: {}".format(mozinfo.info))
+
             filters = []
             if self.test_tags:
                 filters.append(tags(self.test_tags))
-            update_mozinfo(filepath)
-            self.logger.info("mozinfo updated with the following: {}".format(None))
-            self.logger.info("mozinfo is: {}".format(mozinfo.info))
+
+            values = {
+                "appname": self.appName,
+                "e10s": self.e10s,
+                "manage_instance": self.marionette.instance is not None,
+            }
+            values.update(mozinfo.info)
+
             manifest_tests = manifest.active_tests(exists=False,
                                                    disabled=True,
                                                    filters=filters,
-                                                   app=self.appName,
-                                                   e10s=self.e10s,
-                                                   **mozinfo.info)
+                                                   **values)
             if len(manifest_tests) == 0:
                 self.logger.error("No tests to run using specified "
                                   "combination of filters: {}".format(

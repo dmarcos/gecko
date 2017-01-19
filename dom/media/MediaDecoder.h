@@ -42,6 +42,7 @@ namespace mozilla {
 
 namespace dom {
 class Promise;
+class HTMLMediaElement;
 }
 
 class VideoFrameContainer;
@@ -190,6 +191,8 @@ public:
   // played. This reduces the memory overhead of media elements that may
   // not be played. Note that seeking also doesn't cause us start prerolling.
   void SetMinimizePrerollUntilPlaybackStarts();
+
+  bool GetMinimizePreroll() const { return mMinimizePreroll; }
 
   // All MediaStream-related data is protected by mReentrantMonitor.
   // We have at most one DecodedStreamData per MediaDecoder. Its stream
@@ -845,6 +848,10 @@ private:
   void NotifyDownloadEnded(nsresult aStatus);
 
   bool mTelemetryReported;
+
+  // Used to debug how mOwner becomes a dangling pointer in bug 1326294.
+  bool mIsMediaElement;
+  WeakPtr<dom::HTMLMediaElement> mElement;
 };
 
 } // namespace mozilla

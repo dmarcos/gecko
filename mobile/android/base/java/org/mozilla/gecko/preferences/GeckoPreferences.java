@@ -15,6 +15,7 @@ import org.mozilla.gecko.BrowserLocaleManager;
 import org.mozilla.gecko.DataReportingNotification;
 import org.mozilla.gecko.DynamicToolbar;
 import org.mozilla.gecko.EventDispatcher;
+import org.mozilla.gecko.Experiments;
 import org.mozilla.gecko.GeckoActivityStatus;
 import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoAppShell;
@@ -49,6 +50,7 @@ import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.InputOptionsUtils;
 import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.util.ViewUtil;
 
 import android.annotation.TargetApi;
 import android.app.AlertDialog;
@@ -79,12 +81,16 @@ import android.preference.TwoStatePreference;
 import android.support.design.widget.Snackbar;
 import android.support.design.widget.TextInputLayout;
 import android.support.v4.content.LocalBroadcastManager;
+import android.support.v4.content.res.ResourcesCompat;
+import android.support.v4.text.TextUtilsCompat;
+import android.support.v4.view.ViewCompat;
 import android.support.v7.app.ActionBar;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Log;
+import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
@@ -92,6 +98,8 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListAdapter;
 import android.widget.ListView;
+
+import com.keepsafe.switchboard.SwitchBoard;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -259,6 +267,14 @@ public class GeckoPreferences
         Log.d(LOGTAG, "onLocaleChanged: " + newLocale);
 
         BrowserLocaleManager.getInstance().updateConfiguration(getApplicationContext(), newLocale);
+        //  If activity is not recreated, also update locale to current activity configuration
+        BrowserLocaleManager.getInstance().updateConfiguration(GeckoPreferences.this, newLocale);
+        ViewUtil.setLayoutDirection(getWindow().getDecorView(), newLocale);
+
+        //  Force update navigate up icon by current layout direction
+        final ActionBar actionBar = getSupportActionBar();
+        actionBar.setHomeAsUpIndicator(android.support.v7.appcompat.R.drawable.abc_ic_ab_back_mtrl_am_alpha);
+
         this.lastLocale = newLocale;
 
         if (isMultiPane()) {
@@ -884,6 +900,18 @@ public class GeckoPreferences
                     preferences.removePreference(pref);
                     i--;
                     continue;
+                } else if (PREFS_COMPACT_TABS.equals(key)) {
+                    if (HardwareUtils.isTablet()) {
+                        preferences.removePreference(pref);
+                        i--;
+                        continue;
+                    } else {
+                        final boolean value = GeckoSharedPrefs.forApp(this).getBoolean(GeckoPreferences.PREFS_COMPACT_TABS,
+                                SwitchBoard.isInExperiment(this, Experiments.COMPACT_TABS));
+
+                        pref.setDefaultValue(value);
+                        ((SwitchPreference) pref).setChecked(value);
+                    }
                 }
 
                 // Some Preference UI elements are not actually preferences,

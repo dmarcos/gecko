@@ -10,6 +10,9 @@
 #include "mozilla/gfx/PGPUParent.h"
 
 namespace mozilla {
+
+class TimeStamp;
+
 namespace gfx {
 
 class VsyncBridgeParent;
@@ -39,6 +42,7 @@ public:
       Endpoint<PCompositorBridgeParent>&& aEndpoint,
       const CSSToLayoutDeviceScale& aScale,
       const TimeDuration& aVsyncRate,
+      const CompositorOptions& aOptions,
       const bool& aUseExternalSurface,
       const IntSize& aSurfaceSize) override;
   mozilla::ipc::IPCResult RecvNewContentCompositorBridge(Endpoint<PCompositorBridgeParent>&& aEndpoint) override;
@@ -53,6 +57,7 @@ public:
   void ActorDestroy(ActorDestroyReason aWhy) override;
 
 private:
+  const TimeStamp mLaunchTime;
   RefPtr<VsyncBridgeParent> mVsyncBridge;
 };
 

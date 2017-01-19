@@ -15,6 +15,7 @@
 #include "mozilla/layers/APZCTreeManagerParent.h"  // for APZCTreeManagerParent
 #include "mozilla/layers/APZThreadUtils.h"  // for APZCTreeManager
 #include "mozilla/layers/AsyncCompositionManager.h"
+#include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/LayerManagerComposite.h"
 #include "mozilla/layers/LayerTreeOwnerTracker.h"
@@ -109,18 +110,21 @@ CrossProcessCompositorBridgeParent::DeallocPLayerTransactionParent(PLayerTransac
 }
 
 mozilla::ipc::IPCResult
-CrossProcessCompositorBridgeParent::RecvAsyncPanZoomEnabled(const uint64_t& aLayersId, bool* aHasAPZ)
+CrossProcessCompositorBridgeParent::RecvGetCompositorOptions(const uint64_t& aLayersId,
+                                                             CompositorOptions* aOptions)
 {
   // Check to see if this child process has access to this layer tree.
   if (!LayerTreeOwnerTracker::Get()->IsMapped(aLayersId, OtherPid())) {
-    NS_ERROR("Unexpected layers id in RecvAsyncPanZoomEnabled; dropping message...");
+    NS_ERROR("Unexpected layers id in RecvGetCompositorOptions; dropping message...");
     return IPC_FAIL_NO_REASON(this);
   }
 
   MonitorAutoLock lock(*sIndirectLayerTreesLock);
   CompositorBridgeParent::LayerTreeState& state = sIndirectLayerTrees[aLayersId];
 
-  *aHasAPZ = state.mParent ? state.mParent->AsyncPanZoomEnabled() : false;
+  if (state.mParent) {
+    *aOptions = state.mParent->GetOptions();
+  }
   return IPC_OK();
 }
 
@@ -208,14 +212,7 @@ CrossProcessCompositorBridgeParent::RecvNotifyChildCreated(const uint64_t& child
 void
 CrossProcessCompositorBridgeParent::ShadowLayersUpdated(
   LayerTransactionParent* aLayerTree,
-  const uint64_t& aTransactionId,
-  const TargetConfig& aTargetConfig,
-  const InfallibleTArray<PluginWindowData>& aPlugins,
-  bool aIsFirstPaint,
-  bool aScheduleComposite,
-  uint32_t aPaintSequenceNumber,
-  bool aIsRepeatTransaction,
-  int32_t /*aPaintSyncId: unused*/,
+  const TransactionInfo& aInfo,
   bool aHitTestUpdate)
 {
   uint64_t id = aLayerTree->GetId();
@@ -228,20 +225,27 @@ CrossProcessCompositorBridgeParent::ShadowLayersUpdated(
     return;
   }
   MOZ_ASSERT(state->mParent);
-  state->mParent->ScheduleRotationOnCompositorThread(aTargetConfig, aIsFirstPaint);
+  state->mParent->ScheduleRotationOnCompositorThread(
+    aInfo.targetConfig(),
+    aInfo.isFirstPaint());
 
   Layer* shadowRoot = aLayerTree->GetRoot();
   if (shadowRoot) {
     CompositorBridgeParent::SetShadowProperties(shadowRoot);
   }
-  UpdateIndirectTree(id, shadowRoot, aTargetConfig);
+  UpdateIndirectTree(id, shadowRoot, aInfo.targetConfig());
 
   // Cache the plugin data for this remote layer tree
-  state->mPluginData = aPlugins;
+  state->mPluginData = aInfo.plugins();
   state->mUpdatedPluginDataAvailable = true;
 
-  state->mParent->NotifyShadowTreeTransaction(id, aIsFirstPaint, aScheduleComposite,
-      aPaintSequenceNumber, aIsRepeatTransaction, aHitTestUpdate);
+  state->mParent->NotifyShadowTreeTransaction(
+    id,
+    aInfo.isFirstPaint(),
+    aInfo.scheduleComposite(),
+    aInfo.paintSequenceNumber(),
+    aInfo.isRepeatTransaction(),
+    aHitTestUpdate);
 
   // Send the 'remote paint ready' message to the content thread if it has already asked.
   if(mNotifyAfterRemotePaint)  {
@@ -255,7 +259,7 @@ CrossProcessCompositorBridgeParent::ShadowLayersUpdated(
     Unused << state->mParent->SendObserveLayerUpdate(id, aLayerTree->GetChildEpoch(), true);
   }
 
-  aLayerTree->SetPendingTransactionId(aTransactionId);
+  aLayerTree->SetPendingTransactionId(aInfo.id());
 }
 
 void

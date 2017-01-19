@@ -77,6 +77,7 @@ import android.os.Process;
 import android.os.StrictMode;
 import android.provider.ContactsContract;
 import android.provider.MediaStore.Images.Media;
+import android.support.annotation.NonNull;
 import android.support.annotation.WorkerThread;
 import android.support.design.widget.Snackbar;
 import android.text.TextUtils;
@@ -84,6 +85,7 @@ import android.util.AttributeSet;
 import android.util.Base64;
 import android.util.Log;
 import android.util.SparseBooleanArray;
+import android.util.SparseIntArray;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.Menu;
@@ -109,6 +111,7 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.mozilla.gecko.util.ViewUtil;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -133,6 +136,7 @@ public abstract class GeckoApp
     BundleEventListener,
     ContextGetter,
     GeckoAppShell.GeckoInterface,
+    ScreenOrientationDelegate,
     GeckoMenu.Callback,
     GeckoMenu.MenuPresenter,
     Tabs.OnTabsChangedListener,
@@ -204,7 +208,7 @@ public abstract class GeckoApp
     protected boolean mShouldRestore;
     private boolean mSessionRestoreParsingFinished = false;
 
-    private int lastSelectedTabId = -1;
+    protected int lastSelectedTabId = -1;
 
     private boolean foregrounded = false;
 
@@ -217,14 +221,22 @@ public abstract class GeckoApp
         private boolean tabsWereSkipped;
         private boolean tabsWereProcessed;
 
+        private SparseIntArray tabIdMap;
+
         public LastSessionParser(JSONArray tabs, JSONObject windowObject, boolean isExternalURL) {
             this.tabs = tabs;
             this.windowObject = windowObject;
             this.isExternalURL = isExternalURL;
+
+            tabIdMap = new SparseIntArray();
         }
 
         public boolean allTabsSkipped() {
             return tabsWereSkipped && !tabsWereProcessed;
+        }
+
+        public int getNewTabId(int oldTabId) {
+            return tabIdMap.get(oldTabId, -1);
         }
 
         @Override
@@ -276,7 +288,12 @@ public abstract class GeckoApp
             });
 
             try {
-                tabObject.put("tabId", tab.getId());
+                int oldTabId = tabObject.optInt("tabId", -1);
+                int newTabId = tab.getId();
+                tabObject.put("tabId", newTabId);
+                if  (oldTabId >= 0) {
+                    tabIdMap.put(oldTabId, newTabId);
+                }
             } catch (JSONException e) {
                 Log.e(LOGTAG, "JSON error", e);
             }
@@ -286,6 +303,32 @@ public abstract class GeckoApp
         @Override
         public void onClosedTabsRead(final JSONArray closedTabData) throws JSONException {
             windowObject.put("closedTabs", closedTabData);
+        }
+
+        /**
+         * Updates stored parent tab IDs in the session store data to match the new tab IDs
+         * that have been allocated during startup session restore.
+         *
+         * @param tabData A JSONArray containg stored session store tabs.
+         */
+        public void updateParentId(final JSONArray tabData) {
+            if (tabData == null) {
+                return;
+            }
+
+            for (int i = 0; i < tabData.length(); i++) {
+                try {
+                    JSONObject tabObject = tabData.getJSONObject(i);
+
+                    int parentId = tabObject.getInt("parentId");
+                    int newParentId = getNewTabId(parentId);
+
+                    tabObject.put("parentId", newParentId);
+                } catch (JSONException ex) {
+                    // Tabs are not guaranteed to have a parentId,
+                    // so just skip the tab and try the next one.
+                }
+            }
         }
     };
 
@@ -554,7 +597,9 @@ public abstract class GeckoApp
             }
 
             GeckoAppShell.notifyObservers("Browser:Quit", res.toString());
-            doShutdown();
+            // We don't call doShutdown() here because this creates a race condition which can
+            // cause the clearing of private data to fail. Instead, we shut down the UI only after
+            // we're done sanitizing.
             return true;
         }
 
@@ -630,11 +675,18 @@ public abstract class GeckoApp
               rec.recordGeckoStartupTime(mGeckoReadyStartupTimer.getElapsed());
             }
 
-            GeckoApplication.get().onDelayedStartup();
+            ((GeckoApplication) getApplicationContext()).onDelayedStartup();
 
-        } else if (event.equals("Gecko:Exited")) {
+        } else if ("Gecko:Exited".equals(event)) {
             // Gecko thread exited first; let GeckoApp die too.
             doShutdown();
+
+        } else if ("Sanitize:Finished".equals(event)) {
+            if (message.getBoolean("shutdown", false)) {
+                // Gecko is shutting down and has called our sanitize handlers,
+                // so we can start exiting, too.
+                doShutdown();
+            }
 
         } else if ("Accessibility:Ready".equals(event)) {
             GeckoAccessibility.updateAccessibilitySettings(this);
@@ -1129,6 +1181,7 @@ public abstract class GeckoApp
         // `(GeckoApplication) getApplication()` here.
         GeckoAppShell.setContextGetter(this);
         GeckoAppShell.setGeckoInterface(this);
+        GeckoAppShell.setScreenOrientationDelegate(this);
 
         // Tell Stumbler to register a local broadcast listener to listen for preference intents.
         // We do this via intents since we can't easily access Stumbler directly,
@@ -1185,6 +1238,10 @@ public abstract class GeckoApp
             "Accessibility:Ready",
             "Gecko:Exited",
             "Gecko:Ready",
+            null);
+
+        EventDispatcher.getInstance().registerUiThreadListener(this,
+            "Sanitize:Finished",
             null);
 
         GeckoThread.launch();
@@ -1446,6 +1503,9 @@ public abstract class GeckoApp
         if (loc.equals(mLastLocale)) {
             Log.d(LOGTAG, "New locale same as old; onLocaleReady has nothing to do.");
         }
+        BrowserLocaleManager.getInstance().updateConfiguration(GeckoApp.this, loc);
+        ViewUtil.setLayoutDirection(getWindow().getDecorView(), loc);
+        refreshChrome();
 
         // The URL bar hint needs to be populated.
         TextView urlBar = (TextView) findViewById(R.id.url_bar_title);
@@ -1711,7 +1771,14 @@ public abstract class GeckoApp
             }
 
             if (tabs.length() > 0) {
+                // Update all parent tab IDs ...
+                parser.updateParentId(tabs);
                 windowObject.put("tabs", tabs);
+                // ... and for recently closed tabs as well (if we've got any).
+                JSONArray closedTabs = windowObject.optJSONArray("closedTabs");
+                parser.updateParentId(closedTabs);
+                windowObject.putOpt("closedTabs", closedTabs);
+
                 sessionString = new JSONObject().put("windows", new JSONArray().put(windowObject)).toString();
             } else {
                 if (parser.allTabsSkipped() || sessionDataValid) {
@@ -1880,6 +1947,18 @@ public abstract class GeckoApp
 
     @Override
     public void createShortcut(final String title, final String url) {
+
+        final Tab selectedTab = Tabs.getInstance().getSelectedTab();
+
+        if (selectedTab.hasManifest()) {
+            // If a page has associated manifest, lets install it
+            final GeckoBundle message = new GeckoBundle();
+            message.putInt("iconSize", GeckoAppShell.getPreferredIconSize());
+            EventDispatcher.getInstance().dispatch("Browser:LoadManifest", message);
+            return;
+        }
+
+        // Otherwise we try to pick best icon from favicons etc
         Icons.with(this)
                 .pageUrl(url)
                 .skipNetwork()
@@ -1889,12 +1968,12 @@ public abstract class GeckoApp
                 .execute(new IconCallback() {
                     @Override
                     public void onIconResponse(IconResponse response) {
-                        doCreateShortcut(title, url, response.getBitmap());
+                        createShortcut(title, url, response.getBitmap());
                     }
                 });
     }
 
-    private void doCreateShortcut(final String aTitle, final String aURI, final Bitmap aIcon) {
+    public void createShortcut(final String aTitle, final String aURI, final Bitmap aIcon) {
         // The intent to be launched by the shortcut.
         Intent shortcutIntent = new Intent();
         shortcutIntent.setAction(GeckoApp.ACTION_HOMESCREEN_SHORTCUT);
@@ -2080,6 +2159,7 @@ public abstract class GeckoApp
         foregrounded = true;
 
         GeckoAppShell.setGeckoInterface(this);
+        GeckoAppShell.setScreenOrientationDelegate(this);
 
         if (lastSelectedTabId >= 0 && (lastActiveGeckoApp == null || lastActiveGeckoApp.get() != this)) {
             Tabs.getInstance().selectTab(lastSelectedTabId);
@@ -2245,6 +2325,10 @@ public abstract class GeckoApp
             "Gecko:Ready",
             null);
 
+        EventDispatcher.getInstance().unregisterUiThreadListener(this,
+            "Sanitize:Finished",
+            null);
+
         getAppEventDispatcher().unregisterGeckoThreadListener(this,
             "Accessibility:Event",
             "Locale:Set",
@@ -2294,19 +2378,18 @@ public abstract class GeckoApp
     }
 
     public void showSDKVersionError() {
-        final String message = getString(R.string.unsupported_sdk_version, Build.CPU_ABI, Build.VERSION.SDK_INT);
+        final String message = getString(R.string.unsupported_sdk_version, Build.CPU_ABI, Integer.toString(Build.VERSION.SDK_INT));
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
     // Get a temporary directory, may return null
-    public static File getTempDirectory() {
-        File dir = GeckoApplication.get().getExternalFilesDir("temp");
-        return dir;
+    public static File getTempDirectory(@NonNull Context context) {
+        return context.getApplicationContext().getExternalFilesDir("temp");
     }
 
     // Delete any files in our temporary directory
-    public static void deleteTempFiles() {
-        File dir = getTempDirectory();
+    public static void deleteTempFiles(Context context) {
+        File dir = getTempDirectory(context);
         if (dir == null)
             return;
         File[] files = dir.listFiles();
@@ -2862,5 +2945,21 @@ public abstract class GeckoApp
 
     public GeckoView getGeckoView() {
         return mLayerView;
+    }
+
+    @Override
+    public boolean setRequestedOrientationForCurrentActivity(int requestedActivityInfoOrientation) {
+        // We want to support the Screen Orientation API, and it always makes sense to lock the
+        // orientation of a browser Activity, so we support locking.
+        if (getRequestedOrientation() == requestedActivityInfoOrientation) {
+            return false;
+        }
+        setRequestedOrientation(requestedActivityInfoOrientation);
+        return true;
+    }
+
+    @Override
+    public boolean isOfficial() {
+        return AppConstants.MOZILLA_OFFICIAL;
     }
 }

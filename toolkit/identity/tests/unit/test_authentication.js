@@ -37,7 +37,7 @@ function test_begin_authentication_flow() {
       IDService.IDP.beginProvisioning(caller);
     }, function() {},
     {
-      beginProvisioningCallback: function(email, duration_s) {
+      beginProvisioningCallback(email, duration_s) {
 
         // let's say this user needs to authenticate
         IDService.IDP._doAuthentication(_provId, {idpParams:TEST_IDPPARAMS});
@@ -70,7 +70,7 @@ function test_complete_authentication_flow() {
     // events have occurred.
     let mockedDoc = mock_doc(id, TEST_URL, call_sequentially(
       function(action, params) {
-        do_check_eq(action, 'ready');
+        do_check_eq(action, "ready");
         do_check_eq(params, undefined);
 
         // if notification already received by observer, test is done
@@ -113,7 +113,7 @@ function test_complete_authentication_flow() {
         IDService.IDP.beginProvisioning(provFlow);
       }, function() {},
       {
-        beginProvisioningCallback: function(email, duration_s) {
+        beginProvisioningCallback(email, duration_s) {
           // let's say this user needs to authenticate
           IDService.IDP._doAuthentication(_provId, {idpParams:TEST_IDPPARAMS});
 
@@ -140,7 +140,7 @@ function test_complete_authentication_flow() {
       IDService.IDP.completeAuthentication(_authId);
     },
 
-    doError: function(err) {
+    doError(err) {
       log("OW! My doError callback hurts!", err);
     },
   };

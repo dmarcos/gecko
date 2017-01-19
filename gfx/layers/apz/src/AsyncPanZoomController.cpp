@@ -898,6 +898,10 @@ nsEventStatus AsyncPanZoomController::HandleDragEvent(const MouseInput& aEvent,
     return nsEventStatus_eConsumeNoDefault;
   }
 
+  if (aEvent.mType == MouseInput::MouseType::MOUSE_UP) {
+    ScrollSnap();
+  }
+
   if (aEvent.mType != MouseInput::MouseType::MOUSE_MOVE) {
     return nsEventStatus_eConsumeNoDefault;
   }
@@ -3137,6 +3141,17 @@ AsyncPanZoomController::GetCurrentAsyncScrollOffset(AsyncMode aMode) const
 
   return (mFrameMetrics.GetScrollOffset() + mTestAsyncScrollOffset)
       * mFrameMetrics.GetZoom() * mTestAsyncZoom.scale;
+}
+
+CSSPoint
+AsyncPanZoomController::GetCurrentAsyncScrollOffsetInCssPixels(AsyncMode aMode) const {
+  ReentrantMonitorAutoEnter lock(mMonitor);
+
+  if (aMode == RESPECT_FORCE_DISABLE && mScrollMetadata.IsApzForceDisabled()) {
+    return mLastContentPaintMetrics.GetScrollOffset();
+  }
+
+  return mFrameMetrics.GetScrollOffset() + mTestAsyncScrollOffset;
 }
 
 AsyncTransform

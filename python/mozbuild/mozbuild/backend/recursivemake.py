@@ -73,6 +73,7 @@ from ..frontend.data import (
 from ..util import (
     ensureParentDir,
     FileAvoidWrite,
+    OrderedDefaultDict,
 )
 from ..makeutil import Makefile
 from mozbuild.shellutil import quote as shell_quote
@@ -396,7 +397,7 @@ class RecursiveMakeBackend(CommonBackend):
         self._install_manifests['dist_sdk']
 
         self._traversal = RecursiveMakeTraversal()
-        self._compile_graph = defaultdict(set)
+        self._compile_graph = OrderedDefaultDict(set)
 
         self._no_skip = {
             'export': set(),
@@ -538,13 +539,16 @@ class RecursiveMakeBackend(CommonBackend):
             backend_file.write('JAR_MANIFEST := %s\n' % obj.path.full_path)
 
         elif isinstance(obj, RustProgram):
-            # Note that for these and host Rust programs, we don't need to
-            # bother with linked libraries, because Cargo will take care of
-            # all of that for us.
             self._process_rust_program(obj, backend_file)
+            # Hook the program into the compile graph.
+            build_target = self._build_target_for_obj(obj)
+            self._compile_graph[build_target]
 
         elif isinstance(obj, HostRustProgram):
             self._process_host_rust_program(obj, backend_file)
+            # Hook the program into the compile graph.
+            build_target = self._build_target_for_obj(obj)
+            self._compile_graph[build_target]
 
         elif isinstance(obj, Program):
             self._process_program(obj.program, backend_file)
@@ -1145,7 +1149,7 @@ class RecursiveMakeBackend(CommonBackend):
                 (target, ' '.join(jar.sources)))
         if jar.generated_sources:
             backend_file.write('%s_PP_JAVAFILES := %s\n' %
-                (target, ' '.join(mozpath.join('generated', f) for f in jar.generated_sources)))
+                (target, ' '.join(jar.generated_sources)))
         if jar.extra_jars:
             backend_file.write('%s_EXTRA_JARS := %s\n' %
                 (target, ' '.join(sorted(set(jar.extra_jars)))))

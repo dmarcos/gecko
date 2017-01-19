@@ -650,22 +650,20 @@ PostGlobalWriteBarrier(JSRuntime* rt, JSObject* obj)
     }
 }
 
-uint32_t
+int32_t
 GetIndexFromString(JSString* str)
 {
-    // Masks the return value UINT32_MAX as failure to get the index.
-    // I.e. it is impossible to distinguish between failing to get the index
-    // or the actual index UINT32_MAX.
+    // We shouldn't GC here as this is called directly from IC code.
+    JS::AutoCheckCannotGC nogc;
 
-    if (!str->isAtom())
-        return UINT32_MAX;
+    if (!str->isFlat())
+        return -1;
 
     uint32_t index;
-    JSAtom* atom = &str->asAtom();
-    if (!atom->isIndex(&index))
-        return UINT32_MAX;
+    if (!str->asFlat().isIndex(&index) || index > INT32_MAX)
+        return -1;
 
-    return index;
+    return int32_t(index);
 }
 
 bool
@@ -1320,10 +1318,21 @@ ThrowRuntimeLexicalError(JSContext* cx, unsigned errorNumber)
 }
 
 bool
-ThrowReadOnlyError(JSContext* cx, int32_t index)
+ThrowReadOnlyError(JSContext* cx, HandleObject obj, int32_t index)
 {
-    RootedValue val(cx, Int32Value(index));
-    ReportValueError(cx, JSMSG_READ_ONLY, JSDVG_IGNORE_STACK, val, nullptr);
+    // We have to throw different errors depending on whether |index| is past
+    // the array length, etc. It's simpler to just call SetProperty to ensure
+    // we match the interpreter.
+
+    RootedValue objVal(cx, ObjectValue(*obj));
+    RootedValue indexVal(cx, Int32Value(index));
+    RootedId id(cx);
+    if (!ValueToId<CanGC>(cx, indexVal, &id))
+        return false;
+
+    ObjectOpResult result;
+    MOZ_ALWAYS_FALSE(SetProperty(cx, obj, id, UndefinedHandleValue, objVal, result) &&
+                     result.checkStrictErrorOrWarning(cx, obj, id, /* strict = */ true));
     return false;
 }
 
@@ -1356,22 +1365,21 @@ BaselineGetFunctionThis(JSContext* cx, BaselineFrame* frame, MutableHandleValue 
 }
 
 bool
-ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
+CallNativeGetter(JSContext* cx, HandleFunction callee, HandleObject obj,
+                 MutableHandleValue result)
 {
-    RootedValue receiver(cx, ObjectValue(*proxy));
-    return Proxy::get(cx, proxy, receiver, id, vp);
-}
+    MOZ_ASSERT(callee->isNative());
+    JSNative natfun = callee->native();
 
-bool
-ProxyGetPropertyByValue(JSContext* cx, HandleObject proxy, HandleValue idVal,
-                        MutableHandleValue vp)
-{
-    RootedId id(cx);
-    if (!ValueToId<CanGC>(cx, idVal, &id))
+    JS::AutoValueArray<2> vp(cx);
+    vp[0].setObject(*callee.get());
+    vp[1].setObject(*obj.get());
+
+    if (!natfun(cx, 0, vp.begin()))
         return false;
 
-    RootedValue receiver(cx, ObjectValue(*proxy));
-    return Proxy::get(cx, proxy, receiver, id, vp);
+    result.set(vp[0]);
+    return true;
 }
 
 bool

@@ -273,7 +273,7 @@ template <typename S> struct ReadBarrierFunctor : public VoidDefaultAdaptor<S> {
 template <>
 struct InternalBarrierMethods<Value>
 {
-    static bool isMarkable(const Value& v) { return v.isMarkable(); }
+    static bool isMarkable(const Value& v) { return v.isGCThing(); }
     static bool isMarkableTaggedPointer(const Value& v) { return isMarkable(v); }
 
     static void preBarrier(const Value& v) {
@@ -316,15 +316,9 @@ struct InternalBarrierMethods<jsid>
     static void postBarrier(jsid* idp, jsid prev, jsid next) {}
 };
 
-// Barrier classes can use Mixins to add methods to a set of barrier
-// instantiations, to make the barriered thing look and feel more like the
-// thing itself.
-template <typename T>
-class BarrieredBaseMixins {};
-
 // Base class of all barrier types.
 template <typename T>
-class BarrieredBase : public BarrieredBaseMixins<T>
+class BarrieredBase
 {
   protected:
     // BarrieredBase is not directly instantiable.
@@ -345,9 +339,12 @@ class BarrieredBase : public BarrieredBaseMixins<T>
 
 // Base class for barriered pointer types that intercept only writes.
 template <class T>
-class WriteBarrieredBase : public BarrieredBase<T>
+class WriteBarrieredBase : public BarrieredBase<T>,
+                           public WrappedPtrOperations<T, WriteBarrieredBase<T>>
 {
   protected:
+    using BarrieredBase<T>::value;
+
     // WriteBarrieredBase is not directly instantiable.
     explicit WriteBarrieredBase(const T& v) : BarrieredBase<T>(v) {}
 
@@ -566,8 +563,12 @@ class ReadBarrieredBase : public BarrieredBase<T>
 // insert manual post-barriers on the table for rekeying if the key is based in
 // any way on the address of the object.
 template <typename T>
-class ReadBarriered : public ReadBarrieredBase<T>
+class ReadBarriered : public ReadBarrieredBase<T>,
+                      public WrappedPtrOperations<T, ReadBarriered<T>>
 {
+  protected:
+    using ReadBarrieredBase<T>::value;
+
   public:
     ReadBarriered() : ReadBarrieredBase<T>(JS::GCPolicy<T>::initial()) {}
 
@@ -634,12 +635,6 @@ class ReadBarriered : public ReadBarrieredBase<T>
 template <typename T>
 using WeakRef = ReadBarriered<T>;
 
-// Add Value operations to all Barrier types. Note, this must be defined before
-// HeapSlot for HeapSlot's base to get these operations.
-template <>
-class BarrieredBaseMixins<JS::Value> : public ValueOperations<WriteBarrieredBase<JS::Value>>
-{};
-
 // A pre- and post-barriered Value that is specialized to be aware that it
 // resides in a slots or elements vector. This allows it to be relocated in
 // memory, but with substantially less overhead than a HeapPtr.
@@ -676,8 +671,8 @@ class HeapSlot : public WriteBarrieredBase<Value>
 
 #ifdef DEBUG
     bool preconditionForSet(NativeObject* owner, Kind kind, uint32_t slot) const;
-    bool preconditionForWriteBarrierPost(NativeObject* obj, Kind kind, uint32_t slot,
-                                         const Value& target) const;
+    void assertPreconditionForWriteBarrierPost(NativeObject* obj, Kind kind, uint32_t slot,
+                                               const Value& target) const;
 #endif
 
     void set(NativeObject* owner, Kind kind, uint32_t slot, const Value& v) {
@@ -694,7 +689,9 @@ class HeapSlot : public WriteBarrieredBase<Value>
 
   private:
     void post(NativeObject* owner, Kind kind, uint32_t slot, const Value& target) {
-        MOZ_ASSERT(preconditionForWriteBarrierPost(owner, kind, slot, target));
+#ifdef DEBUG
+        assertPreconditionForWriteBarrierPost(owner, kind, slot, target);
+#endif
         if (this->value.isObject()) {
             gc::Cell* cell = reinterpret_cast<gc::Cell*>(&this->value.toObject());
             if (cell->storeBuffer())

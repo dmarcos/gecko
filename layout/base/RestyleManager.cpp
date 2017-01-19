@@ -14,6 +14,7 @@
 #include "mozilla/EffectSet.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/ViewportFrame.h"
+#include "mozilla/css/StyleRule.h" // For nsCSSSelector
 #include "nsLayoutUtils.h"
 #include "AnimationCommon.h" // For GetLayerAnimationInfo
 #include "FrameLayerBuilder.h"
@@ -699,7 +700,7 @@ RestyleManager::RebuildAllStyleData(nsChangeHint aExtraHint,
 
   // We may reconstruct frames below and hence process anything that is in the
   // tree. We don't want to get notified to process those items again after.
-  presShell->GetDocument()->FlushPendingNotifications(Flush_ContentAndNotify);
+  presShell->GetDocument()->FlushPendingNotifications(FlushType::ContentAndNotify);
 
   nsAutoScriptBlocker scriptBlocker;
 
@@ -1530,9 +1531,6 @@ ElementRestyler::ElementRestyler(nsPresContext* aPresContext,
 void
 ElementRestyler::AddLayerChangesForAnimation()
 {
-  // Bug 847286 - We should have separate animation generation counters
-  // on layers for transitions and animations and use != comparison below
-  // rather than a > comparison.
   uint64_t frameGeneration =
     RestyleManager::GetAnimationGenerationForFrame(mFrame);
 
@@ -1541,7 +1539,7 @@ ElementRestyler::AddLayerChangesForAnimation()
          LayerAnimationInfo::sRecords) {
     Layer* layer =
       FrameLayerBuilder::GetDedicatedLayer(mFrame, layerInfo.mLayerType);
-    if (layer && frameGeneration > layer->GetAnimationGeneration()) {
+    if (layer && frameGeneration != layer->GetAnimationGeneration()) {
       // If we have a transform layer but don't have any transform style, we
       // probably just removed the transform but haven't destroyed the layer
       // yet. In this case we will add the appropriate change hint

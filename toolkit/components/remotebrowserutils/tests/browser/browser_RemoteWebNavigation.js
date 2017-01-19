@@ -24,7 +24,7 @@ function waitForPageShow(browser = gBrowser.selectedBrowser) {
 function makeURI(url) {
   return Cc["@mozilla.org/network/io-service;1"].
          getService(Ci.nsIIOService).
-         newURI(url, null, null);
+         newURI(url);
 }
 
 // Tests that loadURI accepts a referrer and it is included in the load.
@@ -131,8 +131,7 @@ add_task(function* test_badarguments() {
                                   Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
                                   null, {}, null);
     ok(false, "Should have seen an exception from trying to pass some postdata");
-  }
-  catch (e) {
+  } catch (e) {
     ok(true, "Should have seen an exception from trying to pass some postdata");
   }
 
@@ -141,8 +140,7 @@ add_task(function* test_badarguments() {
                                   Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
                                   null, null, {});
     ok(false, "Should have seen an exception from trying to pass some headers");
-  }
-  catch (e) {
+  } catch (e) {
     ok(true, "Should have seen an exception from trying to pass some headers");
   }
 

@@ -103,6 +103,9 @@ public:
   bool GetReturnInParagraphCreatesNewParagraph();
   Element* GetSelectionContainer();
 
+  // nsIEditor overrides
+  NS_IMETHOD GetPreferredIMEState(widget::IMEState* aState) override;
+
   // TextEditor overrides
   NS_IMETHOD GetIsDocumentEditable(bool* aIsDocumentEditable) override;
   NS_IMETHOD BeginningOfDocument() override;
@@ -118,14 +121,21 @@ public:
   virtual already_AddRefed<nsIContent> GetInputEventTargetContent() override;
   virtual bool IsEditable(nsINode* aNode) override;
   using EditorBase::IsEditable;
+  virtual nsresult RemoveAttributeOrEquivalent(
+                     Element* aElement,
+                     nsIAtom* aAttribute,
+                     bool aSuppressTransaction) override;
+  virtual nsresult SetAttributeOrEquivalent(Element* aElement,
+                                            nsIAtom* aAttribute,
+                                            const nsAString& aValue,
+                                            bool aSuppressTransaction) override;
+  using EditorBase::RemoveAttributeOrEquivalent;
+  using EditorBase::SetAttributeOrEquivalent;
 
   // nsStubMutationObserver overrides
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
-
-  // nsIEditorIMESupport overrides
-  NS_IMETHOD GetPreferredIMEState(widget::IMEState* aState) override;
 
   // nsIHTMLEditor methods
   NS_DECL_NSIHTMLEDITOR
@@ -328,14 +338,6 @@ public:
    * Make the given selection span the entire document.
    */
   virtual nsresult SelectEntireDocument(Selection* aSelection) override;
-
-  NS_IMETHOD SetAttributeOrEquivalent(nsIDOMElement* aElement,
-                                      const nsAString& aAttribute,
-                                      const nsAString& aValue,
-                                      bool aSuppressTransaction) override;
-  NS_IMETHOD RemoveAttributeOrEquivalent(nsIDOMElement* aElement,
-                                         const nsAString& aAttribute,
-                                         bool aSuppressTransaction) override;
 
   /**
    * Join together any adjacent editable text nodes in the range.
@@ -838,8 +840,8 @@ protected:
                            nsCOMPtr<nsIDOMNode>* outNode,
                            bool bNoBlockCrossing = false);
 
-  nsresult IsFirstEditableChild(nsIDOMNode* aNode, bool* aOutIsFirst);
-  nsresult IsLastEditableChild(nsIDOMNode* aNode, bool* aOutIsLast);
+  bool IsFirstEditableChild(nsINode* aNode);
+  bool IsLastEditableChild(nsINode* aNode);
   nsIContent* GetFirstEditableChild(nsINode& aNode);
   nsIContent* GetLastEditableChild(nsINode& aNode);
 

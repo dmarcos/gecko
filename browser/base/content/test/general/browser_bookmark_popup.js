@@ -96,7 +96,6 @@ add_task(function* panel_shown_for_once_for_doubleclick_on_new_bookmark_star_and
 add_task(function* panel_shown_once_for_slow_doubleclick_on_new_bookmark_star_and_autocloses() {
   todo(false, "bug 1250267, may need to add some tracking state to " +
               "browser-places.js for this.");
-  return;
 
   /*
   yield test_bookmarks_popup({
@@ -249,6 +248,30 @@ add_task(function* ctrl_d_edit_bookmark_remove_bookmark() {
     shouldAutoClose: true,
     popupHideFn() {
       document.getElementById("editBookmarkPanelRemoveButton").click();
+    },
+    isBookmarkRemoved: true,
+  });
+});
+
+add_task(function* enter_on_remove_bookmark_should_remove_bookmark() {
+  if (AppConstants.platform == "macosx") {
+    // "Full Keyboard Access" is disabled by default, and thus doesn't allow
+    // keyboard navigation to the "Remove Bookmarks" button by default.
+    return;
+  }
+
+  yield test_bookmarks_popup({
+    isNewBookmark: true,
+    popupShowFn(browser) {
+      EventUtils.synthesizeKey("D", {accelKey: true}, window);
+    },
+    shouldAutoClose: true,
+    popupHideFn() {
+      while (!document.activeElement ||
+             document.activeElement.id != "editBookmarkPanelRemoveButton") {
+        EventUtils.sendChar("VK_TAB", window);
+      }
+      EventUtils.sendChar("VK_RETURN", window);
     },
     isBookmarkRemoved: true,
   });

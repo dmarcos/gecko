@@ -12,6 +12,8 @@
 #include "gfxPrefs.h"
 #include "GPUProcessHost.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Telemetry.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/CrashReporterClient.h"
@@ -49,6 +51,7 @@ using namespace layers;
 static GPUParent* sGPUParent;
 
 GPUParent::GPUParent()
+  : mLaunchTime(TimeStamp::Now())
 {
   sGPUParent = this;
 }
@@ -191,6 +194,7 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
   RecvGetDeviceStatus(&data);
   Unused << SendInitComplete(data);
 
+  Telemetry::AccumulateTimeDelta(Telemetry::GPU_PROCESS_INITIALIZATION_TIME_MS, mLaunchTime);
   return IPC_OK();
 }
 
@@ -284,11 +288,12 @@ mozilla::ipc::IPCResult
 GPUParent::RecvNewWidgetCompositor(Endpoint<layers::PCompositorBridgeParent>&& aEndpoint,
                                    const CSSToLayoutDeviceScale& aScale,
                                    const TimeDuration& aVsyncRate,
+                                   const CompositorOptions& aOptions,
                                    const bool& aUseExternalSurfaceSize,
                                    const IntSize& aSurfaceSize)
 {
   RefPtr<CompositorBridgeParent> cbp =
-    new CompositorBridgeParent(aScale, aVsyncRate, aUseExternalSurfaceSize, aSurfaceSize);
+    new CompositorBridgeParent(aScale, aVsyncRate, aOptions, aUseExternalSurfaceSize, aSurfaceSize);
 
   MessageLoop* loop = CompositorThreadHolder::Loop();
   loop->PostTask(NewRunnableFunction(OpenParent, cbp, Move(aEndpoint)));

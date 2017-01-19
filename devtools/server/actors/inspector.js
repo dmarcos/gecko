@@ -493,23 +493,27 @@ var NodeActor = exports.NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
    *           }
    */
   processHandlerForEvent: function (node, listenerArray, dbg, listener) {
-    let { capturing, handler, normalizeListener } = listener;
-    let dom0 = false;
-    let functionSource = handler.toString();
+    let { handler } = listener;
     let global = Cu.getGlobalForObject(handler);
     let globalDO = dbg.addDebuggee(global);
+    let listenerDO = globalDO.makeDebuggeeValue(handler);
+
+    let { normalizeListener } = listener;
+
+    if (normalizeListener) {
+      listenerDO = normalizeListener(listenerDO, listener);
+    }
+
+    let { capturing } = listener;
+    let dom0 = false;
+    let functionSource = handler.toString();
     let hide = listener.hide || {};
     let line = 0;
-    let listenerDO = globalDO.makeDebuggeeValue(handler);
     let native = false;
     let override = listener.override || {};
     let tags = listener.tags || "";
     let type = listener.type || "";
     let url = "";
-
-    if (normalizeListener) {
-      listenerDO = normalizeListener(listenerDO);
-    }
 
     // If the listener is an object with a 'handleEvent' method, use that.
     if (listenerDO.class === "Object" || listenerDO.class === "XULElement") {
@@ -1751,6 +1755,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
    *    Options object:
    *    `parents`: True if the pseudo-class should be added
    *      to parent nodes.
+   *    `enabled`: False if the pseudo-class should be locked
+   *      to 'off'. Defaults to true.
    *
    * @returns An empty packet.  A "pseudoClassLock" mutation will
    *    be queued for any changed nodes.
@@ -1768,7 +1774,9 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       }
     }
 
-    this._addPseudoClassLock(node, pseudo);
+    let enabled = options.enabled === undefined ||
+                  options.enabled;
+    this._addPseudoClassLock(node, pseudo, enabled);
 
     if (!options.parents) {
       return;
@@ -1778,7 +1786,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     let cur;
     while ((cur = walker.parentNode())) {
       let curNode = this._ref(cur);
-      this._addPseudoClassLock(curNode, pseudo);
+      this._addPseudoClassLock(curNode, pseudo, enabled);
     }
   },
 
@@ -1790,11 +1798,11 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     });
   },
 
-  _addPseudoClassLock: function (node, pseudo) {
+  _addPseudoClassLock: function (node, pseudo, enabled) {
     if (node.rawNode.nodeType !== Ci.nsIDOMNode.ELEMENT_NODE) {
       return false;
     }
-    DOMUtils.addPseudoClassLock(node.rawNode, pseudo);
+    DOMUtils.addPseudoClassLock(node.rawNode, pseudo, enabled);
     this._activePseudoClassLocks.add(node);
     this._queuePseudoClassMutation(node);
     return true;
@@ -2786,7 +2794,7 @@ exports.InspectorActor = protocol.ActorClassWithSpec(inspectorSpec, {
       return url;
     }
 
-    let baseURI = Services.io.newURI(document.location.href, null, null);
+    let baseURI = Services.io.newURI(document.location.href);
     return Services.io.newURI(url, null, baseURI).spec;
   },
 

@@ -19,6 +19,7 @@
 
 #include "xpcpublic.h"
 #include "xpcprivate.h"
+#include "xpc_make_class.h"
 #include "XPCWrapper.h"
 
 #include "mozilla/DOMEventTargetHelper.h"
@@ -132,8 +133,10 @@ using namespace mozilla::dom;
 
 #define NS_DEFINE_CLASSINFO_DATA_HELPER(_class, _helper, _flags,              \
                                         _chromeOnly, _allowXBL)               \
-  { #_class,                                                                  \
-    nullptr,                                                                  \
+  { nullptr,                                                                  \
+    XPC_MAKE_CLASS_OPS(_flags),                                               \
+    XPC_MAKE_CLASS(#_class, _flags,                                           \
+                   &sClassInfoData[eDOMClassInfo_##_class##_id].mClassOps),   \
     _helper::doCreate,                                                        \
     nullptr,                                                                  \
     nullptr,                                                                  \
@@ -673,7 +676,7 @@ nsDOMClassInfo::Init()
     }
 
     nsDOMClassInfoData& data = sClassInfoData[i];
-    nameSpaceManager->RegisterClassName(data.mName, i, data.mChromeOnly,
+    nameSpaceManager->RegisterClassName(data.mClass.name, i, data.mChromeOnly,
                                         data.mAllowXBL, &data.mNameUTF16);
   }
 
@@ -771,7 +774,7 @@ nsDOMClassInfo::GetFlags(uint32_t *aFlags)
 NS_IMETHODIMP
 nsDOMClassInfo::GetClassName(char **aClassName)
 {
-  *aClassName = NS_strdup(mData->mName);
+  *aClassName = NS_strdup(mData->mClass.name);
 
   return NS_OK;
 }
@@ -781,6 +784,20 @@ uint32_t
 nsDOMClassInfo::GetScriptableFlags()
 {
   return mData->mScriptableFlags;
+}
+
+// virtual
+const js::Class*
+nsDOMClassInfo::GetClass()
+{
+    return &mData->mClass;
+}
+
+// virtual
+const JSClass*
+nsDOMClassInfo::GetJSClass()
+{
+    return Jsvalify(&mData->mClass);
 }
 
 NS_IMETHODIMP
@@ -843,7 +860,7 @@ nsDOMClassInfo::Resolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
   JS::Rooted<JSObject*> global(cx, ::JS_GetGlobalForObject(cx, obj));
 
   JS::Rooted<JS::PropertyDescriptor> desc(cx);
-  if (!JS_GetPropertyDescriptor(cx, global, mData->mName, &desc)) {
+  if (!JS_GetPropertyDescriptor(cx, global, mData->mClass.name, &desc)) {
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -946,7 +963,7 @@ nsDOMClassInfo::PostCreatePrototype(JSContext * cx, JSObject * aProto)
       if (if_info) {
         nsXPIDLCString name;
         if_info->GetName(getter_Copies(name));
-        NS_ASSERTION(nsCRT::strcmp(CutPrefix(name), mData->mName) == 0,
+        NS_ASSERTION(nsCRT::strcmp(CutPrefix(name), mData->mClass.name) == 0,
                      "Class name and proto chain interface name mismatch!");
       }
     }
@@ -1336,6 +1353,12 @@ nsDOMConstructor::HasInstance(nsIXPConnectWrappedNative *wrapper,
     JS::Rooted<JSObject*> dot_prototype(cx, &desc.value().toObject());
 
     JS::Rooted<JSObject*> proto(cx, dom_obj);
+    JSAutoCompartment ac(cx, proto);
+
+    if (!JS_WrapObject(cx, &dot_prototype)) {
+      return NS_ERROR_UNEXPECTED;
+    }
+
     for (;;) {
       if (!JS_GetPrototype(cx, proto, &proto)) {
         return NS_ERROR_UNEXPECTED;

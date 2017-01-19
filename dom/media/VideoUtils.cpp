@@ -32,7 +32,6 @@ namespace mozilla {
 
 NS_NAMED_LITERAL_CSTRING(kEMEKeySystemClearkey, "org.w3.clearkey");
 NS_NAMED_LITERAL_CSTRING(kEMEKeySystemWidevine, "com.widevine.alpha");
-NS_NAMED_LITERAL_CSTRING(kEMEKeySystemPrimetime, "com.adobe.primetime");
 
 using layers::PlanarYCbCrImage;
 
@@ -510,11 +509,11 @@ CreateTrackInfoWithMIMETypeAndContentTypeExtraParameters(
   if (trackInfo) {
     VideoInfo* videoInfo = trackInfo->GetAsVideoInfo();
     if (videoInfo) {
-      Maybe<int32_t> maybeWidth = aContentType.GetWidth();
+      Maybe<int32_t> maybeWidth = aContentType.ExtendedType().GetWidth();
       if (maybeWidth && *maybeWidth > 0) {
         videoInfo->mImage.width = *maybeWidth;
       }
-      Maybe<int32_t> maybeHeight = aContentType.GetHeight();
+      Maybe<int32_t> maybeHeight = aContentType.ExtendedType().GetHeight();
       if (maybeHeight && *maybeHeight > 0) {
         videoInfo->mImage.height = *maybeHeight;
       }

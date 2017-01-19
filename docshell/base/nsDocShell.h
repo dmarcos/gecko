@@ -200,7 +200,8 @@ public:
                          const nsAString& aFileName,
                          nsIInputStream* aPostDataStream,
                          nsIInputStream* aHeadersDataStream,
-                         bool aIsTrusted) override;
+                         bool aIsTrusted,
+                         nsIPrincipal* aTriggeringPrincipal) override;
   NS_IMETHOD OnLinkClickSync(nsIContent* aContent,
                              nsIURI* aURI,
                              const char16_t* aTargetSpec,
@@ -209,7 +210,8 @@ public:
                              nsIInputStream* aHeadersDataStream = 0,
                              bool aNoOpenerImplied = false,
                              nsIDocShell** aDocShell = 0,
-                             nsIRequest** aRequest = 0) override;
+                             nsIRequest** aRequest = 0,
+                             nsIPrincipal* aTriggeringPrincipal = nullptr) override;
   NS_IMETHOD OnOverLink(nsIContent* aContent,
                         nsIURI* aURI,
                         const char16_t* aTargetSpec) override;
@@ -271,13 +273,17 @@ public:
   }
   bool InFrameSwap();
 
-  const mozilla::DocShellOriginAttributes&
+private:
+  bool CanSetOriginAttributes();
+
+public:
+  const mozilla::OriginAttributes&
   GetOriginAttributes()
   {
     return mOriginAttributes;
   }
 
-  nsresult SetOriginAttributes(const mozilla::DocShellOriginAttributes& aAttrs);
+  nsresult SetOriginAttributes(const mozilla::OriginAttributes& aAttrs);
 
   void GetInterceptedDocumentId(nsAString& aId)
   {
@@ -327,7 +333,8 @@ protected:
   // passed in, the about:blank principal will end up being used.
   nsresult CreateAboutBlankContentViewer(nsIPrincipal* aPrincipal,
                                          nsIURI* aBaseURI,
-                                         bool aTryToSaveOldPresentation = true);
+                                         bool aTryToSaveOldPresentation = true,
+                                         bool aCheckPermitUnload = true);
   nsresult CreateContentViewer(const nsACString& aContentType,
                                nsIRequest* aRequest,
                                nsIStreamListener** aContentHandler);
@@ -1034,7 +1041,7 @@ private:
   nsTObserverArray<nsWeakPtr> mScrollObservers;
   nsCString mOriginalUriString;
   nsWeakPtr mOpener;
-  mozilla::DocShellOriginAttributes mOriginAttributes;
+  mozilla::OriginAttributes mOriginAttributes;
 
   // A depth count of how many times NotifyRunToCompletionStart
   // has been called without a matching NotifyRunToCompletionStop.

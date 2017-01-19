@@ -13,7 +13,6 @@
 #include "nsCSSPseudoElements.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIEditor.h"
-#include "nsIEditorIMESupport.h"
 #include "nsIPhonetic.h"
 #include "nsTextFragment.h"
 #include "nsIDOMHTMLTextAreaElement.h"
@@ -255,7 +254,7 @@ nsTextControlFrame::EnsureEditorInitialized()
   // Flush out content on our document.  Have to do this, because script
   // blockers don't prevent the sink flushing out content and notifying in the
   // process, which can destroy frames.
-  doc->FlushPendingNotifications(Flush_ContentAndNotify);
+  doc->FlushPendingNotifications(FlushType::ContentAndNotify);
   NS_ENSURE_TRUE(weakFrame.IsAlive(), NS_ERROR_FAILURE);
 
   // Make sure that editor init doesn't do things that would kill us off
@@ -1207,11 +1206,9 @@ nsTextControlFrame::GetPhonetic(nsAString& aPhonetic)
   nsresult rv = GetEditor(getter_AddRefs(editor));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIEditorIMESupport> imeSupport = do_QueryInterface(editor);
-  if (imeSupport) {
-    nsCOMPtr<nsIPhonetic> phonetic = do_QueryInterface(imeSupport);
-    if (phonetic)
-      phonetic->GetPhonetic(aPhonetic);
+  nsCOMPtr<nsIPhonetic> phonetic = do_QueryInterface(editor);
+  if (phonetic) {
+    phonetic->GetPhonetic(aPhonetic);
   }
   return NS_OK;
 }

@@ -46,7 +46,7 @@ function MockFxAccounts() {
   let fxa = new FxAccounts({
     _now_is: Date.now(),
 
-    now: function () {
+    now() {
       return this._now_is;
     },
 
@@ -67,7 +67,7 @@ function run_test() {
   Log.repository.getLogger("Sync.Identity").level = Log.Level.Trace;
   Log.repository.getLogger("Sync.BrowserIDManager").level = Log.Level.Trace;
   run_next_test();
-};
+}
 
 add_test(function test_initial_state() {
     _("Verify initial state");
@@ -159,11 +159,11 @@ add_test(function test_getResourceAuthenticator() {
     do_check_true(!!authenticator);
     let req = {uri: CommonUtils.makeURI(
       "https://example.net/somewhere/over/the/rainbow"),
-               method: 'GET'};
-    let output = authenticator(req, 'GET');
-    do_check_true('headers' in output);
-    do_check_true('authorization' in output.headers);
-    do_check_true(output.headers.authorization.startsWith('Hawk'));
+               method: "GET"};
+    let output = authenticator(req, "GET");
+    do_check_true("headers" in output);
+    do_check_true("authorization" in output.headers);
+    do_check_true(output.headers.authorization.startsWith("Hawk"));
     _("Expected internal state after successful call.");
     do_check_eq(browseridManager._token.uid, identityConfig.fxaccount.token.uid);
     run_next_test();
@@ -176,10 +176,10 @@ add_test(function test_getRESTRequestAuthenticator() {
       "https://example.net/somewhere/over/the/rainbow");
     let authenticator = browseridManager.getRESTRequestAuthenticator();
     do_check_true(!!authenticator);
-    let output = authenticator(request, 'GET');
+    let output = authenticator(request, "GET");
     do_check_eq(request.uri, output.uri);
-    do_check_true(output._headers.authorization.startsWith('Hawk'));
-    do_check_true(output._headers.authorization.includes('nonce'));
+    do_check_true(output._headers.authorization.startsWith("Hawk"));
+    do_check_true(output._headers.authorization.includes("nonce"));
     do_check_true(browseridManager.hasValidToken());
     run_next_test();
   }
@@ -197,7 +197,7 @@ add_test(function test_resourceAuthenticatorSkew() {
 
   // mock fxa hawk client skew
   hawkClient.now = function() {
-    dump("mocked client now: " + now + '\n');
+    dump("mocked client now: " + now + "\n");
     return now;
   }
   // Imagine there's already been one fxa request and the hawk client has
@@ -245,10 +245,10 @@ add_test(function test_resourceAuthenticatorSkew() {
 
   let request = new SyncStorageRequest("https://example.net/i/like/pie/");
   let authenticator = browseridManager.getResourceAuthenticator();
-  let output = authenticator(request, 'GET');
+  let output = authenticator(request, "GET");
   dump("output" + JSON.stringify(output));
   let authHeader = output.headers.authorization;
-  do_check_true(authHeader.startsWith('Hawk'));
+  do_check_true(authHeader.startsWith("Hawk"));
 
   // Skew correction is applied in the header and we're within the two-minute
   // window.
@@ -292,10 +292,10 @@ add_test(function test_RESTResourceAuthenticatorSkew() {
 
   let request = new SyncStorageRequest("https://example.net/i/like/pie/");
   let authenticator = browseridManager.getResourceAuthenticator();
-  let output = authenticator(request, 'GET');
+  let output = authenticator(request, "GET");
   dump("output" + JSON.stringify(output));
   let authHeader = output.headers.authorization;
-  do_check_true(authHeader.startsWith('Hawk'));
+  do_check_true(authHeader.startsWith("Hawk"));
 
   // Skew correction is applied in the header and we're within the two-minute
   // window.
@@ -348,8 +348,8 @@ add_test(function test_tokenExpiration() {
     do_check_true(!!authenticator);
     let req = {uri: CommonUtils.makeURI(
       "https://example.net/somewhere/over/the/rainbow"),
-               method: 'GET'};
-    authenticator(req, 'GET');
+               method: "GET"};
+    authenticator(req, "GET");
 
     // Mock the clock.
     _("Forcing the token to expire ...");
@@ -387,7 +387,7 @@ add_test(function test_sha256() {
      "ab64eff7e88e2e46165e29f2bce41826bd4c7b3552f6b382a9e7d3af47c245f8"]
   ];
   let bidUser = new BrowserIDManager();
-  for (let [input,output] of vectors) {
+  for (let [input, output] of vectors) {
     do_check_eq(CommonUtils.bytesAsHex(bidUser._sha256(input)), output);
   }
   run_next_test();
@@ -699,13 +699,13 @@ add_task(async function test_getKeysMissing() {
   // try and fetch them.
   delete identityConfig.fxaccount.user.kA;
   delete identityConfig.fxaccount.user.kB;
-  identityConfig.fxaccount.user.keyFetchToken = 'keyFetchToken';
+  identityConfig.fxaccount.user.keyFetchToken = "keyFetchToken";
 
   configureFxAccountIdentity(browseridManager, identityConfig);
 
   // Mock a fxAccounts object that returns no keys
   let fxa = new FxAccounts({
-    fetchAndUnwrapKeys: function () {
+    fetchAndUnwrapKeys() {
       return Promise.resolve({});
     },
     fxAccountsClient: new MockFxAccountsClient(),
@@ -757,7 +757,7 @@ add_task(async function test_signedInUserMissing() {
   configureFxAccountIdentity(browseridManager, identityConfig);
 
   let fxa = new FxAccounts({
-    fetchAndUnwrapKeys: function () {
+    fetchAndUnwrapKeys() {
       return Promise.resolve({});
     },
     fxAccountsClient: new MockFxAccountsClient(),
@@ -795,14 +795,14 @@ async function initializeIdentityWithHAWKResponseFactory(config, cbGetResponse) 
     this._uri = uri;
     this._credentials = credentials;
     this._extra = extra;
-  };
+  }
   MockRESTRequest.prototype = {
-    setHeader: function() {},
-    post: function(data, callback) {
+    setHeader() {},
+    post(data, callback) {
       this.response = cbGetResponse("post", data, this._uri, this._credentials, this._extra);
       callback.call(this);
     },
-    get: function(callback) {
+    get(callback) {
       // Skip /status requests (browserid_identity checks if the account still
       // exists after an auth error)
       if (this._uri.startsWith("http://mockedserver:9999/account/status")) {
@@ -858,7 +858,7 @@ function getTimestamp(hawkAuthHeader) {
   return parseInt(/ts="(\d+)"/.exec(hawkAuthHeader)[1], 10) * SECOND_MS;
 }
 
-function getTimestampDelta(hawkAuthHeader, now=Date.now()) {
+function getTimestampDelta(hawkAuthHeader, now = Date.now()) {
   return Math.abs(getTimestamp(hawkAuthHeader) - now);
 }
 
@@ -868,11 +868,11 @@ function mockTokenServer(func) {
     requestLog.addAppender(new Log.DumpAppender());
     requestLog.level = Log.Level.Trace;
   }
-  function MockRESTRequest(url) {};
+  function MockRESTRequest(url) {}
   MockRESTRequest.prototype = {
     _log: requestLog,
-    setHeader: function() {},
-    get: function(callback) {
+    setHeader() {},
+    get(callback) {
       this.response = func();
       callback.call(this);
     }

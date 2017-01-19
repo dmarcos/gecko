@@ -41,6 +41,7 @@
 #include "PlatformMacros.h"
 #include "nsTArray.h"
 
+#include "mozilla/Preferences.h"
 #include "mozilla/ProfileGatherer.h"
 #endif
 
@@ -177,7 +178,6 @@ GeckoSampler::GeckoSampler(double aInterval, int aEntrySize,
                          const char** aFeatures, uint32_t aFeatureCount,
                          const char** aThreadNameFilters, uint32_t aFilterCount)
   : Sampler(aInterval, true, aEntrySize)
-  , mPrimaryThreadProfile(nullptr)
   , mBuffer(new ProfileBuffer(aEntrySize))
   , mSaveRequested(false)
 #if defined(XP_WIN)
@@ -265,11 +265,6 @@ GeckoSampler::~GeckoSampler()
 
     for (uint32_t i = 0; i < sRegisteredThreads->size(); i++) {
       ThreadInfo* info = sRegisteredThreads->at(i);
-      ThreadProfile* profile = info->Profile();
-      if (profile) {
-        delete profile;
-        info->SetProfile(nullptr);
-      }
       // We've stopped profiling. We no longer need to retain
       // information for an old thread.
       if (info->IsPendingDelete()) {
@@ -351,7 +346,18 @@ void GeckoSampler::StreamMetaJSCustomObject(SpliceableJSONWriter& aWriter)
   aWriter.DoubleProperty("interval", interval());
   aWriter.IntProperty("stackwalk", mUseStackWalk);
 
+#ifdef DEBUG
+  aWriter.IntProperty("debug", 1);
+#else
+  aWriter.IntProperty("debug", 0);
+#endif
+
 #ifndef SPS_STANDALONE
+  aWriter.IntProperty("gcpoison", JS::IsGCPoisoning() ? 1 : 0);
+
+  bool asyncStacks = Preferences::GetBool("javascript.options.asyncstack");
+  aWriter.IntProperty("asyncstack", asyncStacks);
+
   mozilla::TimeDuration delta = mozilla::TimeStamp::Now() - sStartTime;
   aWriter.DoubleProperty("startTime", static_cast<double>(PR_Now()/1000.0 - delta.ToMilliseconds()));
 
@@ -984,21 +990,21 @@ void GeckoSampler::doNativeBacktrace(ThreadProfile &aProfile, TickSample* aSampl
   // to fallback to using StackWalk64 which is slower.
 #if defined(XP_MACOSX) || (defined(XP_WIN) && !defined(V8_HOST_ARCH_X64))
   void *stackEnd = aSample->threadProfile->GetStackTop();
-  bool rv = true;
-  if (aSample->fp >= aSample->sp && aSample->fp <= stackEnd)
-    rv = FramePointerStackWalk(StackWalkCallback, /* skipFrames */ 0,
-                               maxFrames, &nativeStack,
-                               reinterpret_cast<void**>(aSample->fp), stackEnd);
+  if (aSample->fp >= aSample->sp && aSample->fp <= stackEnd) {
+    FramePointerStackWalk(StackWalkCallback, /* skipFrames */ 0, maxFrames,
+                          &nativeStack, reinterpret_cast<void**>(aSample->fp),
+                          stackEnd);
+  }
 #else
   void *platformData = nullptr;
 
   uintptr_t thread = GetThreadHandle(aSample->threadProfile->GetPlatformData());
   MOZ_ASSERT(thread);
-  bool rv = MozStackWalk(StackWalkCallback, /* skipFrames */ 0, maxFrames,
-                             &nativeStack, thread, platformData);
+  MozStackWalk(StackWalkCallback, /* skipFrames */ 0, maxFrames, &nativeStack,
+               thread, platformData);
 #endif
-  if (rv)
-    mergeStacksIntoProfile(aProfile, aSample, nativeStack);
+
+  mergeStacksIntoProfile(aProfile, aSample, nativeStack);
 }
 #endif
 
@@ -1288,7 +1294,7 @@ SyncProfile* GeckoSampler::GetBacktrace()
   TickSample sample;
   sample.threadProfile = profile;
 
-#if defined(HAVE_NATIVE_UNWIND)
+#if defined(HAVE_NATIVE_UNWIND) || defined(USE_LUL_STACKWALK)
 #if defined(XP_WIN) || defined(LINUX)
   tickcontext_t context;
   sample.PopulateContext(&context);

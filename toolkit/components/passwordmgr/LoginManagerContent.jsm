@@ -235,7 +235,7 @@ var LoginManagerContent = {
         let loginsFound = LoginHelper.vanillaObjectsToLogins(msg.data.logins);
         request.promise.resolve({
           form: request.form,
-          loginsFound: loginsFound,
+          loginsFound,
           recipes: msg.data.recipes,
         });
         break;
@@ -276,10 +276,10 @@ var LoginManagerContent = {
     let messageManager = messageManagerFromWindow(win);
 
     // XXX Weak??
-    let requestData = { form: form };
-    let messageData = { formOrigin: formOrigin,
-                        actionOrigin: actionOrigin,
-                        options: options };
+    let requestData = { form };
+    let messageData = { formOrigin,
+                        actionOrigin,
+                        options };
 
     return this._sendRequest(messageManager, requestData,
                              "RemoteLogins:findLogins",
@@ -306,14 +306,14 @@ var LoginManagerContent = {
                            null;
 
     let requestData = {};
-    let messageData = { formOrigin: formOrigin,
-                        actionOrigin: actionOrigin,
+    let messageData = { formOrigin,
+                        actionOrigin,
                         searchString: aSearchString,
-                        previousResult: previousResult,
+                        previousResult,
                         rect: aRect,
                         isSecure: InsecurePasswordUtils.isFormSecure(form),
                         isPasswordField: aElement.type == "password",
-                        remote: remote };
+                        remote };
 
     return this._sendRequest(messageManager, requestData,
                              "RemoteLogins:autoCompleteLogins",
@@ -585,14 +585,19 @@ var LoginManagerContent = {
 
   /**
    * @param {FormLike} form - the FormLike to look for password fields in.
-   * @param {bool} [skipEmptyFields=false] - Whether to ignore password fields with no value.
-   *                                         Used at capture time since saving empty values isn't
-   *                                         useful.
+   * @param {Object} options
+   * @param {bool} [options.skipEmptyFields=false] - Whether to ignore password fields with no value.
+   *                                                 Used at capture time since saving empty values isn't
+   *                                                 useful.
+   * @param {Object} [options.fieldOverrideRecipe=null] - A relevant field override recipe to use.
    * @return {Array|null} Array of password field elements for the specified form.
    *                      If no pw fields are found, or if more than 3 are found, then null
    *                      is returned.
    */
-  _getPasswordFields(form, skipEmptyFields = false) {
+  _getPasswordFields(form, {
+    fieldOverrideRecipe = null,
+    skipEmptyFields = false,
+  } = {}) {
     // Locate the password fields in the form.
     let pwFields = [];
     for (let i = 0; i < form.elements.length; i++) {
@@ -602,13 +607,21 @@ var LoginManagerContent = {
         continue;
       }
 
+      // Exclude ones matching a `notPasswordSelector`, if specified.
+      if (fieldOverrideRecipe && fieldOverrideRecipe.notPasswordSelector &&
+          element.matches(fieldOverrideRecipe.notPasswordSelector)) {
+        log("skipping password field (id/name is", element.id, " / ",
+            element.name + ") due to recipe:", fieldOverrideRecipe);
+        continue;
+      }
+
       if (skipEmptyFields && !element.value) {
         continue;
       }
 
       pwFields[pwFields.length] = {
                                     index   : i,
-                                    element : element
+                                    element
                                   };
     }
 
@@ -675,7 +688,10 @@ var LoginManagerContent = {
     if (!pwFields) {
       // Locate the password field(s) in the form. Up to 3 supported.
       // If there's no password field, there's nothing for us to do.
-      pwFields = this._getPasswordFields(form, isSubmission);
+      pwFields = this._getPasswordFields(form, {
+        fieldOverrideRecipe,
+        skipEmptyFields: isSubmission,
+      });
     }
 
     if (!pwFields) {
@@ -738,7 +754,7 @@ var LoginManagerContent = {
       } else if (pw2 == pw3) {
         oldPasswordField = pwFields[0].element;
         newPasswordField = pwFields[2].element;
-      } else  if (pw1 == pw3) {
+      } else if (pw1 == pw3) {
         // A bit odd, but could make sense with the right page layout.
         newPasswordField = pwFields[0].element;
         oldPasswordField = pwFields[1].element;
@@ -881,8 +897,8 @@ var LoginManagerContent = {
     let openerTopWindow = win.opener ? win.opener.top : null;
 
     messageManager.sendAsyncMessage("RemoteLogins:onFormSubmit",
-                                    { hostname: hostname,
-                                      formSubmitURL: formSubmitURL,
+                                    { hostname,
+                                      formSubmitURL,
                                       usernameField: mockUsername,
                                       newPasswordField: mockPassword,
                                       oldPasswordField: mockOldPassword },
@@ -1205,7 +1221,7 @@ var LoginUtils = {
   _getPasswordOrigin(uriString, allowJS) {
     var realm = "";
     try {
-      var uri = Services.io.newURI(uriString, null, null);
+      var uri = Services.io.newURI(uriString);
 
       if (allowJS && uri.scheme == "javascript")
         return "javascript:";
@@ -1277,7 +1293,7 @@ UserAutoCompleteResult.prototype = {
         return -1;
 
       if (userA > userB)
-        return  1;
+        return 1;
 
       return 0;
     }

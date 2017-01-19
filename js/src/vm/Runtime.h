@@ -62,6 +62,7 @@ namespace js {
 
 class PerThreadData;
 class ExclusiveContext;
+class AutoAssertNoContentJS;
 class AutoKeepAtoms;
 class EnterDebuggeeNoExecute;
 #ifdef JS_TRACE_LOGGING
@@ -769,6 +770,15 @@ struct JSRuntime : public JS::shadow::Runtime,
     void addUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
     void removeUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
 
+  private:
+    // Used to generate random keys for hash tables.
+    mozilla::Maybe<mozilla::non_crypto::XorShift128PlusRNG> randomKeyGenerator_;
+    mozilla::non_crypto::XorShift128PlusRNG& randomKeyGenerator();
+
+  public:
+    mozilla::HashCodeScrambler randomHashCodeScrambler();
+    mozilla::non_crypto::XorShift128PlusRNG forkRandomKeyGenerator();
+
     //-------------------------------------------------------------------------
     // Self-hosting support
     //-------------------------------------------------------------------------
@@ -843,6 +853,9 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     /* Call this to get the name of a compartment. */
     JSCompartmentNameCallback compartmentNameCallback;
+
+    /* Callback for doing memory reporting on external strings. */
+    JSExternalStringSizeofCallback externalStringSizeofCallback;
 
     js::ActivityCallback  activityCallback;
     void*                activityCallbackArg;
@@ -1029,6 +1042,15 @@ struct JSRuntime : public JS::shadow::Runtime,
     bool isBeingDestroyed() const {
         return beingDestroyed_;
     }
+
+  private:
+    bool allowContentJS_;
+  public:
+    bool allowContentJS() const {
+        return allowContentJS_;
+    }
+
+    friend class js::AutoAssertNoContentJS;
 
   private:
     // Set of all atoms other than those in permanentAtoms and staticStrings.

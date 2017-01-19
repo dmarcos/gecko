@@ -967,7 +967,7 @@ nsFrameSelection::MoveCaret(nsDirection       aDirection,
   NS_ENSURE_STATE(mShell);
   // Flush out layout, since we need it to be up to date to do caret
   // positioning.
-  mShell->FlushPendingNotifications(Flush_Layout);
+  mShell->FlushPendingNotifications(FlushType::Layout);
 
   if (!mShell) {
     return NS_OK;
@@ -1191,7 +1191,7 @@ nsFrameSelection::MoveCaret(nsDirection       aDirection,
 NS_IMETHODIMP
 Selection::ToString(nsAString& aReturn)
 {
-  // We need Flush_Style here to make sure frames have been created for
+  // We need FlushType::Frames here to make sure frames have been created for
   // the selected content.  Use mFrameSelection->GetShell() which returns
   // null if the Selection has been disconnected (the shell is Destroyed).
   nsCOMPtr<nsIPresShell> shell =
@@ -1200,7 +1200,7 @@ Selection::ToString(nsAString& aReturn)
     aReturn.Truncate();
     return NS_OK;
   }
-  shell->FlushPendingNotifications(Flush_Style);
+  shell->FlushPendingNotifications(FlushType::Frames);
 
   return ToStringWithFormat("text/plain",
                             nsIDocumentEncoder::SkipInvisibleContent,
@@ -2219,7 +2219,7 @@ nsFrameSelection::PhysicalMove(int16_t aDirection, int16_t aAmount,
   NS_ENSURE_STATE(mShell);
   // Flush out layout, since we need it to be up to date to do caret
   // positioning.
-  mShell->FlushPendingNotifications(Flush_Layout);
+  mShell->FlushPendingNotifications(FlushType::Layout);
 
   if (!mShell) {
     return NS_OK;
@@ -3546,7 +3546,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Selection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAnchorFocusRange)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mFrameSelection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSelectionListeners)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(Selection)
 
@@ -6135,7 +6134,7 @@ Selection::ScrollIntoView(SelectionRegion aRegion,
   // either manually flush if they're in a safe position for it or use the
   // async version of this method.
   if (aFlags & Selection::SCROLL_DO_FLUSH) {
-    presShell->FlushPendingNotifications(Flush_Layout);
+    presShell->FlushPendingNotifications(FlushType::Layout);
 
     // Reget the presshell, since it might have been Destroy'ed.
     presShell = mFrameSelection ? mFrameSelection->GetShell() : nullptr;
@@ -6429,6 +6428,55 @@ Selection::Modify(const nsAString& aAlter, const nsAString& aDirection,
       return;
     shell->CompleteMove(forward, extend);
   }
+}
+
+void
+Selection::SetBaseAndExtent(nsINode& aAnchorNode, uint32_t aAnchorOffset,
+                            nsINode& aFocusNode, uint32_t aFocusOffset,
+                            ErrorResult& aRv)
+{
+  if (!mFrameSelection) {
+    return;
+  }
+
+  SelectionBatcher batch(this);
+
+  int32_t relativePosition =
+    nsContentUtils::ComparePoints(&aAnchorNode, aAnchorOffset,
+                                  &aFocusNode, aFocusOffset);
+  nsINode* start = &aAnchorNode;
+  nsINode* end = &aFocusNode;
+  uint32_t startOffset = aAnchorOffset;
+  uint32_t endOffset = aFocusOffset;
+  if (relativePosition > 0) {
+    start = &aFocusNode;
+    end = &aAnchorNode;
+    startOffset = aFocusOffset;
+    endOffset = aAnchorOffset;
+  }
+
+  RefPtr<nsRange> newRange;
+  nsresult rv = nsRange::CreateRange(start, startOffset, end, endOffset,
+                                     getter_AddRefs(newRange));
+  // CreateRange returns IndexSizeError if any offset is out of bounds.
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+    return;
+  }
+
+  rv = RemoveAllRanges();
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+    return;
+  }
+
+  rv = AddRange(newRange);
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+    return;
+  }
+
+  SetDirection(relativePosition > 0 ? eDirPrevious : eDirNext);
 }
 
 /** SelectionLanguageChange modifies the cursor Bidi level after a change in keyboard direction

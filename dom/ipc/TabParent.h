@@ -174,9 +174,6 @@ public:
   virtual mozilla::ipc::IPCResult RecvReplyKeyEvent(const WidgetKeyboardEvent& aEvent) override;
 
   virtual mozilla::ipc::IPCResult
-  RecvDispatchAfterKeyboardEvent(const WidgetKeyboardEvent& aEvent) override;
-
-  virtual mozilla::ipc::IPCResult
   RecvAccessKeyNotHandled(const WidgetKeyboardEvent& aEvent) override;
 
   virtual mozilla::ipc::IPCResult RecvBrowserFrameOpenWindow(PBrowserParent* aOpener,
@@ -370,6 +367,8 @@ public:
   a11y::DocAccessibleParent* GetTopLevelDocAccessible() const;
 
   void LoadURL(nsIURI* aURI);
+
+  void InitRenderFrame();
 
   // XXX/cjones: it's not clear what we gain by hiding these
   // message-sending functions under a layer of indirection and
@@ -772,12 +771,6 @@ private:
   // If this flag is set, then the tab's layers will be preserved even when
   // the tab's docshell is inactive.
   bool mPreserveLayers;
-
-  // Normally we call ForceTabPaint when activating a tab. But we don't do this
-  // the first time we activate a tab. The tab is probably busy running the
-  // initial content scripts and we don't want to force painting then; they're
-  // probably quick and there's some cost to forcing painting.
-  bool mFirstActivate;
 
 public:
   static TabParent* GetTabParentFromLayersId(uint64_t aLayersId);

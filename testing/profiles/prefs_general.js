@@ -5,6 +5,7 @@ user_pref("browser.dom.window.dump.enabled", true);
 user_pref("browser.firstrun.show.localepicker", false);
 user_pref("browser.firstrun.show.uidiscovery", false);
 user_pref("browser.startup.page", 0); // use about:blank, not browser.startup.homepage
+user_pref("browser.search.suggest.timeout", 10000); // use a 10s suggestion timeout in tests
 user_pref("browser.ui.layout.tablet", 0); // force tablet UI off
 user_pref("dom.allow_scripts_to_close_windows", true);
 user_pref("dom.disable_open_during_load", false);
@@ -32,6 +33,7 @@ user_pref("devtools.debugger.remote-port", 6023);
 user_pref("devtools.devedition.promo.enabled", false);
 user_pref("browser.EULA.override", true);
 user_pref("gfx.color_management.force_srgb", true);
+user_pref("gfx.logging.level", 1);
 user_pref("network.manage-offline-status", false);
 // Disable speculative connections so they aren't reported as leaking when they're hanging around.
 user_pref("network.http.speculative-parallel-limit", 0);
@@ -97,6 +99,8 @@ user_pref("urlclassifier.updateinterval", 172800);
 user_pref("browser.safebrowsing.downloads.remote.url", "http://%(server)s/safebrowsing-dummy/update");
 user_pref("browser.safebrowsing.provider.google.gethashURL", "http://%(server)s/safebrowsing-dummy/gethash");
 user_pref("browser.safebrowsing.provider.google.updateURL", "http://%(server)s/safebrowsing-dummy/update");
+user_pref("browser.safebrowsing.provider.google4.gethashURL", "http://%(server)s/safebrowsing4-dummy/gethash");
+user_pref("browser.safebrowsing.provider.google4.updateURL", "http://%(server)s/safebrowsing4-dummy/update");
 user_pref("browser.safebrowsing.provider.mozilla.gethashURL", "http://%(server)s/safebrowsing-dummy/gethash");
 user_pref("browser.safebrowsing.provider.mozilla.updateURL", "http://%(server)s/safebrowsing-dummy/update");
 user_pref("privacy.trackingprotection.introURL", "http://%(server)s/trackingprotection/tour");
@@ -301,8 +305,9 @@ user_pref("browser.search.countryCode", "US");
 // This will prevent HTTP requests for region defaults.
 user_pref("browser.search.geoSpecificDefaults", false);
 
-// Make sure the self support tab doesn't hit the network.
-user_pref("browser.selfsupport.url", "https://%(server)s/selfsupport-dummy/");
+// Make sure self support doesn't hit the network.
+user_pref("browser.selfsupport.url", "https://example.com/selfsupport-dummy/");
+user_pref("extensions.shield-recipe-client.api_url", "https://example.com/selfsupport-dummy/");
 
 user_pref("media.eme.enabled", true);
 

@@ -55,13 +55,6 @@ tasks:
       tags:
         createdForUser: {{owner}}
 
-      scopes:
-        # Bug 1269443: cache scopes, etc. must be listed explicitly
-        - "docker-worker:cache:level-{{level}}-*"
-        - "docker-worker:cache:tooltool-cache"
-        # mozilla-taskcluster will append the appropriate assume:repo:<repo>
-        # scope here.
-
       routes:
         - "index.gecko.v2.{{project}}.latest.firefox.decision"
         - "tc-treeherder.v2.{{project}}.{{revision}}.{{pushlog_id}}"
@@ -85,8 +78,8 @@ tasks:
           chainOfTrust: true
 
         # Note: This task is built server side without the context or tooling that
-        # exist in tree so we must hard code the version
-        image: 'taskcluster/decision:0.1.7'
+        # exist in tree so we must hard code the hash
+        image: 'taskcluster/decision@sha256:0f59f922d86c471e208b7ea08ab077fc68c3920ed5e6895d69a23e8f3457dc24'
 
         maxRunTime: 1800
 

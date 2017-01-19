@@ -27,10 +27,10 @@ var fakeServerUrl = "http://localhost:" + fakeServer.port;
 const logsdir = FileUtils.getDir("ProfD", ["weave", "logs"], true);
 
 const PROLONGED_ERROR_DURATION =
-  (Svc.Prefs.get('errorhandler.networkFailureReportTimeout') * 2) * 1000;
+  (Svc.Prefs.get("errorhandler.networkFailureReportTimeout") * 2) * 1000;
 
 const NON_PROLONGED_ERROR_DURATION =
-  (Svc.Prefs.get('errorhandler.networkFailureReportTimeout') / 2) * 1000;
+  (Svc.Prefs.get("errorhandler.networkFailureReportTimeout") / 2) * 1000;
 
 Service.engineManager.clear();
 
@@ -90,7 +90,7 @@ add_identity_test(this, async function test_401_logout() {
       do_check_false(Service.isLoggedIn);
 
       // Clean up.
-      Utils.nextTick(function () {
+      Utils.nextTick(function() {
         Service.startOver();
         server.stop(deferred.resolve);
       });
@@ -371,7 +371,7 @@ add_identity_test(this, async function test_shouldReportError_master_password() 
   // Monkey patch Service.verifyLogin to imitate
   // master password being locked.
   Service._verifyLogin = Service.verifyLogin;
-  Service.verifyLogin = function () {
+  Service.verifyLogin = function() {
     Status.login = MASTER_PASSWORD_LOCKED;
     return false;
   };

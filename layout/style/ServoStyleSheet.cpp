@@ -30,10 +30,23 @@ ServoStyleSheet::ServoStyleSheet(css::SheetParsingMode aParsingMode,
 ServoStyleSheet::~ServoStyleSheet()
 {
   DropSheet();
-  if (mRuleList) {
-    mRuleList->DropReference();
-  }
 }
+
+// QueryInterface implementation for ServoStyleSheet
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServoStyleSheet)
+NS_INTERFACE_MAP_END_INHERITING(StyleSheet)
+
+NS_IMPL_ADDREF_INHERITED(ServoStyleSheet, StyleSheet)
+NS_IMPL_RELEASE_INHERITED(ServoStyleSheet, StyleSheet)
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(ServoStyleSheet)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(ServoStyleSheet)
+  tmp->DropRuleList();
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END_INHERITED(StyleSheet)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ServoStyleSheet, StyleSheet)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRuleList)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 bool
 ServoStyleSheet::HasRules() const
@@ -62,21 +75,17 @@ ServoStyleSheet::GetParentSheet() const
 void
 ServoStyleSheet::AppendStyleSheet(ServoStyleSheet* aSheet)
 {
-  // XXXheycam: When we implement support for child sheets, we'll have
-  // to fix SetOwningDocument to propagate the owning document down
-  // to the children.
-  MOZ_CRASH("stylo: not implemented");
+  aSheet->mDocument = mDocument;
 }
 
 nsresult
-ServoStyleSheet::ParseSheet(const nsAString& aInput,
+ServoStyleSheet::ParseSheet(css::Loader* aLoader,
+                            const nsAString& aInput,
                             nsIURI* aSheetURI,
                             nsIURI* aBaseURI,
                             nsIPrincipal* aSheetPrincipal,
                             uint32_t aLineNumber)
 {
-  DropSheet();
-
   RefPtr<ThreadSafeURIHolder> base = new ThreadSafeURIHolder(aBaseURI);
   RefPtr<ThreadSafeURIHolder> referrer = new ThreadSafeURIHolder(aSheetURI);
   RefPtr<ThreadSafePrincipalHolder> principal =
@@ -87,8 +96,15 @@ ServoStyleSheet::ParseSheet(const nsAString& aInput,
   NS_ENSURE_SUCCESS(rv, rv);
 
   NS_ConvertUTF16toUTF8 input(aInput);
-  mSheet = Servo_StyleSheet_FromUTF8Bytes(&input, mParsingMode, &baseString,
-                                          base, referrer, principal).Consume();
+  if (!mSheet) {
+    mSheet =
+      Servo_StyleSheet_FromUTF8Bytes(aLoader, this, &input, mParsingMode,
+                                     &baseString, base, referrer,
+                                     principal).Consume();
+  } else {
+    Servo_StyleSheet_ClearAndUpdate(mSheet, aLoader, this, &input, base,
+                                    referrer, principal);
+  }
 
   return NS_OK;
 }
@@ -103,6 +119,16 @@ void
 ServoStyleSheet::DropSheet()
 {
   mSheet = nullptr;
+  DropRuleList();
+}
+
+void
+ServoStyleSheet::DropRuleList()
+{
+  if (mRuleList) {
+    mRuleList->DropReference();
+    mRuleList = nullptr;
+  }
 }
 
 size_t
@@ -118,12 +144,6 @@ ServoStyleSheet::List(FILE* aOut, int32_t aIndex) const
   MOZ_CRASH("stylo: not implemented");
 }
 #endif
-
-nsMediaList*
-ServoStyleSheet::Media()
-{
-  return nullptr;
-}
 
 nsIDOMCSSRule*
 ServoStyleSheet::GetDOMOwnerRule() const

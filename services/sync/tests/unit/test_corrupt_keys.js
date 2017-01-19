@@ -98,12 +98,12 @@ add_task(async function test_locally_changed_keys() {
     let visitType = Ci.nsINavHistoryService.TRANSITION_LINK;
     let history   = johndoe.createCollection("history");
     for (let i = 0; i < 5; i++) {
-      let id = 'record-no--' + i;
-      let modified = Date.now()/1000 - 60*(i+10);
+      let id = "record-no--" + i;
+      let modified = Date.now() / 1000 - 60 * (i + 10);
 
       let w = new CryptoWrapper("history", "id");
       w.cleartext = {
-        id: id,
+        id,
         histUri: "http://foo/bar?" + id,
         title: id,
         sortindex: i,
@@ -155,12 +155,12 @@ add_task(async function test_locally_changed_keys() {
     _("Busting some new server values.");
     // Now what happens if we corrupt the HMAC on the server?
     for (let i = 5; i < 10; i++) {
-      let id = 'record-no--' + i;
+      let id = "record-no--" + i;
       let modified = 1 + (Date.now() / 1000);
 
       let w = new CryptoWrapper("history", "id");
       w.cleartext = {
-        id: id,
+        id,
         histUri: "http://foo/bar?" + id,
         title: id,
         sortindex: i,

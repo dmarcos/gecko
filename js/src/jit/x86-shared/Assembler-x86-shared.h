@@ -409,6 +409,18 @@ class AssemblerX86Shared : public AssemblerShared
                preBarriers_.oom();
     }
 
+    void disableProtection() { masm.disableProtection(); }
+    void enableProtection() { masm.enableProtection(); }
+    void setLowerBoundForProtection(size_t size) {
+        masm.setLowerBoundForProtection(size);
+    }
+    void unprotectRegion(unsigned char* first, size_t size) {
+        masm.unprotectRegion(first, size);
+    }
+    void reprotectRegion(unsigned char* first, size_t size) {
+        masm.reprotectRegion(first, size);
+    }
+
     void setPrinter(Sprinter* sp) {
         masm.setPrinter(sp);
     }
@@ -1061,18 +1073,27 @@ class AssemblerX86Shared : public AssemblerShared
     }
 
     void patchCall(uint32_t callerOffset, uint32_t calleeOffset) {
-        unsigned char* code = masm.data();
+        unsigned char* code = masm.acquireData();
         X86Encoding::SetRel32(code + callerOffset, code + calleeOffset);
+        masm.releaseData();
     }
     CodeOffset farJumpWithPatch() {
         return CodeOffset(masm.jmp().offset());
     }
     void patchFarJump(CodeOffset farJump, uint32_t targetOffset) {
-        unsigned char* code = masm.data();
+        unsigned char* code = masm.acquireData();
         X86Encoding::SetRel32(code + farJump.offset(), code + targetOffset);
+        masm.releaseData();
     }
     static void repatchFarJump(uint8_t* code, uint32_t farJumpOffset, uint32_t targetOffset) {
         X86Encoding::SetRel32(code + farJumpOffset, code + targetOffset);
+    }
+
+    // This is for patching during code generation, not after.
+    void patchAddl(CodeOffset offset, int32_t n) {
+        unsigned char* code = masm.acquireData();
+        X86Encoding::SetInt32(code + offset.offset(), n);
+        masm.releaseData();
     }
 
     CodeOffset twoByteNop() {
@@ -1083,6 +1104,13 @@ class AssemblerX86Shared : public AssemblerShared
     }
     static void patchJumpToTwoByteNop(uint8_t* jump) {
         X86Encoding::BaseAssembler::patchJumpToTwoByteNop(jump);
+    }
+
+    static void patchFiveByteNopToCall(uint8_t* callsite, uint8_t* target) {
+        X86Encoding::BaseAssembler::patchFiveByteNopToCall(callsite, target);
+    }
+    static void patchCallToFiveByteNop(uint8_t* callsite) {
+        X86Encoding::BaseAssembler::patchCallToFiveByteNop(callsite);
     }
 
     void breakpoint() {

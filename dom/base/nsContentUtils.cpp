@@ -2636,7 +2636,7 @@ nsContentUtils::GenerateStateKey(nsIContent* aContent,
     // If this becomes unnecessary and the following line is removed,
     // please also remove the corresponding flush operation from
     // nsHtml5TreeBuilderCppSupplement.h. (Look for "See bug 497861." there.)
-    aContent->GetUncomposedDoc()->FlushPendingNotifications(Flush_Content);
+    aContent->GetUncomposedDoc()->FlushPendingNotifications(FlushType::Content);
 
     nsContentList *htmlForms = htmlDocument->GetForms();
     nsContentList *htmlFormControls = htmlDocument->GetFormControls();
@@ -3145,11 +3145,11 @@ nsContentUtils::CanLoadImage(nsIURI* aURI, nsISupports* aContext,
 }
 
 // static
-mozilla::PrincipalOriginAttributes
+mozilla::OriginAttributes
 nsContentUtils::GetOriginAttributes(nsIDocument* aDocument)
 {
   if (!aDocument) {
-    return mozilla::PrincipalOriginAttributes();
+    return mozilla::OriginAttributes();
   }
 
   nsCOMPtr<nsILoadGroup> loadGroup = aDocument->GetDocumentLoadGroup();
@@ -3157,30 +3157,28 @@ nsContentUtils::GetOriginAttributes(nsIDocument* aDocument)
     return GetOriginAttributes(loadGroup);
   }
 
-  mozilla::PrincipalOriginAttributes attrs;
-  mozilla::NeckoOriginAttributes nattrs;
+  mozilla::OriginAttributes attrs;
   nsCOMPtr<nsIChannel> channel = aDocument->GetChannel();
-  if (channel && NS_GetOriginAttributes(channel, nattrs)) {
-    attrs.InheritFromNecko(nattrs);
+  if (channel && NS_GetOriginAttributes(channel, attrs)) {
+    attrs.StripAttributes(OriginAttributes::STRIP_ADDON_ID);
   }
   return attrs;
 }
 
 // static
-mozilla::PrincipalOriginAttributes
+mozilla::OriginAttributes
 nsContentUtils::GetOriginAttributes(nsILoadGroup* aLoadGroup)
 {
   if (!aLoadGroup) {
-    return mozilla::PrincipalOriginAttributes();
+    return mozilla::OriginAttributes();
   }
-  mozilla::PrincipalOriginAttributes attrs;
-  mozilla::DocShellOriginAttributes dsattrs;
+  mozilla::OriginAttributes attrs;
   nsCOMPtr<nsIInterfaceRequestor> callbacks;
   aLoadGroup->GetNotificationCallbacks(getter_AddRefs(callbacks));
   if (callbacks) {
     nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(callbacks);
-    if (loadContext && loadContext->GetOriginAttributes(dsattrs)) {
-      attrs.InheritFromDocShellToDoc(dsattrs, nullptr);
+    if (loadContext && loadContext->GetOriginAttributes(attrs)) {
+      attrs.StripAttributes(OriginAttributes::STRIP_ADDON_ID);
     }
   }
   return attrs;
@@ -3569,6 +3567,11 @@ nsresult nsContentUtils::FormatLocalizedString(PropertiesFile aFile,
   nsresult rv = EnsureStringBundle(aFile);
   NS_ENSURE_SUCCESS(rv, rv);
   nsIStringBundle *bundle = sStringBundles[aFile];
+
+  if (!aParams || !aParamsLength) {
+    return bundle->GetStringFromName(NS_ConvertASCIItoUTF16(aKey).get(),
+                                     getter_Copies(aResult));
+  }
 
   return bundle->FormatStringFromName(NS_ConvertASCIItoUTF16(aKey).get(),
                                       aParams, aParamsLength,
@@ -5128,7 +5131,7 @@ nsContentUtils::TriggerLink(nsIContent *aContent, nsPresContext *aPresContext,
 
     handler->OnLinkClick(aContent, aLinkURI,
                          fileName.IsVoid() ? aTargetSpec.get() : EmptyString().get(),
-                         fileName, nullptr, nullptr, aIsTrusted);
+                         fileName, nullptr, nullptr, aIsTrusted, aContent->NodePrincipal());
   }
 }
 
@@ -6456,7 +6459,7 @@ nsContentUtils::FlushLayoutForTree(nsPIDOMWindowOuter* aWindow)
   // usually pretty shallow.
 
   if (nsCOMPtr<nsIDocument> doc = aWindow->GetDoc()) {
-    doc->FlushPendingNotifications(Flush_Layout);
+    doc->FlushPendingNotifications(FlushType::Layout);
   }
 
   if (nsCOMPtr<nsIDocShell> docShell = aWindow->GetDocShell()) {
@@ -8233,6 +8236,7 @@ nsContentUtils::SendMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
                                bool aIgnoreRootScrollFrame,
                                float aPressure,
                                unsigned short aInputSourceArg,
+                               uint32_t aIdentifier,
                                bool aToWindow,
                                bool *aPreventDefault,
                                bool aIsDOMEventSynthesized,
@@ -8280,6 +8284,7 @@ nsContentUtils::SendMouseEvent(const nsCOMPtr<nsIPresShell>& aPresShell,
                            WidgetMouseEvent::eReal,
                          contextMenuKey ? WidgetMouseEvent::eContextMenuKey :
                                           WidgetMouseEvent::eNormal);
+  event.pointerId = aIdentifier;
   event.mModifiers = GetWidgetModifiers(aModifiers);
   event.button = aButton;
   event.buttons = aButtons != nsIDOMWindowUtils::MOUSE_BUTTONS_NOT_SPECIFIED ?
@@ -8505,9 +8510,7 @@ nsContentUtils::SetFetchReferrerURIWithPolicy(nsIPrincipal* aPrincipal,
     referrerURI = principalURI;
   }
 
-  net::ReferrerPolicy referrerPolicy = (aReferrerPolicy != net::RP_Unset) ?
-                                       aReferrerPolicy : net::RP_Default;
-  return aChannel->SetReferrerWithPolicy(referrerURI, referrerPolicy);
+  return aChannel->SetReferrerWithPolicy(referrerURI, aReferrerPolicy);
 }
 
 // static
@@ -8521,6 +8524,9 @@ nsContentUtils::GetReferrerPolicyFromHeader(const nsAString& aHeader)
   net::ReferrerPolicy referrerPolicy = mozilla::net::RP_Unset;
   while (tokenizer.hasMoreTokens()) {
     token = tokenizer.nextToken();
+    if (token.IsEmpty()) {
+      continue;
+    }
     net::ReferrerPolicy policy = net::ReferrerPolicyFromString(token);
     if (policy != net::RP_Unset) {
       referrerPolicy = policy;
@@ -9693,39 +9699,28 @@ nsContentUtils::AttemptLargeAllocationLoad(nsIHttpChannel* aChannel)
     return false;
   }
 
-  nsIDocShell* docShell = outer->GetDocShell();
   nsIDocument* doc = outer->GetExtantDoc();
 
-  // If the docshell is not allowed to change process, report an error based on
-  // the reason
-  const char* errorName = nullptr;
-  switch (docShell->GetProcessLockReason()) {
-    case nsIDocShell::PROCESS_LOCK_NON_CONTENT:
-      errorName = "LargeAllocationNonE10S";
-      break;
-    case nsIDocShell::PROCESS_LOCK_IFRAME:
-      errorName = "LargeAllocationIFrame";
-      break;
-    case nsIDocShell::PROCESS_LOCK_RELATED_CONTEXTS:
-      errorName = "LargeAllocationRelatedBrowsingContexts";
-      break;
-    case nsIDocShell::PROCESS_LOCK_NONE:
-      // Don't print a warning, we're allowed to change processes!
-      break;
-    default:
-      MOZ_ASSERT(false, "Should be unreachable!");
-      return false;
-  }
-
-  if (errorName) {
+  if (!XRE_IsContentProcess()) {
     if (doc) {
       nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
                                       NS_LITERAL_CSTRING("DOM"),
                                       doc,
                                       nsContentUtils::eDOM_PROPERTIES,
-                                      errorName);
+                                      "LargeAllocationNonE10S");
     }
+    return false;
+  }
 
+  nsIDocShell* docShell = outer->GetDocShell();
+  if (!docShell->GetIsOnlyToplevelInTabGroup()) {
+    if (doc) {
+      nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                      NS_LITERAL_CSTRING("DOM"),
+                                      doc,
+                                      nsContentUtils::eDOM_PROPERTIES,
+                                      "LargeAllocationNotOnlyToplevelInTabGroup");
+    }
     return false;
   }
 
@@ -9781,9 +9776,13 @@ nsContentUtils::AttemptLargeAllocationLoad(nsIHttpChannel* aChannel)
   rv = aChannel->GetReferrer(getter_AddRefs(referrer));
   NS_ENSURE_SUCCESS(rv, false);
 
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
+  nsCOMPtr<nsIPrincipal> triggeringPrincipal = loadInfo->TriggeringPrincipal();
+
   // Actually perform the cross process load
   bool reloadSucceeded = false;
-  rv = wbc3->ReloadInFreshProcess(docShell, uri, referrer, &reloadSucceeded);
+  rv = wbc3->ReloadInFreshProcess(docShell, uri, referrer,
+                                  triggeringPrincipal, &reloadSucceeded);
   NS_ENSURE_SUCCESS(rv, false);
 
   return reloadSucceeded;

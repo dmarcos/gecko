@@ -61,7 +61,7 @@ public:
 
   NS_IMETHOD Run();
 
-  nsNSSHttpRequestSession *mRequestSession;
+  RefPtr<nsNSSHttpRequestSession> mRequestSession;
   
   RefPtr<nsHTTPListener> mListener;
   bool mResponsibleForDoneSignal;
@@ -77,8 +77,6 @@ nsHTTPDownloadEvent::~nsHTTPDownloadEvent()
 {
   if (mResponsibleForDoneSignal && mListener)
     mListener->send_done_signal();
-
-  mRequestSession->Release();
 }
 
 NS_IMETHODIMP
@@ -116,8 +114,8 @@ nsHTTPDownloadEvent::Run()
   // For OCSP requests, only the first party domain aspect of origin attributes
   // is used. This means that OCSP requests are shared across different
   // containers.
-  if (mRequestSession->mOriginAttributes != NeckoOriginAttributes()) {
-    NeckoOriginAttributes attrs;
+  if (mRequestSession->mOriginAttributes != OriginAttributes()) {
+    OriginAttributes attrs;
     attrs.mFirstPartyDomain =
       mRequestSession->mOriginAttributes.mFirstPartyDomain;
 
@@ -232,7 +230,7 @@ nsNSSHttpRequestSession::createFcn(const nsNSSHttpServerSession* session,
                                    const char* http_protocol_variant,
                                    const char* path_and_query_string,
                                    const char* http_request_method,
-                                   const NeckoOriginAttributes& origin_attributes,
+                                   const OriginAttributes& origin_attributes,
                                    const PRIntervalTime timeout,
                            /*out*/ nsNSSHttpRequestSession** pRequest)
 {
@@ -411,7 +409,6 @@ nsNSSHttpRequestSession::internal_send_receive_attempt(bool &retryable_error,
   }
 
   event->mListener = mListener;
-  this->AddRef();
   event->mRequestSession = this;
 
   nsresult rv = NS_DispatchToMainThread(event);
@@ -602,8 +599,8 @@ nsHTTPListener::FreeLoadGroup(bool aCancelLoad)
 
   if (mLoadGroup) {
     if (mLoadGroupOwnerThread != PR_GetCurrentThread()) {
-      NS_ASSERTION(false,
-                   "attempt to access nsHTTPDownloadEvent::mLoadGroup on multiple threads, leaking it!");
+      MOZ_ASSERT_UNREACHABLE(
+        "Attempt to access mLoadGroup on multiple threads, leaking it!");
     }
     else {
       lg = mLoadGroup;

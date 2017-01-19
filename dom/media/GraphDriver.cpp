@@ -39,19 +39,6 @@ namespace mozilla {
 
 StaticRefPtr<nsIThreadPool> AsyncCubebTask::sThreadPool;
 
-struct AutoProfilerUnregisterThread
-{
-  // The empty ctor is used to silence a pre-4.8.0 GCC unused variable warning.
-  AutoProfilerUnregisterThread()
-  {
-  }
-
-  ~AutoProfilerUnregisterThread()
-  {
-    profiler_unregister_thread();
-  }
-};
-
 GraphDriver::GraphDriver(MediaStreamGraphImpl* aGraphImpl)
   : mIterationStart(0),
     mIterationEnd(0),
@@ -196,9 +183,7 @@ public:
   }
   NS_IMETHOD Run() override
   {
-    char aLocal;
     STREAM_LOG(LogLevel::Debug, ("Starting system thread"));
-    profiler_register_thread("MediaStreamGraph", &aLocal);
     LIFECYCLE_LOG("Starting a new system driver for graph %p\n",
                   mDriver->mGraphImpl);
 
@@ -316,8 +301,6 @@ SystemClockDriver::IsFallback()
 void
 ThreadedDriver::RunThread()
 {
-  AutoProfilerUnregisterThread autoUnregister;
-
   bool stillProcessing = true;
   while (stillProcessing) {
     mIterationStart = IterationEnd();
@@ -532,7 +515,9 @@ AsyncCubebTask::Run()
   switch(mOperation) {
     case AsyncCubebOperation::INIT: {
       LIFECYCLE_LOG("AsyncCubebOperation::INIT driver=%p\n", mDriver.get());
-      mDriver->Init();
+      if (!mDriver->Init()) {
+        return NS_ERROR_FAILURE;
+      }
       mDriver->CompleteAudioContextOperations(mOperation);
       break;
     }
@@ -611,7 +596,7 @@ bool IsMacbookOrMacbookAir()
   return false;
 }
 
-void
+bool
 AudioCallbackDriver::Init()
 {
   cubeb* cubebContext = CubebUtils::GetCubebContext();
@@ -620,7 +605,7 @@ AudioCallbackDriver::Init()
     if (!mFromFallback) {
       CubebUtils::ReportCubebStreamInitFailure(true);
     }
-    return;
+    return false;
   }
 
   cubeb_stream_params output;
@@ -641,7 +626,7 @@ AudioCallbackDriver::Init()
 #endif
   if (output.stream_type == CUBEB_STREAM_TYPE_MAX) {
     NS_WARNING("Bad stream type");
-    return;
+    return false;
   }
 #else
   (void)mAudioChannel;
@@ -660,7 +645,7 @@ AudioCallbackDriver::Init()
   } else {
     if (cubeb_get_min_latency(cubebContext, output, &latency_frames) != CUBEB_OK) {
       NS_WARNING("Could not get minimal latency from cubeb.");
-      return;
+      return false;
     }
   }
 
@@ -729,7 +714,7 @@ AudioCallbackDriver::Init()
       nextDriver->SetGraphTime(this, mIterationStart, mIterationEnd);
       mGraphImpl->SetCurrentDriver(nextDriver);
       nextDriver->Start();
-      return;
+      return true;
     }
   }
   bool aec;
@@ -739,9 +724,13 @@ AudioCallbackDriver::Init()
   cubeb_stream_register_device_changed_callback(mAudioStream,
                                                 AudioCallbackDriver::DeviceChangedCallback_s);
 
-  StartStream();
+  if (!StartStream()) {
+    STREAM_LOG(LogLevel::Warning, ("AudioCallbackDriver couldn't start stream."));
+    return false;
+  }
 
   STREAM_LOG(LogLevel::Debug, ("AudioCallbackDriver started."));
+  return true;
 }
 
 
@@ -788,11 +777,12 @@ AudioCallbackDriver::Start()
   initEvent->Dispatch();
 }
 
-void
+bool
 AudioCallbackDriver::StartStream()
 {
   if (cubeb_stream_start(mAudioStream) != CUBEB_OK) {
-    MOZ_CRASH("Could not start cubeb stream for MSG.");
+    NS_WARNING("Could not start cubeb stream for MSG.");
+    return false;
   }
 
   {
@@ -800,6 +790,7 @@ AudioCallbackDriver::StartStream()
     mStarted = true;
     mWaitState = WAITSTATE_RUNNING;
   }
+  return true;
 }
 
 void

@@ -13,7 +13,6 @@ import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.json.JSONException;
 import org.json.JSONObject;
 import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.db.BrowserDB;
@@ -27,6 +26,7 @@ import org.mozilla.gecko.icons.Icons;
 import org.mozilla.gecko.reader.ReaderModeUtils;
 import org.mozilla.gecko.reader.ReadingListHelper;
 import org.mozilla.gecko.toolbar.BrowserToolbar.TabEditingState;
+import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.SiteLogins;
 
@@ -60,11 +60,12 @@ public class Tab {
     private Future<IconResponse> mRunningIconRequest;
 
     private boolean mHasFeeds;
+    private boolean mHasManifest;
     private boolean mHasOpenSearch;
     private final SiteIdentity mSiteIdentity;
     private SiteLogins mSiteLogins;
     private BitmapDrawable mThumbnail;
-    private final int mParentId;
+    private volatile int mParentId;
     // Indicates the url was loaded from a source external to the app. This will be cleared
     // when the user explicitly loads a new url (e.g. clicking a link is not explicit).
     private final boolean mExternal;
@@ -166,6 +167,17 @@ public class Tab {
 
     public int getParentId() {
         return mParentId;
+    }
+
+    /**
+     * Updates the stored parent tab ID to a new value.
+     * Note: Calling this directly from Java currently won't update the parent ID value
+     * held by Gecko and the session store.
+     *
+     * @param parentId The ID of the tab to be set as new parent, or -1 for no parent.
+     */
+    public void setParentId(int parentId) {
+        mParentId = parentId;
     }
 
     // may be null if user-entered query hasn't yet been resolved to a URI
@@ -287,6 +299,10 @@ public class Tab {
 
     public boolean hasFeeds() {
         return mHasFeeds;
+    }
+
+    public boolean hasManifest() {
+        return mHasManifest;
     }
 
     public boolean hasOpenSearch() {
@@ -466,6 +482,10 @@ public class Tab {
         mHasFeeds = hasFeeds;
     }
 
+    public void setHasManifest(boolean hasManifest) {
+        mHasManifest = hasManifest;
+    }
+
     public void setHasOpenSearch(boolean hasOpenSearch) {
         mHasOpenSearch = hasOpenSearch;
     }
@@ -474,7 +494,7 @@ public class Tab {
         mLoadedFromCache = loadedFromCache;
     }
 
-    public void updateIdentityData(JSONObject identityData) {
+    public void updateIdentityData(final GeckoBundle identityData) {
         mSiteIdentity.update(identityData);
     }
 
@@ -582,7 +602,7 @@ public class Tab {
         return true;
     }
 
-    void handleLocationChange(JSONObject message) throws JSONException {
+    void handleLocationChange(final GeckoBundle message) {
         final String uri = message.getString("uri");
         final String oldUrl = getURL();
         final boolean sameDocument = message.getBoolean("sameDocument");
@@ -624,9 +644,10 @@ public class Tab {
 
         setContentType(message.getString("contentType"));
         updateUserRequested(message.getString("userRequested"));
-        mBaseDomain = message.optString("baseDomain");
+        mBaseDomain = message.getString("baseDomain");
 
         setHasFeeds(false);
+        setHasManifest(false);
         setHasOpenSearch(false);
         mSiteIdentity.reset();
         setSiteLogins(null);

@@ -286,7 +286,8 @@ class JSObject : public js::gc::Cell
      * If this object was instantiated with `new Ctor`, return the constructor's
      * display atom. Otherwise, return nullptr.
      */
-    bool constructorDisplayAtom(JSContext* cx, js::MutableHandleAtom name);
+    static bool constructorDisplayAtom(JSContext* cx, js::HandleObject obj,
+                                       js::MutableHandleAtom name);
 
     /*
      * The same as constructorDisplayAtom above, however if this object has a
@@ -346,7 +347,7 @@ class JSObject : public js::gc::Cell
     // Change an existing object to have a singleton group.
     static bool changeToSingleton(JSContext* cx, js::HandleObject obj);
 
-    inline js::ObjectGroup* getGroup(JSContext* cx);
+    static inline js::ObjectGroup* getGroup(JSContext* cx, js::HandleObject obj);
 
     const js::GCPtrObjectGroup& groupFromGC() const {
         /* Direct field access for use by GC. */
@@ -436,13 +437,14 @@ class JSObject : public js::gc::Cell
     }
 
     /* Set a new prototype for an object with a singleton type. */
-    bool splicePrototype(JSContext* cx, const js::Class* clasp, js::Handle<js::TaggedProto> proto);
+    static bool splicePrototype(JSContext* cx, js::HandleObject obj, const js::Class* clasp,
+                                js::Handle<js::TaggedProto> proto);
 
     /*
      * For bootstrapping, whether to splice a prototype for Function.prototype
      * or the global object.
      */
-    bool shouldSplicePrototype(JSContext* cx);
+    bool shouldSplicePrototype();
 
     /*
      * Environment chains.
@@ -590,21 +592,23 @@ class JSObject : public js::gc::Cell
     void operator=(const JSObject& other) = delete;
 };
 
-template <class U>
+template <typename Wrapper>
+template <typename U>
 MOZ_ALWAYS_INLINE JS::Handle<U*>
-js::RootedBase<JSObject*>::as() const
+js::RootedBase<JSObject*, Wrapper>::as() const
 {
-    const JS::Rooted<JSObject*>& self = *static_cast<const JS::Rooted<JSObject*>*>(this);
-    MOZ_ASSERT(self->is<U>());
+    const Wrapper& self = *static_cast<const Wrapper*>(this);
+    MOZ_ASSERT(self->template is<U>());
     return Handle<U*>::fromMarkedLocation(reinterpret_cast<U* const*>(self.address()));
 }
 
+template <typename Wrapper>
 template <class U>
 MOZ_ALWAYS_INLINE JS::Handle<U*>
-js::HandleBase<JSObject*>::as() const
+js::HandleBase<JSObject*, Wrapper>::as() const
 {
     const JS::Handle<JSObject*>& self = *static_cast<const JS::Handle<JSObject*>*>(this);
-    MOZ_ASSERT(self->is<U>());
+    MOZ_ASSERT(self->template is<U>());
     return Handle<U*>::fromMarkedLocation(reinterpret_cast<U* const*>(self.address()));
 }
 
@@ -1260,6 +1264,9 @@ GetPropertyPure(ExclusiveContext* cx, JSObject* obj, jsid id, Value* vp);
 
 bool
 GetGetterPure(ExclusiveContext* cx, JSObject* obj, jsid id, JSFunction** fp);
+
+bool
+GetOwnGetterPure(ExclusiveContext* cx, JSObject* obj, jsid id, JSFunction** fp);
 
 bool
 GetOwnNativeGetterPure(JSContext* cx, JSObject* obj, jsid id, JSNative* native);

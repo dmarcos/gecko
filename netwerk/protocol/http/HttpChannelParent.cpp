@@ -130,7 +130,7 @@ HttpChannelParent::Init(const HttpChannelCreationArgs& aArgs)
                        a.initialRwin(), a.blockAuthPrompt(),
                        a.suspendAfterSynthesizeResponse(),
                        a.allowStaleCacheContent(), a.contentTypeHint(),
-                       a.channelId(), a.preferredAlternativeType());
+                       a.channelId(), a.contentWindowId(), a.preferredAlternativeType());
   }
   case HttpChannelCreationArgs::THttpChannelConnectArgs:
   {
@@ -328,6 +328,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
                                  const bool&                aAllowStaleCacheContent,
                                  const nsCString&           aContentTypeHint,
                                  const nsCString&           aChannelId,
+                                 const uint64_t&            aContentWindowId,
                                  const nsCString&           aPreferredAlternativeType)
 {
   nsCOMPtr<nsIURI> uri = DeserializeURI(aURI);
@@ -358,7 +359,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     return SendFailedAsyncOpen(rv);
   }
 
-  NeckoOriginAttributes attrs;
+  OriginAttributes attrs;
   rv = loadInfo->GetOriginAttributes(&attrs);
   if (NS_FAILED(rv)) {
     return SendFailedAsyncOpen(rv);
@@ -377,6 +378,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
 
   // Set the channelId allocated in child to the parent instance
   mChannel->SetChannelId(aChannelId);
+  mChannel->SetTopLevelContentWindowId(aContentWindowId);
 
   mChannel->SetWarningReporter(this);
   mChannel->SetTimingEnabled(true);
@@ -554,11 +556,10 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     }
 
     if (setChooseApplicationCache) {
-      NeckoOriginAttributes neckoAttrs;
-      NS_GetOriginAttributes(mChannel, neckoAttrs);
+      OriginAttributes attrs;
+      NS_GetOriginAttributes(mChannel, attrs);
+      attrs.StripAttributes(OriginAttributes::STRIP_ADDON_ID);
 
-      PrincipalOriginAttributes attrs;
-      attrs.InheritFromNecko(neckoAttrs);
       nsCOMPtr<nsIPrincipal> principal =
         BasePrincipal::CreateCodebasePrincipal(uri, attrs);
 
@@ -1357,6 +1358,14 @@ HttpChannelParent::NotifyTrackingProtectionDisabled()
 }
 
 NS_IMETHODIMP
+HttpChannelParent::NotifyTrackingResource()
+{
+  if (!mIPCClosed)
+    Unused << SendNotifyTrackingResource();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 HttpChannelParent::Delete()
 {
   if (!mIPCClosed)
@@ -1815,6 +1824,14 @@ HttpChannelParent::IssueWarning(uint32_t aWarning, bool aAsError)
 {
   Unused << SendIssueDeprecationWarning(aWarning, aAsError);
   return NS_OK;
+}
+
+void
+HttpChannelParent::DoSendSetPriority(int16_t aValue)
+{
+  if (!mIPCClosed) {
+    Unused << SendSetPriority(aValue);
+  }
 }
 
 } // namespace net

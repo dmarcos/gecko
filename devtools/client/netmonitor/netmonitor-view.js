@@ -8,8 +8,6 @@
 "use strict";
 
 const { testing: isTesting } = require("devtools/shared/flags");
-const promise = require("promise");
-const Editor = require("devtools/client/sourceeditor/editor");
 const { Task } = require("devtools/shared/task");
 const { ViewHelpers } = require("devtools/client/shared/widgets/view-helpers");
 const { RequestsMenuView } = require("./requests-menu-view");
@@ -17,7 +15,7 @@ const { CustomRequestView } = require("./custom-request-view");
 const { ToolbarView } = require("./toolbar-view");
 const { SidebarView } = require("./sidebar-view");
 const { DetailsView } = require("./details-view");
-const { PerformanceStatisticsView } = require("./performance-statistics-view");
+const { StatisticsView } = require("./statistics-view");
 const { ACTIVITY_TYPE } = require("./constants");
 const Actions = require("./actions/index");
 const { Prefs } = require("./prefs");
@@ -31,12 +29,6 @@ const WDA_DEFAULT_VERIFY_INTERVAL = 50;
 // never gets hit during testing.
 // ms
 const WDA_DEFAULT_GIVE_UP_TIMEOUT = isTesting ? 45000 : 2000;
-
-const DEFAULT_EDITOR_CONFIG = {
-  mode: Editor.modes.text,
-  readOnly: true,
-  lineNumbers: true
-};
 
 /**
  * Object defining the network monitor view components.
@@ -52,7 +44,15 @@ var NetMonitorView = {
     this.RequestsMenu.initialize(gStore);
     this.NetworkDetails.initialize(gStore);
     this.CustomRequest.initialize();
-    this.PerformanceStatistics.initialize(gStore);
+    this.Statistics.initialize(gStore);
+
+    // Store watcher here is for observing the statisticsOpen state change.
+    // It should be removed once we migrate to react and apply react/redex binding.
+    this.unsubscribeStore = gStore.subscribe(storeWatcher(
+      false,
+      () => gStore.getState().ui.statisticsOpen,
+      this.toggleFrontendMode.bind(this)
+    ));
   },
 
   /**
@@ -64,6 +64,8 @@ var NetMonitorView = {
     this.RequestsMenu.destroy();
     this.NetworkDetails.destroy();
     this.CustomRequest.destroy();
+    this.Statistics.destroy();
+    this.unsubscribeStore();
 
     this._destroyPanes();
   },
@@ -92,11 +94,6 @@ var NetMonitorView = {
     Prefs.networkDetailsHeight = this._detailsPane.getAttribute("height");
 
     this._detailsPane = null;
-
-    for (let p of this._editorPromises.values()) {
-      let editor = yield p;
-      editor.destroy();
-    }
   }),
 
   /**
@@ -151,10 +148,10 @@ var NetMonitorView = {
    * Toggles between the frontend view modes ("Inspector" vs. "Statistics").
    */
   toggleFrontendMode: function () {
-    if (this.currentFrontendMode != "network-inspector-view") {
-      this.showNetworkInspectorView();
-    } else {
+    if (gStore.getState().ui.statisticsOpen) {
       this.showNetworkStatisticsView();
+    } else {
+      this.showNetworkInspectorView();
     }
   },
 
@@ -173,7 +170,7 @@ var NetMonitorView = {
 
     let controller = NetMonitorController;
     let requestsView = this.RequestsMenu;
-    let statisticsView = this.PerformanceStatistics;
+    let statisticsView = this.Statistics;
 
     Task.spawn(function* () {
       statisticsView.displayPlaceholderCharts();
@@ -193,7 +190,7 @@ var NetMonitorView = {
         console.error(ex);
       }
 
-      const requests = requestsView.store.getState().requests.requests;
+      const requests = requestsView.store.getState().requests.requests.valueSeq();
       statisticsView.createPrimedCacheChart(requests);
       statisticsView.createEmptyCacheChart(requests);
     });
@@ -204,35 +201,8 @@ var NetMonitorView = {
       ACTIVITY_TYPE.RELOAD.WITH_CACHE_DEFAULT);
   },
 
-  /**
-   * Lazily initializes and returns a promise for a Editor instance.
-   *
-   * @param string id
-   *        The id of the editor placeholder node.
-   * @return object
-   *         A promise that is resolved when the editor is available.
-   */
-  editor: function (id) {
-    dumpn("Getting a NetMonitorView editor: " + id);
-
-    if (this._editorPromises.has(id)) {
-      return this._editorPromises.get(id);
-    }
-
-    let deferred = promise.defer();
-    this._editorPromises.set(id, deferred.promise);
-
-    // Initialize the source editor and store the newly created instance
-    // in the ether of a resolved promise's value.
-    let editor = new Editor(DEFAULT_EDITOR_CONFIG);
-    editor.appendTo($(id)).then(() => deferred.resolve(editor));
-
-    return deferred.promise;
-  },
-
   _body: null,
   _detailsPane: null,
-  _editorPromises: new Map()
 };
 
 /**
@@ -270,6 +240,19 @@ function whenDataAvailable(dataStore, mandatoryFields) {
   });
 }
 
+// A smart store watcher to notify store changes as necessary
+function storeWatcher(initialValue, reduceValue, onChange) {
+  let currentValue = initialValue;
+
+  return () => {
+    const newValue = reduceValue();
+    if (newValue !== currentValue) {
+      onChange();
+      currentValue = newValue;
+    }
+  };
+}
+
 /**
  * Preliminary setup for the NetMonitorView object.
  */
@@ -278,6 +261,6 @@ NetMonitorView.Sidebar = new SidebarView();
 NetMonitorView.NetworkDetails = new DetailsView();
 NetMonitorView.RequestsMenu = new RequestsMenuView();
 NetMonitorView.CustomRequest = new CustomRequestView();
-NetMonitorView.PerformanceStatistics = new PerformanceStatisticsView();
+NetMonitorView.Statistics = new StatisticsView();
 
 exports.NetMonitorView = NetMonitorView;

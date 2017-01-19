@@ -100,7 +100,7 @@ TrackBuffersManager::TrackBuffersManager(MediaSourceDecoder* aParentDecoder,
   , mVideoEvictionThreshold(Preferences::GetUint("media.mediasource.eviction_threshold.video",
                                                  100 * 1024 * 1024))
   , mAudioEvictionThreshold(Preferences::GetUint("media.mediasource.eviction_threshold.audio",
-                                                 10 * 1024 * 1024))
+                                                 20 * 1024 * 1024))
   , mEvictionState(EvictionState::NO_EVICTION_NEEDED)
   , mMonitor("TrackBuffersManager")
 {
@@ -273,10 +273,10 @@ TrackBuffersManager::EvictData(const TimeUnit& aPlaybackTime, int64_t aSize)
   const uint32_t canEvict =
     Evictable(HasVideo() ? TrackInfo::kVideoTrack : TrackInfo::kAudioTrack);
 
-  MSE_DEBUG(
-    "buffered=%lldkB, eviction threshold=%ukB, evict=%lldkB canevict=%ukB",
-    GetSize() / 1024, EvictionThreshold() / 1024, toEvict / 1024,
-    canEvict / 1024);
+  MSE_DEBUG("currentTime=%lld buffered=%lldkB, eviction threshold=%ukB, "
+            "evict=%lldkB canevict=%ukB",
+            aPlaybackTime.ToMicroseconds(), GetSize() / 1024,
+            EvictionThreshold() / 1024, toEvict / 1024, canEvict / 1024);
 
   if (toEvict <= 0) {
     mEvictionState = EvictionState::NO_EVICTION_NEEDED;
@@ -295,7 +295,9 @@ TrackBuffersManager::EvictData(const TimeUnit& aPlaybackTime, int64_t aSize)
     mEvictionState = EvictionState::EVICTION_NEEDED;
     result = EvictDataResult::NO_DATA_EVICTED;
   }
-  MSE_DEBUG("Reached our size limit, schedule eviction of %lld bytes", toEvict);
+  MSE_DEBUG(
+    "Reached our size limit, schedule eviction of %lld bytes (%s)", toEvict,
+    result == EvictDataResult::BUFFER_FULL ? "buffer full" : "no data evicted");
   QueueTask(new EvictDataTask(aPlaybackTime, toEvict));
 
   return result;
@@ -442,7 +444,7 @@ TrackBuffersManager::DoEvictData(const TimeUnit& aPlaybackTime,
       }
       partialEvict = 0;
     }
-    if (frame->mTime >= lowerLimit.ToMicroseconds()) {
+    if (frame->GetEndTime() >= lowerLimit.ToMicroseconds()) {
       break;
     }
     partialEvict += frame->ComputedSizeOfIncludingThis();
@@ -731,20 +733,21 @@ TrackBuffersManager::SegmentParserLoop()
 
       // 3. If the input buffer contains one or more complete coded frames, then run the coded frame processing algorithm.
       RefPtr<TrackBuffersManager> self = this;
-      mProcessingRequest.Begin(CodedFrameProcessing()
-          ->Then(GetTaskQueue(), __func__,
-                 [self] (bool aNeedMoreData) {
-                   self->mProcessingRequest.Complete();
-                   if (aNeedMoreData) {
-                     self->NeedMoreData();
-                   } else {
-                     self->ScheduleSegmentParserLoop();
-                   }
-                 },
-                 [self] (const MediaResult& aRejectValue) {
-                   self->mProcessingRequest.Complete();
-                   self->RejectAppend(aRejectValue, __func__);
-                 }));
+      CodedFrameProcessing()
+        ->Then(GetTaskQueue(), __func__,
+               [self] (bool aNeedMoreData) {
+                 self->mProcessingRequest.Complete();
+                 if (aNeedMoreData) {
+                   self->NeedMoreData();
+                 } else {
+                   self->ScheduleSegmentParserLoop();
+                 }
+               },
+               [self] (const MediaResult& aRejectValue) {
+                 self->mProcessingRequest.Complete();
+                 self->RejectAppend(aRejectValue, __func__);
+               })
+        ->Track(mProcessingRequest);
       return;
     }
   }
@@ -840,11 +843,12 @@ TrackBuffersManager::ResetDemuxingState()
     RejectAppend(NS_ERROR_FAILURE, __func__);
     return;
   }
-  mDemuxerInitRequest.Begin(mInputDemuxer->Init()
-                      ->Then(GetTaskQueue(), __func__,
-                             this,
-                             &TrackBuffersManager::OnDemuxerResetDone,
-                             &TrackBuffersManager::OnDemuxerInitFailed));
+  mInputDemuxer->Init()
+    ->Then(GetTaskQueue(), __func__,
+           this,
+           &TrackBuffersManager::OnDemuxerResetDone,
+           &TrackBuffersManager::OnDemuxerInitFailed)
+    ->Track(mDemuxerInitRequest);
 }
 
 void
@@ -914,11 +918,12 @@ TrackBuffersManager::InitializationSegmentReceived()
     RejectAppend(NS_ERROR_DOM_NOT_SUPPORTED_ERR, __func__);
     return;
   }
-  mDemuxerInitRequest.Begin(mInputDemuxer->Init()
-                      ->Then(GetTaskQueue(), __func__,
-                             this,
-                             &TrackBuffersManager::OnDemuxerInitDone,
-                             &TrackBuffersManager::OnDemuxerInitFailed));
+  mInputDemuxer->Init()
+    ->Then(GetTaskQueue(), __func__,
+           this,
+           &TrackBuffersManager::OnDemuxerInitDone,
+           &TrackBuffersManager::OnDemuxerInitFailed)
+    ->Track(mDemuxerInitRequest);
 }
 
 void
@@ -958,7 +963,7 @@ TrackBuffersManager::OnDemuxerInitDone(nsresult)
   // 1. Update the duration attribute if it currently equals NaN.
   // Those steps are performed by the MediaSourceDecoder::SetInitialDuration
   AbstractThread::MainThread()->Dispatch(NewRunnableMethod<int64_t>
-                                         (mParentDecoder,
+                                         (mParentDecoder.get(),
                                           &MediaSourceDecoder::SetInitialDuration,
                                           duration ? duration : -1));
 
@@ -1198,10 +1203,11 @@ TrackBuffersManager::DoDemuxVideo()
     DoDemuxAudio();
     return;
   }
-  mVideoTracks.mDemuxRequest.Begin(mVideoTracks.mDemuxer->GetSamples(-1)
-                             ->Then(GetTaskQueue(), __func__, this,
-                                    &TrackBuffersManager::OnVideoDemuxCompleted,
-                                    &TrackBuffersManager::OnVideoDemuxFailed));
+  mVideoTracks.mDemuxer->GetSamples(-1)
+    ->Then(GetTaskQueue(), __func__, this,
+           &TrackBuffersManager::OnVideoDemuxCompleted,
+           &TrackBuffersManager::OnVideoDemuxFailed)
+    ->Track(mVideoTracks.mDemuxRequest);
 }
 
 void
@@ -1222,10 +1228,11 @@ TrackBuffersManager::DoDemuxAudio()
     CompleteCodedFrameProcessing();
     return;
   }
-  mAudioTracks.mDemuxRequest.Begin(mAudioTracks.mDemuxer->GetSamples(-1)
-                             ->Then(GetTaskQueue(), __func__, this,
-                                    &TrackBuffersManager::OnAudioDemuxCompleted,
-                                    &TrackBuffersManager::OnAudioDemuxFailed));
+  mAudioTracks.mDemuxer->GetSamples(-1)
+    ->Then(GetTaskQueue(), __func__, this,
+           &TrackBuffersManager::OnAudioDemuxCompleted,
+           &TrackBuffersManager::OnAudioDemuxFailed)
+    ->Track(mAudioTracks.mDemuxRequest);
 }
 
 void

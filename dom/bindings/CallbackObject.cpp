@@ -37,7 +37,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(CallbackObject)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIncumbentGlobal)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(CallbackObject)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mIncumbentGlobal)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(CallbackObject)
@@ -56,11 +55,22 @@ CallbackObject::Trace(JSTracer* aTracer)
 }
 
 void
-CallbackObject::HoldJSObjectsIfMoreThanOneOwner()
+CallbackObject::FinishSlowJSInitIfMoreThanOneOwner(JSContext* aCx)
 {
   MOZ_ASSERT(mRefCnt.get() > 0);
   if (mRefCnt.get() > 1) {
     mozilla::HoldJSObjects(this);
+    if (JS::ContextOptionsRef(aCx).asyncStack()) {
+      JS::RootedObject stack(aCx);
+      if (!JS::CaptureCurrentStack(aCx, &stack)) {
+        JS_ClearPendingException(aCx);
+      }
+      mCreationStack = stack;
+    }
+    mIncumbentGlobal = GetIncumbentGlobal();
+    if (mIncumbentGlobal) {
+      mIncumbentJSGlobal = mIncumbentGlobal->GetGlobalJSObject();
+    }
   } else {
     // We can just forget all our stuff.
     ClearJSReferences();

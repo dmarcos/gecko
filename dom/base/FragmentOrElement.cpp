@@ -93,7 +93,6 @@
 #include "nsICategoryManager.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIEditor.h"
-#include "nsIEditorIMESupport.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsIControllers.h"
 #include "nsView.h"
@@ -264,12 +263,11 @@ nsIContent::GetDesiredIMEState()
     return IMEState(IMEState::DISABLED);
   }
   nsIEditor* editor = nsContentUtils::GetHTMLEditor(pc);
-  nsCOMPtr<nsIEditorIMESupport> imeEditor = do_QueryInterface(editor);
-  if (!imeEditor) {
+  if (!editor) {
     return IMEState(IMEState::DISABLED);
   }
   IMEState state;
-  imeEditor->GetPreferredIMEState(&state);
+  editor->GetPreferredIMEState(&state);
   return state;
 }
 
@@ -644,6 +642,7 @@ FragmentOrElement::nsDOMSlots::Unlink(bool aIsXUL)
   mChildrenList = nullptr;
   mCustomElementData = nullptr;
   mClassList = nullptr;
+  mRegisteredIntersectionObservers.Clear();
 }
 
 size_t
@@ -1162,10 +1161,10 @@ FragmentOrElement::RemoveChildAt(uint32_t aIndex, bool aNotify)
 
 void
 FragmentOrElement::GetTextContentInternal(nsAString& aTextContent,
-                                          ErrorResult& aError)
+                                          OOMReporter& aError)
 {
   if (!nsContentUtils::GetNodeTextContent(this, true, aTextContent, fallible)) {
-    aError.Throw(NS_ERROR_OUT_OF_MEMORY);
+    aError.ReportOOM();
   }
 }
 
@@ -1401,6 +1400,13 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(FragmentOrElement)
   {
     nsDOMSlots *slots = tmp->GetExistingDOMSlots();
     if (slots) {
+      if (tmp->IsElement()) {
+        Element* elem = tmp->AsElement();
+        for (auto iter = slots->mRegisteredIntersectionObservers.Iter(); !iter.Done(); iter.Next()) {
+          DOMIntersectionObserver* observer = iter.Key();
+          observer->UnlinkTarget(*elem);
+        }
+      }
       slots->Unlink(tmp->IsXULElement());
     }
   }
@@ -1904,10 +1910,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(FragmentOrElement)
   else {
     NS_IMPL_CYCLE_COLLECTION_DESCRIBE(FragmentOrElement, tmp->mRefCnt.get())
   }
-
-  // Always need to traverse script objects, so do that before we check
-  // if we're uncollectable.
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 
   if (!nsINode::Traverse(tmp, cb)) {
     return NS_SUCCESS_INTERRUPTED_TRAVERSE;

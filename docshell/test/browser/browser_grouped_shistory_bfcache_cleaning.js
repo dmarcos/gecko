@@ -23,14 +23,13 @@ add_task(function* () {
   yield BrowserTestUtils.withNewTab({ gBrowser, url: "data:text/html,a" }, function* (browser1) {
     // Set up the grouped SHEntry setup
     let tab2 = gBrowser.loadOneTab("data:text/html,b", {
-      referrerPolicy: Ci.nsIHttpChannel.REFERRER_POLICY_DEFAULT,
+      referrerPolicy: Ci.nsIHttpChannel.REFERRER_POLICY_UNSET,
       allowThirdPartyFixup: true,
       relatedToCurrent: true,
       isPrerendered: true,
     });
     yield BrowserTestUtils.browserLoaded(tab2.linkedBrowser);
-    browser1.frameLoader.appendPartialSessionHistoryAndSwap(
-      tab2.linkedBrowser.frameLoader);
+    browser1.frameLoader.appendPartialSHistoryAndSwap(tab2.linkedBrowser.frameLoader);
     yield awaitProcessChange(browser1);
     ok(isAlive(tab2));
 

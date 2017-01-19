@@ -129,6 +129,7 @@ include('/ipc/chromium/chromium-config.mozbuild')
 
 EXPORTS += [
     'public/GeckoProfiler.h',
+    'public/GeckoProfilerTypes.h',
 ]
 
 if CONFIG['MOZ_TASK_TRACER']:
@@ -150,3 +151,6 @@ if CONFIG['GNU_CXX']:
         '-Wno-error=shadow',
         '-Wno-ignored-qualifiers', # due to use of breakpad headers
     ]
+
+with Files('**'):
+    BUG_COMPONENT = ('Core', 'Gecko Profiler')

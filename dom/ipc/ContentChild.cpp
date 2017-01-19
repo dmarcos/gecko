@@ -27,13 +27,15 @@
 #include "mozilla/dom/VideoDecoderManagerChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/DataTransfer.h"
-#include "mozilla/dom/DOMStorageIPC.h"
+#include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/ExternalHelperAppChild.h"
 #include "mozilla/dom/FlyWebPublishedServerIPC.h"
 #include "mozilla/dom/GetFilesHelper.h"
 #include "mozilla/dom/PCrashReporterChild.h"
 #include "mozilla/dom/ProcessGlobal.h"
 #include "mozilla/dom/PushNotifier.h"
+#include "mozilla/dom/StorageIPC.h"
+#include "mozilla/dom/TabGroup.h"
 #include "mozilla/dom/workers/ServiceWorkerManager.h"
 #include "mozilla/dom/nsIContentChild.h"
 #include "mozilla/dom/URLClassifierChild.h"
@@ -665,7 +667,7 @@ ContentChild::ProvideWindow(mozIDOMWindowProxy* aParent,
 static nsresult
 GetWindowParamsFromParent(mozIDOMWindowProxy* aParent,
                           nsACString& aBaseURIString, float* aFullZoom,
-                          DocShellOriginAttributes& aOriginAttributes)
+                          OriginAttributes& aOriginAttributes)
 {
   *aFullZoom = 1.0f;
   auto* opener = nsPIDOMWindowOuter::From(aParent);
@@ -732,7 +734,7 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
       if (NS_SUCCEEDED(rv) && !shouldLoad) {
         nsAutoCString baseURIString;
         float fullZoom;
-        DocShellOriginAttributes originAttributes;
+        OriginAttributes originAttributes;
         rv = GetWindowParamsFromParent(aParent, baseURIString, &fullZoom,
                                        originAttributes);
         if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -786,6 +788,19 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
     ipcContext->get_PopupIPCTabContext().opener() = aTabOpener;
   }
 
+  // We need to assign a TabGroup to the PBrowser actor before we send it to the
+  // parent. Otherwise, the parent could send messages to us before we have a
+  // proper TabGroup for that actor.
+  RefPtr<TabGroup> tabGroup;
+  if (aTabOpener && !aForceNoOpener) {
+    // The new actor will use the same tab group as the opener.
+    tabGroup = aTabOpener->TabGroup();
+  } else {
+    tabGroup = new TabGroup();
+  }
+  nsCOMPtr<nsIEventTarget> target = tabGroup->EventTargetFor(TaskCategory::Other);
+  SetEventTargetForActor(newChild, target);
+
   Unused << SendPBrowserConstructor(
     // We release this ref in DeallocPBrowserChild
     RefPtr<TabChild>(newChild).forget().take(),
@@ -819,7 +834,7 @@ ContentChild::ProvideWindowCommon(TabChild* aTabOpener,
   } else {
     nsAutoCString baseURIString;
     float fullZoom;
-    DocShellOriginAttributes originAttributes;
+    OriginAttributes originAttributes;
     rv = GetWindowParamsFromParent(aParent, baseURIString, &fullZoom,
                                    originAttributes);
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1235,6 +1250,13 @@ ContentChild::RecvGMPsChanged(nsTArray<GMPCapabilityData>&& capabilities)
 }
 
 mozilla::ipc::IPCResult
+ContentChild::RecvInitProcessHangMonitor(Endpoint<PProcessHangMonitorChild>&& aHangMonitor)
+{
+  CreateHangMonitorChild(Move(aHangMonitor));
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
 ContentChild::RecvInitRendering(Endpoint<PCompositorBridgeChild>&& aCompositor,
                                 Endpoint<PImageBridgeChild>&& aImageBridge,
                                 Endpoint<PVRManagerChild>&& aVRBridge,
@@ -1295,13 +1317,6 @@ ContentChild::AllocPBackgroundChild(Transport* aTransport,
                                     ProcessId aOtherProcess)
 {
   return BackgroundChild::Alloc(aTransport, aOtherProcess);
-}
-
-PProcessHangMonitorChild*
-ContentChild::AllocPProcessHangMonitorChild(Transport* aTransport,
-                                            ProcessId aOtherProcess)
-{
-  return CreateHangMonitorChild(aTransport, aOtherProcess);
 }
 
 #if defined(XP_MACOSX) && defined(MOZ_CONTENT_SANDBOX)
@@ -1570,17 +1585,8 @@ ContentChild::RecvPBrowserConstructor(PBrowserChild* aActor,
                                       const ContentParentId& aCpID,
                                       const bool& aIsForBrowser)
 {
-  // This runs after AllocPBrowserChild() returns and the IPC machinery for this
-  // PBrowserChild has been set up.
-
-  nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-  if (os) {
-    nsITabChild* tc =
-      static_cast<nsITabChild*>(static_cast<TabChild*>(aActor));
-    os->NotifyObservers(tc, "tab-child-created", nullptr);
-  }
-
-  return IPC_OK();
+  return nsIContentChild::RecvPBrowserConstructor(aActor, aTabId, aContext,
+                                                  aChromeFlags, aCpID, aIsForBrowser);
 }
 
 void
@@ -1946,7 +1952,7 @@ ContentChild::AllocPStorageChild()
 bool
 ContentChild::DeallocPStorageChild(PStorageChild* aActor)
 {
-  DOMStorageDBChild* child = static_cast<DOMStorageDBChild*>(aActor);
+  StorageDBChild* child = static_cast<StorageDBChild*>(aActor);
   child->ReleaseIPDLReference();
   return true;
 }
@@ -2318,7 +2324,7 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
   // note we do not need to force mUserContextId to the default here because
   // the permission manager does that internally.
   nsAutoCString originNoSuffix;
-  PrincipalOriginAttributes attrs;
+  OriginAttributes attrs;
   bool success = attrs.PopulateFromOrigin(permission.origin, originNoSuffix);
   NS_ENSURE_TRUE(success, IPC_FAIL_NO_REASON(this));
 
@@ -2441,7 +2447,10 @@ mozilla::ipc::IPCResult
 ContentChild::RecvInitServiceWorkers(const ServiceWorkerConfiguration& aConfig)
 {
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-  MOZ_ASSERT(swm);
+  if (!swm) {
+    // browser shutdown began
+    return IPC_OK();
+  }
   swm->LoadRegistrations(aConfig.serviceWorkerRegistrations());
   return IPC_OK();
 }
@@ -3232,6 +3241,23 @@ ContentChild::DeallocPURLClassifierChild(PURLClassifierChild* aActor)
   MOZ_ASSERT(aActor);
   delete aActor;
   return true;
+}
+
+// The IPC code will call this method asking us to assign an event target to new
+// actors created by the ContentParent.
+already_AddRefed<nsIEventTarget>
+ContentChild::GetConstructedEventTarget(const Message& aMsg)
+{
+  // Currently we only set targets for PBrowser.
+  if (aMsg.type() != PContent::Msg_PBrowserConstructor__ID) {
+    return nullptr;
+  }
+
+  // If the request for a new TabChild is coming from the parent process, then
+  // there is no opener. Therefore, we create a fresh TabGroup.
+  RefPtr<TabGroup> tabGroup = new TabGroup();
+  nsCOMPtr<nsIEventTarget> target = tabGroup->EventTargetFor(TaskCategory::Other);
+  return target.forget();
 }
 
 } // namespace dom
