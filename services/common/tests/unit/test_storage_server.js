@@ -173,8 +173,8 @@ add_test(function test_url_parsing() {
   do_check_eq(rest, undefined);
 
   parts = server.storageRE.exec("storage");
-  let storage, collection, id;
-  [all, storage, collection, id] = parts;
+  let collection;
+  [all, , collection, ] = parts;
   do_check_eq(all, "storage");
   do_check_eq(collection, undefined);
 
@@ -414,7 +414,7 @@ add_test(function test_bso_delete_exists() {
   server.startSynchronous();
 
   let coll = server.user("123").createCollection("test");
-  let bso = coll.insert("myid", {foo: "bar"});
+  coll.insert("myid", {foo: "bar"});
   let timestamp = coll.timestamp;
 
   server.callback.onItemDeleted = function onDeleted(username, collection, id) {
@@ -597,7 +597,7 @@ add_test(function test_x_num_records() {
     // BSO fetches don't have one.
     do_check_false("x-num-records" in this.response.headers);
     let col = localRequest(server, "/2.0/123/storage/crypto");
-    col.get(function(err) {
+    col.get(function(err2) {
       // Collection fetches do.
       do_check_eq(this.response.headers["x-num-records"], "2");
       server.stop(run_next_test);

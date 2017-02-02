@@ -79,6 +79,7 @@ VP9EncoderImpl::VP9EncoderImpl()
       // Use two spatial when screensharing with flexible mode.
       spatial_layer_(new ScreenshareLayersVP9(2)) {
   memset(&codec_, 0, sizeof(codec_));
+  memset(&svc_params_, 0, sizeof(vpx_svc_extra_cfg_t));
   uint32_t seed = static_cast<uint32_t>(TickTime::MillisecondTimestamp());
   srand(seed);
 }
@@ -114,19 +115,14 @@ int VP9EncoderImpl::Release() {
 bool VP9EncoderImpl::ExplicitlyConfiguredSpatialLayers() const {
   // We check target_bitrate_bps of the 0th layer to see if the spatial layers
   // (i.e. bitrates) were explicitly configured.
-#ifdef LIBVPX_SVC
   return num_spatial_layers_ > 1 &&
          codec_.spatialLayers[0].target_bitrate_bps > 0;
-#else
-  return false;
-#endif
 }
 
 bool VP9EncoderImpl::SetSvcRates() {
   uint8_t i = 0;
 
   if (ExplicitlyConfiguredSpatialLayers()) {
-#ifdef LIBVPX_SVC
     if (num_temporal_layers_ > 1) {
       LOG(LS_ERROR) << "Multiple temporal layers when manually specifying "
                        "spatial layers not implemented yet!";
@@ -143,27 +139,21 @@ bool VP9EncoderImpl::SetSvcRates() {
                            codec_.spatialLayers[i].target_bitrate_bps /
                            total_bitrate_bps);
     }
-#endif
   } else {
     float rate_ratio[VPX_MAX_LAYERS] = {0};
     float total = 0;
 
-#ifdef LIBVPX_SVC
     for (i = 0; i < num_spatial_layers_; ++i) {
-      if (svc_internal_.svc_params.scaling_factor_num[i] <= 0 ||
-          svc_internal_.svc_params.scaling_factor_den[i] <= 0) {
+      if (svc_params_.scaling_factor_num[i] <= 0 ||
+          svc_params_.scaling_factor_den[i] <= 0) {
         LOG(LS_ERROR) << "Scaling factors not specified!";
         return false;
       }
       rate_ratio[i] =
-          static_cast<float>(svc_internal_.svc_params.scaling_factor_num[i]) /
-          svc_internal_.svc_params.scaling_factor_den[i];
+          static_cast<float>(svc_params_.scaling_factor_num[i]) /
+          svc_params_.scaling_factor_den[i];
       total += rate_ratio[i];
     }
-#else
-    rate_ratio[0] = 1;
-    total = 1;
-#endif
 
     for (i = 0; i < num_spatial_layers_; ++i) {
       config_->ss_target_bitrate[i] = static_cast<unsigned int>(
@@ -398,31 +388,29 @@ int VP9EncoderImpl::NumberOfThreads(int width,
 }
 
 int VP9EncoderImpl::InitAndSetControlSettings(const VideoCodec* inst) {
-#ifdef LIBVPX_SVC
   // Set QP-min/max per spatial and temporal layer.
   int tot_num_layers = num_spatial_layers_ * num_temporal_layers_;
   for (int i = 0; i < tot_num_layers; ++i) {
-    svc_internal_.svc_params.max_quantizers[i] = config_->rc_max_quantizer;
-    svc_internal_.svc_params.min_quantizers[i] = config_->rc_min_quantizer;
+    svc_params_.max_quantizers[i] = config_->rc_max_quantizer;
+    svc_params_.min_quantizers[i] = config_->rc_min_quantizer;
   }
   config_->ss_number_layers = num_spatial_layers_;
   if (ExplicitlyConfiguredSpatialLayers()) {
     for (int i = 0; i < num_spatial_layers_; ++i) {
       const auto& layer = codec_.spatialLayers[i];
-      svc_internal_.svc_params.scaling_factor_num[i] = layer.scaling_factor_num;
-      svc_internal_.svc_params.scaling_factor_den[i] = layer.scaling_factor_den;
+      svc_params_.scaling_factor_num[i] = layer.scaling_factor_num;
+      svc_params_.scaling_factor_den[i] = layer.scaling_factor_den;
     }
   } else {
     int scaling_factor_num = 256;
     for (int i = num_spatial_layers_ - 1; i >= 0; --i) {
       // 1:2 scaling in each dimension.
-      svc_internal_.svc_params.scaling_factor_num[i] = scaling_factor_num;
-      svc_internal_.svc_params.scaling_factor_den[i] = 256;
+      svc_params_.scaling_factor_num[i] = scaling_factor_num;
+      svc_params_.scaling_factor_den[i] = 256;
       if (codec_.mode != kScreensharing)
         scaling_factor_num /= 2;
     }
   }
-#endif
 
   if (!SetSvcRates()) {
     return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
@@ -437,16 +425,13 @@ int VP9EncoderImpl::InitAndSetControlSettings(const VideoCodec* inst) {
   vpx_codec_control(encoder_, VP9E_SET_AQ_MODE,
                     inst->codecSpecific.VP9.adaptiveQpMode ? 3 : 0);
 
-#ifdef LIBVPX_SVC
   vpx_codec_control(
       encoder_, VP9E_SET_SVC,
       (num_temporal_layers_ > 1 || num_spatial_layers_ > 1) ? 1 : 0);
   if (num_temporal_layers_ > 1 || num_spatial_layers_ > 1) {
     vpx_codec_control(encoder_, VP9E_SET_SVC_PARAMETERS,
-                      &svc_internal_.svc_params);
+                      &svc_params_);
   }
-#endif
-
   // Register callback for getting each spatial layer.
   vpx_codec_priv_output_cx_pkt_cb_pair_t cbp = {
       VP9EncoderImpl::EncoderOutputCodedPacketCallback,
@@ -539,7 +524,6 @@ int VP9EncoderImpl::Encode(const VideoFrame& input_image,
     flags = VPX_EFLAG_FORCE_KF;
   }
 
-#ifdef LIBVPX_SVC
   if (is_flexible_mode_) {
     SuperFrameRefSettings settings;
 
@@ -561,7 +545,6 @@ int VP9EncoderImpl::Encode(const VideoFrame& input_image,
     vpx_codec_control(encoder_, VP9E_SET_SVC_LAYER_ID, &layer_id);
     vpx_codec_control(encoder_, VP9E_SET_SVC_REF_FRAME_CONFIG, &enc_layer_conf);
   }
-#endif
 
   assert(codec_.maxFramerate > 0);
   uint32_t duration = 90000 / codec_.maxFramerate;
@@ -699,21 +682,19 @@ void VP9EncoderImpl::PopulateCodecSpecific(CodecSpecificInfo* codec_specific,
     vp9_info->temporal_up_switch = gof_.temporal_up_switch[vp9_info->gof_idx];
   }
 
-#ifdef LIBVPX_SVC
   if (vp9_info->ss_data_available) {
     vp9_info->spatial_layer_resolution_present = true;
     for (size_t i = 0; i < vp9_info->num_spatial_layers; ++i) {
       vp9_info->width[i] = codec_.width *
-                           svc_internal_.svc_params.scaling_factor_num[i] /
-                           svc_internal_.svc_params.scaling_factor_den[i];
+                           svc_params_.scaling_factor_num[i] /
+                           svc_params_.scaling_factor_den[i];
       vp9_info->height[i] = codec_.height *
-                            svc_internal_.svc_params.scaling_factor_num[i] /
-                            svc_internal_.svc_params.scaling_factor_den[i];
+                            svc_params_.scaling_factor_num[i] /
+                            svc_params_.scaling_factor_den[i];
     }
-  }
-#endif
-  if (!vp9_info->flexible_mode) {
-    vp9_info->gof.CopyGofInfoVP9(gof_);
+    if (!vp9_info->flexible_mode) {
+      vp9_info->gof.CopyGofInfoVP9(gof_);
+    }
   }
 }
 
@@ -771,7 +752,6 @@ int VP9EncoderImpl::GetEncodedLayerFrame(const vpx_codec_cx_pkt* pkt) {
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-#ifdef LIBVPX_SVC
 vpx_svc_ref_frame_config VP9EncoderImpl::GenerateRefsAndFlags(
     const SuperFrameRefSettings& settings) {
   static const vpx_enc_frame_flags_t kAllFlags =
@@ -873,7 +853,6 @@ vpx_svc_ref_frame_config VP9EncoderImpl::GenerateRefsAndFlags(
   ++frames_encoded_;
   return sf_conf;
 }
-#endif
 
 int VP9EncoderImpl::SetChannelParameters(uint32_t packet_loss, int64_t rtt) {
   return WEBRTC_VIDEO_CODEC_OK;

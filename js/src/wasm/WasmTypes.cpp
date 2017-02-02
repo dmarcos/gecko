@@ -133,8 +133,32 @@ WasmHandleDebugTrap()
         frame->leaveFrame(cx);
         return ok;
     }
-    // TODO baseline debug traps
-    MOZ_CRASH();
+
+    DebugFrame* frame = iter.debugFrame();
+    Code& code = iter.instance()->code();
+    MOZ_ASSERT(code.hasBreakpointTrapAtOffset(site->lineOrBytecode()));
+    if (code.stepModeEnabled(frame->funcIndex())) {
+        RootedValue result(cx, UndefinedValue());
+        JSTrapStatus status = Debugger::onSingleStep(cx, &result);
+        if (status == JSTRAP_RETURN) {
+            // TODO properly handle JSTRAP_RETURN.
+            JS_ReportErrorASCII(cx, "Unexpected resumption value from onSingleStep");
+            return false;
+        }
+        if (status != JSTRAP_CONTINUE)
+            return false;
+    }
+    if (code.hasBreakpointSite(site->lineOrBytecode())) {
+        RootedValue result(cx, UndefinedValue());
+        JSTrapStatus status = Debugger::onTrap(cx, &result);
+        if (status == JSTRAP_RETURN) {
+            // TODO properly handle JSTRAP_RETURN.
+            JS_ReportErrorASCII(cx, "Unexpected resumption value from breakpoint handler");
+            return false;
+        }
+        if (status != JSTRAP_CONTINUE)
+            return false;
+    }
     return true;
 }
 
@@ -151,12 +175,16 @@ WasmHandleThrow()
 
         DebugFrame* frame = iter.debugFrame();
 
-        JSTrapStatus status = Debugger::onExceptionUnwind(cx, frame);
-        if (status == JSTRAP_RETURN) {
-            // Unexpected trap return -- raising error since throw recovery
-            // is not yet implemented in the wasm baseline.
-            // TODO properly handle JSTRAP_RETURN and resume wasm execution.
-            JS_ReportErrorASCII(cx, "Unexpected resumption value from onExceptionUnwind");
+        // Assume JSTRAP_ERROR status if no exception is pending --
+        // no onExceptionUnwind handlers must be fired.
+        if (cx->isExceptionPending()) {
+            JSTrapStatus status = Debugger::onExceptionUnwind(cx, frame);
+            if (status == JSTRAP_RETURN) {
+                // Unexpected trap return -- raising error since throw recovery
+                // is not yet implemented in the wasm baseline.
+                // TODO properly handle JSTRAP_RETURN and resume wasm execution.
+                JS_ReportErrorASCII(cx, "Unexpected resumption value from onExceptionUnwind");
+            }
         }
 
         bool ok = Debugger::onLeaveFrame(cx, frame, nullptr, false);

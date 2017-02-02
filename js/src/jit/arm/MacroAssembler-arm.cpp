@@ -3699,7 +3699,7 @@ MacroAssemblerARMCompat::handleFailureWithHandlerTail(void* handler)
     {
         Label skipProfilingInstrumentation;
         // Test if profiler enabled.
-        AbsoluteAddress addressOfEnabled(GetJitContext()->runtime->spsProfiler().addressOfEnabled());
+        AbsoluteAddress addressOfEnabled(GetJitContext()->runtime->geckoProfiler().addressOfEnabled());
         asMasm().branch32(Assembler::Equal, addressOfEnabled, Imm32(0),
                           &skipProfilingInstrumentation);
         profilerExitFrame();
@@ -5018,6 +5018,13 @@ void
 MacroAssembler::call(wasm::SymbolicAddress imm)
 {
     movePtr(imm, CallReg);
+    call(CallReg);
+}
+
+void
+MacroAssembler::call(const Address& addr)
+{
+    loadPtr(addr, CallReg);
     call(CallReg);
 }
 

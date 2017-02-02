@@ -22,6 +22,7 @@ class nsBaseWidget;
 
 
 namespace mozilla {
+class MemoryReportingProcess;
 namespace layers {
 class IAPZCTreeManager;
 class CompositorOptions;
@@ -140,6 +141,10 @@ public:
   // Returns -1 if there is no GPU process, or the platform pid for it.
   base::ProcessId GPUProcessPid();
 
+  // If a GPU process is present, create a MemoryReportingProcess object.
+  // Otherwise, return null.
+  RefPtr<MemoryReportingProcess> GetProcessMemoryReporter();
+
   // Returns access to the PGPU protocol if a GPU process is present.
   GPUChild* GetGPUChild() {
     return mGPUChild;
@@ -193,6 +198,7 @@ private:
 
   void EnsureImageBridgeChild();
   void EnsureVRManager();
+  void EnsureUiCompositorController();
 
   RefPtr<CompositorSession> CreateRemoteSession(
     nsBaseWidget* aWidget,

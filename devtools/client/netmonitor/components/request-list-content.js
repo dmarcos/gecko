@@ -6,7 +6,7 @@
 "use strict";
 
 const { Task } = require("devtools/shared/task");
-const { createClass, createFactory, DOM } = require("devtools/client/shared/vendor/react");
+const { createClass, createFactory, DOM, PropTypes } = require("devtools/client/shared/vendor/react");
 const { div } = DOM;
 const Actions = require("../actions/index");
 const RequestListItem = createFactory(require("./request-list-item"));
@@ -25,6 +25,22 @@ const REQUESTS_TOOLTIP_TOGGLE_DELAY = 500;
  */
 const RequestListContent = createClass({
   displayName: "RequestListContent",
+
+  propTypes: {
+    displayedRequests: PropTypes.object.isRequired,
+    firstRequestStartedMillis: PropTypes.number.isRequired,
+    onItemContextMenu: PropTypes.func.isRequired,
+    onItemMouseDown: PropTypes.func.isRequired,
+    onSecurityIconClick: PropTypes.func.isRequired,
+    onSelectDelta: PropTypes.func.isRequired,
+    scale: PropTypes.number,
+    selectedRequestId: PropTypes.string,
+    tooltip: PropTypes.shape({
+      hide: PropTypes.func.isRequired,
+      startTogglingOnHover: PropTypes.func.isRequired,
+      stopTogglingOnHover: PropTypes.func.isRequired,
+    }).isRequired
+  },
 
   componentDidMount() {
     // Set the CSS variables for waterfall scaling
@@ -246,9 +262,9 @@ module.exports = connect(
      */
     onSecurityIconClick: (e, item) => {
       const { securityState } = item;
+      // Choose the security tab.
       if (securityState && securityState !== "insecure") {
-        // Choose the security tab.
-        NetMonitorView.NetworkDetails.widget.selectedIndex = 5;
+        dispatch(Actions.selectDetailsPanelTab("security"));
       }
     },
   })

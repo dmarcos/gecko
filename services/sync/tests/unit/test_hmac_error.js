@@ -65,7 +65,6 @@ add_task(async function hmac_error_during_404() {
 
   let collectionsHelper = track_collections_helper();
   let upd = collectionsHelper.with_updated_collection;
-  let collections = collectionsHelper.collections;
   let handlers = {
     "/1.1/foo/info/collections": collectionsHelper.handler,
     "/1.1/foo/storage/meta/global": upd("meta", global.handler()),
@@ -136,16 +135,7 @@ add_task(async function hmac_error_during_node_reassignment() {
     };
   }
 
-  function sameNodeHandler(request, response) {
-    // Set this so that _setCluster will think we've really changed.
-    let url = Service.serverURL.replace("localhost", "LOCALHOST");
-    _("Client requesting reassignment; pointing them to " + url);
-    response.setStatusLine(request.httpVersion, 200, "OK");
-    response.bodyOutputStream.write(url, url.length);
-  }
-
   let handlers = {
-    "/user/1.0/foo/node/weave":     sameNodeHandler,
     "/1.1/foo/info/collections":    collectionsHelper.handler,
     "/1.1/foo/storage/meta/global": upd("meta", global.handler()),
     "/1.1/foo/storage/crypto/keys": upd("crypto", keysWBO.handler()),
@@ -208,9 +198,9 @@ add_task(async function hmac_error_during_node_reassignment() {
       _("---------------------------");
       onSyncFinished = function() {
         _("== Second (automatic) sync done.");
-        hasData = rotaryColl.wbo("flying") ||
-                  rotaryColl.wbo("scotsman");
-        hasKeys = keysWBO.modified;
+        let hasData = rotaryColl.wbo("flying") ||
+                      rotaryColl.wbo("scotsman");
+        let hasKeys = keysWBO.modified;
         do_check_true(!hasData == !hasKeys);
 
         // Kick off another sync. Can't just call it, because we're inside the

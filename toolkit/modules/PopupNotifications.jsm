@@ -88,7 +88,7 @@ function Notification(id, message, anchorID, mainAction, secondaryActions,
   this.wasDismissed = false;
   this.recordedTelemetryStats = new Set();
   this.isPrivate = PrivateBrowsingUtils.isWindowPrivate(
-                                        this.browser.ownerDocument.defaultView);
+                                        this.browser.ownerGlobal);
   this.timeCreated = this.owner.window.performance.now();
 }
 
@@ -211,7 +211,7 @@ this.PopupNotifications = function PopupNotifications(tabbrowser, panel, iconBox
   if (!(panel instanceof Ci.nsIDOMXULElement))
     throw "Invalid panel";
 
-  this.window = tabbrowser.ownerDocument.defaultView;
+  this.window = tabbrowser.ownerGlobal;
   this.panel = panel;
   this.tabbrowser = tabbrowser;
   this.iconBox = iconBox;
@@ -565,6 +565,8 @@ PopupNotifications.prototype = {
         this._onPopupHidden(aEvent);
         break;
       case "activate":
+        if (this.isPanelOpen)
+          break;
       case "TabSelect":
         let self = this;
         // This is where we could detect if the panel is dismissed if the page
@@ -620,16 +622,18 @@ PopupNotifications.prototype = {
   /**
    * Dismisses the notification without removing it.
    */
-  _dismiss: function PopupNotifications_dismiss(telemetryReason) {
+  _dismiss: function PopupNotifications_dismiss(event, telemetryReason) {
     if (telemetryReason) {
       this.nextDismissReason = telemetryReason;
     }
 
     // An explicitly dismissed persistent notification effectively becomes
     // non-persistent.
-    if (this.panel.firstChild &&
-        telemetryReason == TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON) {
-      this.panel.firstChild.notification.options.persistent = false;
+    if (event && telemetryReason == TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON) {
+      let notificationEl = getNotificationFromElement(event.target);
+      if (notificationEl) {
+        notificationEl.notification.options.persistent = false;
+      }
     }
 
     let browser = this.panel.firstChild &&
@@ -712,7 +716,11 @@ PopupNotifications.prototype = {
       popupnotification.setAttribute("label", n.message);
       popupnotification.setAttribute("id", popupnotificationID);
       popupnotification.setAttribute("popupid", n.id);
-      popupnotification.setAttribute("closebuttoncommand", `PopupNotifications._dismiss(${TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON});`);
+      if (Services.prefs.getBoolPref("privacy.permissionPrompts.showCloseButton")) {
+        popupnotification.setAttribute("closebuttoncommand", "PopupNotifications._onButtonEvent(event, 'secondarybuttoncommand');");
+      } else {
+        popupnotification.setAttribute("closebuttoncommand", `PopupNotifications._dismiss(event, ${TELEMETRY_STAT_DISMISSAL_CLOSE_BUTTON});`);
+      }
       if (n.mainAction) {
         popupnotification.setAttribute("buttonlabel", n.mainAction.label);
         popupnotification.setAttribute("buttonaccesskey", n.mainAction.accessKey);
@@ -891,6 +899,14 @@ PopupNotifications.prototype = {
       notificationsToShow.forEach(function(n) {
         this._fireCallback(n, NOTIFICATION_EVENT_SHOWN);
       }, this);
+
+      // Make sure we update the noautohide attribute on the panel, in case it changed.
+      if (notificationsToShow.some(n => n.options.persistent)) {
+        this.panel.setAttribute("noautohide", "true");
+      } else {
+        this.panel.removeAttribute("noautohide");
+      }
+
       // Let tests know that the panel was updated and what notifications it was
       // updated with so that tests can wait for the correct notifications to be
       // added.
@@ -1188,6 +1204,11 @@ PopupNotifications.prototype = {
     this.panel.removeAttribute("noautofocus");
 
     this._reshowNotifications(anchor);
+
+    // If the user re-selects the current notification, focus it.
+    if (anchor == this._currentAnchorElement && this.panel.firstChild) {
+      this.panel.firstChild.button.focus();
+    }
   },
 
   _reshowNotifications: function PopupNotifications_reshowNotifications(anchor, browser) {
@@ -1210,7 +1231,7 @@ PopupNotifications.prototype = {
     // to update our notification map.
 
     let ourNotifications = this._getNotificationsForBrowser(ourBrowser);
-    let other = otherBrowser.ownerDocument.defaultView.PopupNotifications;
+    let other = otherBrowser.ownerGlobal.PopupNotifications;
     if (!other) {
       if (ourNotifications.length > 0)
         Cu.reportError("unable to swap notifications: otherBrowser doesn't support notifications");

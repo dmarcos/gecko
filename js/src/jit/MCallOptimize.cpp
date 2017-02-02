@@ -11,6 +11,7 @@
 #include "jsstr.h"
 
 #include "builtin/AtomicsObject.h"
+#include "builtin/Intl.h"
 #include "builtin/SIMD.h"
 #include "builtin/TestingFunctions.h"
 #include "builtin/TypedObject.h"
@@ -106,6 +107,16 @@ IonBuilder::inlineNativeCall(CallInfo& callInfo, JSFunction* target)
         return inlineAtomicsBinop(callInfo, inlNative);
       case InlinableNative::AtomicsIsLockFree:
         return inlineAtomicsIsLockFree(callInfo);
+
+      // Intl natives.
+      case InlinableNative::IntlIsCollator:
+        return inlineHasClass(callInfo, &CollatorObject::class_);
+      case InlinableNative::IntlIsDateTimeFormat:
+        return inlineHasClass(callInfo, &DateTimeFormatObject::class_);
+      case InlinableNative::IntlIsNumberFormat:
+        return inlineHasClass(callInfo, &NumberFormatObject::class_);
+      case InlinableNative::IntlIsPluralRules:
+        return inlineHasClass(callInfo, &PluralRulesObject::class_);
 
       // Math natives.
       case InlinableNative::MathAbs:
@@ -619,7 +630,9 @@ IonBuilder::inlineArrayPopShift(CallInfo& callInfo, MArrayPopShift::Mode mode)
         return InliningStatus_NotInlined;
     }
 
-    if (ArrayPrototypeHasIndexedProperty(this, script())) {
+    bool hasIndexedProperty;
+    MOZ_TRY_VAR(hasIndexedProperty, ArrayPrototypeHasIndexedProperty(this, script()));
+    if (hasIndexedProperty) {
         trackOptimizationOutcome(TrackedOutcome::ProtoIndexedProps);
         return InliningStatus_NotInlined;
     }
@@ -756,7 +769,9 @@ IonBuilder::inlineArrayPush(CallInfo& callInfo)
         return InliningStatus_NotInlined;
     }
 
-    if (ArrayPrototypeHasIndexedProperty(this, script())) {
+    bool hasIndexedProperty;
+    MOZ_TRY_VAR(hasIndexedProperty, ArrayPrototypeHasIndexedProperty(this, script()));
+    if (hasIndexedProperty) {
         trackOptimizationOutcome(TrackedOutcome::ProtoIndexedProps);
         return InliningStatus_NotInlined;
     }
@@ -848,7 +863,9 @@ IonBuilder::inlineArraySlice(CallInfo& callInfo)
     }
 
     // Watch out for indexed properties on the prototype.
-    if (ArrayPrototypeHasIndexedProperty(this, script())) {
+    bool hasIndexedProperty;
+    MOZ_TRY_VAR(hasIndexedProperty, ArrayPrototypeHasIndexedProperty(this, script()));
+    if (hasIndexedProperty) {
         trackOptimizationOutcome(TrackedOutcome::ProtoIndexedProps);
         return InliningStatus_NotInlined;
     }
@@ -2117,7 +2134,9 @@ IonBuilder::inlineDefineDataProperty(CallInfo& callInfo)
     MDefinition* id = callInfo.getArg(1);
     MDefinition* value = callInfo.getArg(2);
 
-    if (ElementAccessHasExtraIndexedProperty(this, obj))
+    bool hasExtraIndexedProperty;
+    MOZ_TRY_VAR(hasExtraIndexedProperty, ElementAccessHasExtraIndexedProperty(this, obj));
+    if (hasExtraIndexedProperty)
         return InliningStatus_NotInlined;
 
     // setElemTryDense will push the value as the result of the define instead

@@ -23,10 +23,9 @@ class ProgressBar {
     if (!waitForTransition) {
       doHide();
     } else {
-      percentage.addEventListener('transitionend', function handler() {
-        percentage.removeEventListener('transitionend', handler);
+      percentage.addEventListener('transitionend', function() {
         doHide();
-      });
+      }, {once: true});
     }
   }
 
@@ -203,6 +202,10 @@ class Toolbar {
         break;
       case 'pageRotateCcw':
         this._viewport.rotateCounterClockwise();
+        break;
+      case 'presentationMode':
+      case 'secondaryPresentationMode':
+        this._viewport.fullscreen = true;
         break;
       case 'secondaryToolbarToggle':
         this._secondaryToolbar.toggle();

@@ -97,39 +97,8 @@ async function dumpBookmarks() {
   })
 }
 
-var populateTree = async function populate(parentId, ...items) {
-  let guids = {};
-  for (let item of items) {
-    let itemId;
-    switch (item.type) {
-      case PlacesUtils.bookmarks.TYPE_BOOKMARK:
-        itemId = PlacesUtils.bookmarks.insertBookmark(parentId,
-          Utils.makeURI(item.url),
-          PlacesUtils.bookmarks.DEFAULT_INDEX, item.title);
-        break;
-
-      case PlacesUtils.bookmarks.TYPE_FOLDER: {
-        itemId = PlacesUtils.bookmarks.createFolder(parentId,
-          item.title, PlacesUtils.bookmarks.DEFAULT_INDEX);
-        Object.assign(guids, await populate(itemId, ...item.children));
-        break;
-      }
-
-      default:
-        throw new Error(`Unsupported item type: ${item.type}`);
-    }
-    if (item.exclude) {
-      PlacesUtils.annotations.setItemAnnotation(
-        itemId, BookmarkAnnos.EXCLUDEBACKUP_ANNO, "Don't back this up", 0,
-        PlacesUtils.annotations.EXPIRE_NEVER);
-    }
-    guids[item.title] = await PlacesUtils.promiseItemGuid(itemId);
-  }
-  return guids;
-}
-
 async function insertBookmarksToMigrate() {
-  let mozBmk = await PlacesUtils.bookmarks.insert({
+  await PlacesUtils.bookmarks.insert({
     guid: "0gtWTOgYcoJD",
     parentGuid: PlacesUtils.bookmarks.menuGuid,
     url: "https://mozilla.org",
@@ -144,7 +113,7 @@ async function insertBookmarksToMigrate() {
     parentGuid: PlacesUtils.bookmarks.menuGuid,
     url: "http://getthunderbird.com",
   });
-  let bzBmk = await PlacesUtils.bookmarks.insert({
+  await PlacesUtils.bookmarks.insert({
     guid: "YK5Bdq5MIqL6",
     parentGuid: PlacesUtils.bookmarks.menuGuid,
     url: "https://bugzilla.mozilla.org",
@@ -217,7 +186,7 @@ add_task(async function test_batch_tracking() {
 
   PlacesUtils.bookmarks.runInBatchMode({
     runBatched() {
-      let folder = PlacesUtils.bookmarks.createFolder(
+      PlacesUtils.bookmarks.createFolder(
         PlacesUtils.bookmarks.bookmarksMenuFolder,
         "Test Folder", PlacesUtils.bookmarks.DEFAULT_INDEX);
       // We should be tracking the new folder and its parent (and need to jump
@@ -244,7 +213,7 @@ add_task(async function test_nested_batch_tracking() {
 
       PlacesUtils.bookmarks.runInBatchMode({
         runBatched() {
-          let folder = PlacesUtils.bookmarks.createFolder(
+          PlacesUtils.bookmarks.createFolder(
             PlacesUtils.bookmarks.bookmarksMenuFolder,
             "Test Folder", PlacesUtils.bookmarks.DEFAULT_INDEX);
           // We should be tracking the new folder and its parent (and need to jump
@@ -667,7 +636,6 @@ add_task(async function test_onItemKeywordChanged() {
     let folder = PlacesUtils.bookmarks.createFolder(
       PlacesUtils.bookmarks.bookmarksMenuFolder, "Parent",
       PlacesUtils.bookmarks.DEFAULT_INDEX);
-    let folderGUID = engine._store.GUIDForId(folder);
     _("Track changes to keywords");
     let uri = Utils.makeURI("http://getfirefox.com");
     let b = PlacesUtils.bookmarks.insertBookmark(
@@ -803,7 +771,6 @@ add_task(async function test_onItemAnnoChanged() {
     let folder = PlacesUtils.bookmarks.createFolder(
       PlacesUtils.bookmarks.bookmarksMenuFolder, "Parent",
       PlacesUtils.bookmarks.DEFAULT_INDEX);
-    let folderGUID = engine._store.GUIDForId(folder);
     _("Track changes to annos.");
     let b = PlacesUtils.bookmarks.insertBookmark(
       folder, Utils.makeURI("http://getfirefox.com"),
@@ -959,7 +926,7 @@ add_task(async function test_onFaviconChanged() {
 
     await new Promise(resolve => {
       PlacesUtils.favicons.setAndFetchFaviconForPage(pageURI, iconURI, true,
-        PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE, (iconURI, dataLen, data, mimeType) => {
+        PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE, (uri, dataLen, data, mimeType) => {
           resolve();
         },
         Services.scriptSecurityManager.getSystemPrincipal());
@@ -1074,7 +1041,7 @@ add_task(async function test_async_onItemMoved_update() {
   try {
     await stopTracking();
 
-    let fxBmk = await PlacesUtils.bookmarks.insert({
+    await PlacesUtils.bookmarks.insert({
       type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
       parentGuid: PlacesUtils.bookmarks.menuGuid,
       url: "http://getfirefox.com",
@@ -1301,18 +1268,16 @@ add_task(async function test_treeMoved() {
     let folder2_guid = engine._store.GUIDForId(folder2_id);
 
     // Create a couple of bookmarks in the second folder.
-    let fx_id = PlacesUtils.bookmarks.insertBookmark(
+    PlacesUtils.bookmarks.insertBookmark(
       folder2_id,
       Utils.makeURI("http://getfirefox.com"),
       PlacesUtils.bookmarks.DEFAULT_INDEX,
       "Get Firefox!");
-    let fx_guid = engine._store.GUIDForId(fx_id);
-    let tb_id = PlacesUtils.bookmarks.insertBookmark(
+    PlacesUtils.bookmarks.insertBookmark(
       folder2_id,
       Utils.makeURI("http://getthunderbird.com"),
       PlacesUtils.bookmarks.DEFAULT_INDEX,
       "Get Thunderbird!");
-    let tb_guid = engine._store.GUIDForId(tb_id);
 
     await startTracking();
 
@@ -1332,12 +1297,11 @@ add_task(async function test_onItemDeleted() {
   _("Bookmarks deleted via the synchronous API should be tracked");
 
   try {
-    let fx_id = PlacesUtils.bookmarks.insertBookmark(
+    PlacesUtils.bookmarks.insertBookmark(
       PlacesUtils.bookmarks.bookmarksMenuFolder,
       Utils.makeURI("http://getfirefox.com"),
       PlacesUtils.bookmarks.DEFAULT_INDEX,
       "Get Firefox!");
-    let fx_guid = engine._store.GUIDForId(fx_id);
     let tb_id = PlacesUtils.bookmarks.insertBookmark(
       PlacesUtils.bookmarks.bookmarksMenuFolder,
       Utils.makeURI("http://getthunderbird.com"),
@@ -1370,7 +1334,7 @@ add_task(async function test_async_onItemDeleted() {
       url: "http://getfirefox.com",
       title: "Get Firefox!",
     });
-    let tbBmk = await PlacesUtils.bookmarks.insert({
+    await PlacesUtils.bookmarks.insert({
       type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
       parentGuid: PlacesUtils.bookmarks.menuGuid,
       url: "http://getthunderbird.com",

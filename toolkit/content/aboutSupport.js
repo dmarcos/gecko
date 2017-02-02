@@ -282,7 +282,7 @@ var snapshotFormatters = {
       delete data.info;
     }
 
-    if (AppConstants.NIGHTLY_BUILD) {
+    if (AppConstants.NIGHTLY_BUILD || AppConstants.MOZ_DEV_EDITION) {
       let windowUtils = window.QueryInterface(Ci.nsIInterfaceRequestor)
                               .getInterface(Ci.nsIDOMWindowUtils);
       let gpuProcessPid = windowUtils.gpuProcessPid;
@@ -375,7 +375,6 @@ var snapshotFormatters = {
            : localizedMsg(["apzNone"]));
     addRowFromKey("features", "webglRenderer");
     addRowFromKey("features", "webgl2Renderer");
-    addRowFromKey("features", "supportsHardwareH264", "hardwareH264");
     addRowFromKey("features", "currentAudioBackend", "audioBackend");
     addRowFromKey("features", "direct2DEnabled", "#Direct2D");
 

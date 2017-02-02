@@ -4,7 +4,6 @@
 "use strict";
 
 Cu.import("resource://services-common/utils.js");
-Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FxAccounts.jsm");
 Cu.import("resource://gre/modules/FxAccountsClient.jsm");
 Cu.import("resource://gre/modules/FxAccountsCommon.js");
@@ -182,7 +181,6 @@ add_task(function* test_updateDeviceRegistration_with_new_device() {
 
 add_task(function* test_updateDeviceRegistration_with_existing_device() {
   const deviceName = "phil's device";
-  const deviceType = "desktop";
 
   const credentials = getTestUser("pb");
   const fxa = new MockFxAccounts({ name: deviceName });
@@ -363,7 +361,6 @@ add_task(function* test_updateDeviceRegistration_with_device_session_conflict_er
 
 add_task(function* test_updateDeviceRegistration_with_unrecoverable_error() {
   const deviceName = "foo";
-  const deviceType = "bar";
 
   const credentials = getTestUser("baz");
   delete credentials.deviceId;

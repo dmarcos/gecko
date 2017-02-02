@@ -202,7 +202,7 @@ add_task(function* test_offset_after_request() {
 
   do_check_eq(client.localtimeOffsetMsec, 0);
 
-  let response = yield client.request("/foo", method, TEST_CREDS);
+  yield client.request("/foo", method, TEST_CREDS);
   // Should be about an hour off
   do_check_true(Math.abs(client.localtimeOffsetMsec + HOUR_MS) < SECOND_MS);
 
@@ -222,7 +222,6 @@ add_task(function* test_offset_in_hawk_header() {
     "/second": function(request, response) {
       // We see a better date now in the ts component of the header
       let delta = getTimestampDelta(request.getHeader("Authorization"));
-      let message = "Delta: " + delta;
 
       // We're now within HAWK's one-minute window.
       // I hope this isn't a recipe for intermittent oranges ...
@@ -236,9 +235,6 @@ add_task(function* test_offset_in_hawk_header() {
   });
 
   let client = new HawkClient(server.baseURI);
-  function getOffset() {
-    return client.localtimeOffsetMsec;
-  }
 
   client.now = () => {
     return Date.now() + 12 * HOUR_MS;
@@ -316,9 +312,6 @@ add_task(function* test_retry_request_on_fail() {
   });
 
   let client = new HawkClient(server.baseURI);
-  function getOffset() {
-    return client.localtimeOffsetMsec;
-  }
 
   client.now = () => {
     return Date.now() + 12 * HOUR_MS;
@@ -360,9 +353,6 @@ add_task(function* test_multiple_401_retry_once() {
   });
 
   let client = new HawkClient(server.baseURI);
-  function getOffset() {
-    return client.localtimeOffsetMsec;
-  }
 
   client.now = () => {
     return Date.now() - 12 * HOUR_MS;
@@ -394,7 +384,7 @@ add_task(function* test_500_no_retry() {
   let method = "GET";
 
   let server = httpd_setup({
-    "/no-shutup": function() {
+    "/no-shutup": function(request, response) {
       let message = "Cannot get ye flask.";
       response.setStatusLine(request.httpVersion, 500, "Internal server error");
       response.bodyOutputStream.write(message, message.length);
@@ -402,9 +392,6 @@ add_task(function* test_500_no_retry() {
   });
 
   let client = new HawkClient(server.baseURI);
-  function getOffset() {
-    return client.localtimeOffsetMsec;
-  }
 
   // Throw off the clock so the HawkClient would want to retry the request if
   // it could
@@ -464,9 +451,6 @@ add_task(function* test_401_then_500() {
   });
 
   let client = new HawkClient(server.baseURI);
-  function getOffset() {
-    return client.localtimeOffsetMsec;
-  }
 
   client.now = () => {
     return Date.now() - 12 * HOUR_MS;
@@ -515,4 +499,3 @@ function run_test() {
   initTestLogging("Trace");
   run_next_test();
 }
-

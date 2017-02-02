@@ -64,7 +64,7 @@ add_task(function* test_something() {
   server.registerPathHandler(recordsPath, handleResponse);
 
   // Test an empty db populates
-  let result = yield OneCRLBlocklistClient.maybeSync(2000, Date.now());
+  yield OneCRLBlocklistClient.maybeSync(2000, Date.now());
 
   // Open the collection, verify it's been populated:
   // Our test data has a single record; it should be in the local collection
@@ -75,7 +75,7 @@ add_task(function* test_something() {
   yield sqliteHandle.close();
 
   // Test the db is updated when we call again with a later lastModified value
-  result = yield OneCRLBlocklistClient.maybeSync(4000, Date.now());
+  yield OneCRLBlocklistClient.maybeSync(4000, Date.now());
 
   // Open the collection, verify it's been updated:
   // Our test data now has two records; both should be in the local collection

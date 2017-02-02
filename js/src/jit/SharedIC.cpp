@@ -176,8 +176,6 @@ ICStub::NonCacheIRStubMakesGCCalls(Kind kind)
       case Call_StringSplit:
       case WarmUpCounter_Fallback:
       case GetProp_Generic:
-      case SetProp_CallScripted:
-      case SetProp_CallNative:
       case RetSub_Fallback:
       // These two fallback stubs don't actually make non-tail calls,
       // but the fallback code for the bailout path needs to pop the stub frame
@@ -193,9 +191,14 @@ ICStub::NonCacheIRStubMakesGCCalls(Kind kind)
 bool
 ICStub::makesGCCalls() const
 {
-    if (isCacheIR_Monitored())
+    switch (kind()) {
+      case CacheIR_Monitored:
         return toCacheIR_Monitored()->stubInfo()->makesGCCalls();
-    return NonCacheIRStubMakesGCCalls(kind());
+      case CacheIR_Updated:
+        return toCacheIR_Updated()->stubInfo()->makesGCCalls();
+      default:
+        return NonCacheIRStubMakesGCCalls(kind());
+    }
 }
 
 void
@@ -351,55 +354,6 @@ ICStub::trace(JSTracer* trc)
         TraceEdge(trc, &constantStub->value(), "baseline-getintrinsic-constant-value");
         break;
       }
-      case ICStub::SetProp_Native: {
-        ICSetProp_Native* propStub = toSetProp_Native();
-        TraceEdge(trc, &propStub->shape(), "baseline-setpropnative-stub-shape");
-        TraceEdge(trc, &propStub->group(), "baseline-setpropnative-stub-group");
-        break;
-      }
-      case ICStub::SetProp_NativeAdd: {
-        ICSetProp_NativeAdd* propStub = toSetProp_NativeAdd();
-        TraceEdge(trc, &propStub->group(), "baseline-setpropnativeadd-stub-group");
-        TraceEdge(trc, &propStub->newShape(), "baseline-setpropnativeadd-stub-newshape");
-        TraceNullableEdge(trc, &propStub->newGroup(), "baseline-setpropnativeadd-stub-new-group");
-        JS_STATIC_ASSERT(ICSetProp_NativeAdd::MAX_PROTO_CHAIN_DEPTH == 4);
-        switch (propStub->protoChainDepth()) {
-          case 0: propStub->toImpl<0>()->traceShapes(trc); break;
-          case 1: propStub->toImpl<1>()->traceShapes(trc); break;
-          case 2: propStub->toImpl<2>()->traceShapes(trc); break;
-          case 3: propStub->toImpl<3>()->traceShapes(trc); break;
-          case 4: propStub->toImpl<4>()->traceShapes(trc); break;
-          default: MOZ_CRASH("Invalid proto stub.");
-        }
-        break;
-      }
-      case ICStub::SetProp_Unboxed: {
-        ICSetProp_Unboxed* propStub = toSetProp_Unboxed();
-        TraceEdge(trc, &propStub->group(), "baseline-setprop-unboxed-stub-group");
-        break;
-      }
-      case ICStub::SetProp_TypedObject: {
-        ICSetProp_TypedObject* propStub = toSetProp_TypedObject();
-        TraceEdge(trc, &propStub->shape(), "baseline-setprop-typedobject-stub-shape");
-        TraceEdge(trc, &propStub->group(), "baseline-setprop-typedobject-stub-group");
-        break;
-      }
-      case ICStub::SetProp_CallScripted: {
-        ICSetProp_CallScripted* callStub = toSetProp_CallScripted();
-        callStub->receiverGuard().trace(trc);
-        TraceEdge(trc, &callStub->holder(), "baseline-setpropcallscripted-stub-holder");
-        TraceEdge(trc, &callStub->holderShape(), "baseline-setpropcallscripted-stub-holdershape");
-        TraceEdge(trc, &callStub->setter(), "baseline-setpropcallscripted-stub-setter");
-        break;
-      }
-      case ICStub::SetProp_CallNative: {
-        ICSetProp_CallNative* callStub = toSetProp_CallNative();
-        callStub->receiverGuard().trace(trc);
-        TraceEdge(trc, &callStub->holder(), "baseline-setpropcallnative-stub-holder");
-        TraceEdge(trc, &callStub->holderShape(), "baseline-setpropcallnative-stub-holdershape");
-        TraceEdge(trc, &callStub->setter(), "baseline-setpropcallnative-stub-setter");
-        break;
-      }
       case ICStub::InstanceOf_Function: {
         ICInstanceOf_Function* instanceofStub = toInstanceOf_Function();
         TraceEdge(trc, &instanceofStub->shape(), "baseline-instanceof-fun-shape");
@@ -425,6 +379,13 @@ ICStub::trace(JSTracer* trc)
       case ICStub::CacheIR_Monitored:
         TraceCacheIRStub(trc, this, toCacheIR_Monitored()->stubInfo());
         break;
+      case ICStub::CacheIR_Updated: {
+        ICCacheIR_Updated* stub = toCacheIR_Updated();
+        TraceNullableEdge(trc, &stub->updateStubGroup(), "baseline-update-stub-group");
+        TraceEdge(trc, &stub->updateStubId(), "baseline-update-stub-id");
+        TraceCacheIRStub(trc, this, stub->stubInfo());
+        break;
+      }
       default:
         break;
     }
@@ -731,8 +692,9 @@ ICStubCompiler::PushStubPayload(MacroAssembler& masm, Register scratch)
 }
 
 void
-ICStubCompiler::emitPostWriteBarrierSlot(MacroAssembler& masm, Register obj, ValueOperand val,
-                                         Register scratch, LiveGeneralRegisterSet saveRegs)
+BaselineEmitPostWriteBarrierSlot(MacroAssembler& masm, Register obj, ValueOperand val,
+                                 Register scratch, LiveGeneralRegisterSet saveRegs,
+                                 JSRuntime* rt)
 {
     Label skipBarrier;
     masm.branchPtrInNurseryChunk(Assembler::Equal, obj, scratch, &skipBarrier);
@@ -745,7 +707,7 @@ ICStubCompiler::emitPostWriteBarrierSlot(MacroAssembler& masm, Register obj, Val
     saveRegs.set() = GeneralRegisterSet::Intersect(saveRegs.set(), GeneralRegisterSet::Volatile());
     masm.PushRegsInMask(saveRegs);
     masm.setupUnalignedABICall(scratch);
-    masm.movePtr(ImmPtr(cx->runtime()), scratch);
+    masm.movePtr(ImmPtr(rt), scratch);
     masm.passABIArg(scratch);
     masm.passABIArg(obj);
     masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, PostWriteBarrier));
@@ -1975,7 +1937,7 @@ StripPreliminaryObjectStubs(JSContext* cx, ICFallbackStub* stub)
     for (ICStubIterator iter = stub->beginChain(); !iter.atEnd(); iter++) {
         if (iter->isCacheIR_Monitored() && iter->toCacheIR_Monitored()->hasPreliminaryObject())
             iter.unlink(cx);
-        else if (iter->isSetProp_Native() && iter->toSetProp_Native()->hasPreliminaryObject())
+        else if (iter->isCacheIR_Updated() && iter->toCacheIR_Updated()->hasPreliminaryObject())
             iter.unlink(cx);
     }
 }
@@ -1985,24 +1947,6 @@ GetDOMProxyProto(JSObject* obj)
 {
     MOZ_ASSERT(IsCacheableDOMProxy(obj));
     return obj->staticPrototype();
-}
-
-// Look up a property's shape on an object, being careful never to do any effectful
-// operations.  This procedure not yielding a shape should not be taken as a lack of
-// existence of the property on the object.
-bool
-EffectlesslyLookupProperty(JSContext* cx, HandleObject obj, HandleId id,
-                           MutableHandleObject holder, MutableHandleShape shape)
-{
-    shape.set(nullptr);
-    holder.set(nullptr);
-
-    if (LookupPropertyPure(cx, obj, id, holder.address(), shape.address()))
-        return true;
-
-    holder.set(nullptr);
-    shape.set(nullptr);
-    return true;
 }
 
 bool
@@ -2325,44 +2269,6 @@ ICGetProp_Fallback::Compiler::postGenerateStubCode(MacroAssembler& masm, Handle<
     if (engine_ == Engine::Baseline) {
         void* address = code->raw() + returnOffset_;
         cx->compartment()->jitCompartment()->initBaselineGetPropReturnAddr(address);
-    }
-}
-
-void
-GuardReceiverObject(MacroAssembler& masm, ReceiverGuard guard,
-                    Register object, Register scratch,
-                    size_t receiverGuardOffset, Label* failure)
-{
-    Address groupAddress(ICStubReg, receiverGuardOffset + HeapReceiverGuard::offsetOfGroup());
-    Address shapeAddress(ICStubReg, receiverGuardOffset + HeapReceiverGuard::offsetOfShape());
-    Address expandoAddress(object, UnboxedPlainObject::offsetOfExpando());
-
-    if (guard.group) {
-        masm.loadPtr(groupAddress, scratch);
-        masm.branchTestObjGroup(Assembler::NotEqual, object, scratch, failure);
-
-        if (guard.group->clasp() == &UnboxedPlainObject::class_ && !guard.shape) {
-            // Guard the unboxed object has no expando object.
-            masm.branchPtr(Assembler::NotEqual, expandoAddress, ImmWord(0), failure);
-        }
-    }
-
-    if (guard.shape) {
-        masm.loadPtr(shapeAddress, scratch);
-        if (guard.group && guard.group->clasp() == &UnboxedPlainObject::class_) {
-            // Guard the unboxed object has a matching expando object.
-            masm.branchPtr(Assembler::Equal, expandoAddress, ImmWord(0), failure);
-            Label done;
-            masm.push(object);
-            masm.loadPtr(expandoAddress, object);
-            masm.branchTestObjShape(Assembler::Equal, object, scratch, &done);
-            masm.pop(object);
-            masm.jump(failure);
-            masm.bind(&done);
-            masm.pop(object);
-        } else {
-            masm.branchTestObjShape(Assembler::NotEqual, object, scratch, failure);
-        }
     }
 }
 

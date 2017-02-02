@@ -2,6 +2,11 @@
 Mozilla ESLint Plugin
 =====================
 
+avoid-removeChild
+-----------------
+
+Rejects using element.parentNode.removeChild(element) when element.remove()
+can be used instead.
 
 balanced-listeners
 ------------------
@@ -131,6 +136,11 @@ no-useless-parameters
 Reject common XPCOM methods called with useless optional parameters (eg.
 ``Services.io.newURI(url, null, null)``, or non-existent parameters (eg.
 ``Services.obs.removeObserver(name, observer, false)``).
+
+no-useless-removeEventListener
+------------------------------
+
+Reject calls to removeEventListener where {once: true} could be used instead.
 
 reject-importGlobalProperties
 -----------------------------

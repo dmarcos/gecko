@@ -66,6 +66,12 @@ SERVO_BINDING_FUNC(Servo_StyleSet_InsertStyleSheetBefore, void,
 SERVO_BINDING_FUNC(Servo_StyleSet_FlushStyleSheets, void, RawServoStyleSetBorrowed set)
 SERVO_BINDING_FUNC(Servo_StyleSet_NoteStyleSheetsChanged, void,
                    RawServoStyleSetBorrowed set)
+SERVO_BINDING_FUNC(Servo_StyleSet_FillKeyframesForName, bool,
+                   RawServoStyleSetBorrowed set,
+                   const nsACString* property,
+                   const nsTimingFunction* timing_function,
+                   ServoComputedValuesBorrowed computed_values,
+                   RawGeckoKeyframeListBorrowedMut keyframe_list)
 
 // CSSRuleList
 SERVO_BINDING_FUNC(Servo_CssRules_ListTypes, void,
@@ -113,6 +119,14 @@ SERVO_BINDING_FUNC(Servo_AnimationValues_Populate, void,
                    ServoComputedValuesBorrowed,
                    ServoComputedValuesBorrowedOrNull,
                    RawGeckoPresContextBorrowed)
+SERVO_BINDING_FUNC(Servo_AnimationValues_Interpolate,
+                   RawServoAnimationValueStrong,
+                   RawServoAnimationValueBorrowed from,
+                   RawServoAnimationValueBorrowed to,
+                   double progress)
+SERVO_BINDING_FUNC(Servo_AnimationValues_Uncompute,
+                   RawServoDeclarationBlockStrong,
+                   RawServoAnimationValueBorrowedListBorrowed value)
 
 // Style attribute
 SERVO_BINDING_FUNC(Servo_ParseStyleAttribute, RawServoDeclarationBlockStrong,

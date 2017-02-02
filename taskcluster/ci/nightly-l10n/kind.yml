@@ -56,6 +56,8 @@ job-template:
       symbol: tc-L10n(N)
       tier:
          by-build-platform:
+            linux.*: 1
+            android.*: 1
             default: 2
       platform:
          by-build-platform:
@@ -69,10 +71,14 @@ job-template:
             EN_US_PACKAGE_NAME: target.tar.bz2
             EN_US_BINARY_URL:
                task-reference: https://queue.taskcluster.net/v1/task/<unsigned-build>/artifacts/public/build
+            MAR_TOOLS_URL:
+               task-reference: https://queue.taskcluster.net/v1/task/<unsigned-build>/artifacts/public/build/host/bin
          macosx64-nightly:
             EN_US_PACKAGE_NAME: target.dmg
             EN_US_BINARY_URL:
                task-reference: https://queue.taskcluster.net/v1/task/<unsigned-build>/artifacts/public/build
+            MAR_TOOLS_URL:
+               task-reference: https://queue.taskcluster.net/v1/task/<unsigned-build>/artifacts/public/build/host/bin
          android-api-15-nightly:
             EN_US_PACKAGE_NAME: target.apk
             EN_US_BINARY_URL:

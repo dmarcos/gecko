@@ -395,6 +395,17 @@ ArrayJoin(JSContext* cx, HandleObject array, HandleString sep)
 }
 
 bool
+SetArrayLength(JSContext* cx, HandleObject obj, HandleValue value, bool strict)
+{
+    Handle<ArrayObject*> array = obj.as<ArrayObject>();
+
+    RootedId id(cx, NameToId(cx->names().length));
+    ObjectOpResult result;
+    return ArraySetLength(cx, array, id, JSPROP_PERMANENT, value, result) &&
+           result.checkStrictErrorOrWarning(cx, obj, id, strict);
+}
+
+bool
 CharCodeAt(JSContext* cx, HandleString str, int32_t index, uint32_t* code)
 {
     char16_t c;
@@ -600,11 +611,11 @@ GetDynamicName(JSContext* cx, JSObject* envChain, JSString* str, Value* vp)
         return;
     }
 
-    Shape* shape = nullptr;
+    PropertyResult prop;
     JSObject* scope = nullptr;
     JSObject* pobj = nullptr;
-    if (LookupNameNoGC(cx, atom->asPropertyName(), envChain, &scope, &pobj, &shape)) {
-        if (FetchNameNoGC(pobj, shape, MutableHandleValue::fromMarkedLocation(vp)))
+    if (LookupNameNoGC(cx, atom->asPropertyName(), envChain, &scope, &pobj, &prop)) {
+        if (FetchNameNoGC(pobj, prop, MutableHandleValue::fromMarkedLocation(vp)))
             return;
     }
 
@@ -1227,7 +1238,9 @@ AssertValidStringPtr(JSContext* cx, JSString* str)
     } else if (str->isAtom()) {
         MOZ_ASSERT(kind == gc::AllocKind::ATOM);
     } else if (str->isFlat()) {
-        MOZ_ASSERT(kind == gc::AllocKind::STRING || kind == gc::AllocKind::FAT_INLINE_STRING);
+        MOZ_ASSERT(kind == gc::AllocKind::STRING ||
+                   kind == gc::AllocKind::FAT_INLINE_STRING ||
+                   kind == gc::AllocKind::EXTERNAL_STRING);
     } else {
         MOZ_ASSERT(kind == gc::AllocKind::STRING);
     }
@@ -1380,6 +1393,20 @@ CallNativeGetter(JSContext* cx, HandleFunction callee, HandleObject obj,
 
     result.set(vp[0]);
     return true;
+}
+
+bool
+CallNativeSetter(JSContext* cx, HandleFunction callee, HandleObject obj, HandleValue rhs)
+{
+    MOZ_ASSERT(callee->isNative());
+    JSNative natfun = callee->native();
+
+    JS::AutoValueArray<3> vp(cx);
+    vp[0].setObject(*callee.get());
+    vp[1].setObject(*obj.get());
+    vp[2].set(rhs);
+
+    return natfun(cx, 1, vp.begin());
 }
 
 bool

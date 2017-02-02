@@ -134,7 +134,6 @@ this.CryptoUtils = {
    * HMAC-based Key Derivation (RFC 5869).
    */
   hkdf: function hkdf(ikm, xts, info, len) {
-    const BLOCKSIZE = 256 / 8;
     if (typeof xts === undefined)
       xts = String.fromCharCode(0, 0, 0, 0, 0, 0, 0, 0,
                                 0, 0, 0, 0, 0, 0, 0, 0,
@@ -187,9 +186,8 @@ this.CryptoUtils = {
                        hmacAlg = Ci.nsICryptoHMAC.SHA1, hmacLen = 20) {
 
     // We don't have a default in the algo itself, as NSS does.
-    // Use the constant.
     if (!dkLen) {
-      dkLen = SYNC_KEY_DECODED_LENGTH;
+      throw new Error("dkLen should be defined");
     }
 
     function F(S, c, i, h) {
@@ -261,12 +259,11 @@ this.CryptoUtils = {
                                                             forceJS) {
     if (Svc.Crypto.deriveKeyFromPassphrase && !forceJS) {
       return Svc.Crypto.deriveKeyFromPassphrase(passphrase, salt, keyLength);
-    } else {
-      // Fall back to JS implementation.
-      // 4096 is hardcoded in WeaveCrypto, so do so here.
-      return CryptoUtils.pbkdf2Generate(passphrase, atob(salt), 4096,
-                                        keyLength);
     }
+    // Fall back to JS implementation.
+    // 4096 is hardcoded in WeaveCrypto, so do so here.
+    return CryptoUtils.pbkdf2Generate(passphrase, atob(salt), 4096,
+                                      keyLength);
   },
 
   /**

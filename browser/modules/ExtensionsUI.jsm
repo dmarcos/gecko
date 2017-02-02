@@ -7,15 +7,112 @@ const {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
 
 this.EXPORTED_SYMBOLS = ["ExtensionsUI"];
 
-Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://devtools/shared/event-emitter.js");
 
-const DEFAULT_EXENSION_ICON = "chrome://mozapps/skin/extensions/extensionGeneric.svg";
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
+                                  "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
+                                  "resource://gre/modules/PluralForm.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
+                                  "resource:///modules/RecentWindow.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                  "resource://gre/modules/Services.jsm");
+
+XPCOMUtils.defineLazyPreferenceGetter(this, "WEBEXT_PERMISSION_PROMPTS",
+                                      "extensions.webextPermissionPrompts", false);
+
+const DEFAULT_EXTENSION_ICON = "chrome://mozapps/skin/extensions/extensionGeneric.svg";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
 this.ExtensionsUI = {
+  sideloaded: new Set(),
+  updates: new Set(),
+
   init() {
     Services.obs.addObserver(this, "webextension-permission-prompt", false);
+    Services.obs.addObserver(this, "webextension-update-permissions", false);
+    Services.obs.addObserver(this, "webextension-install-notify", false);
+
+    this._checkForSideloaded();
+  },
+
+  _checkForSideloaded() {
+    AddonManager.getAllAddons(addons => {
+      // Check for any side-loaded addons that the user is allowed
+      // to enable.
+      let sideloaded = addons.filter(
+        addon => addon.seen === false && (addon.permissions & AddonManager.PERM_CAN_ENABLE));
+
+      if (!sideloaded.length) {
+        return;
+      }
+
+      if (WEBEXT_PERMISSION_PROMPTS) {
+        for (let addon of sideloaded) {
+          this.sideloaded.add(addon);
+        }
+        this.emit("change");
+      } else {
+        // This and all the accompanying about:newaddon code can eventually
+        // be removed.  See bug 1331521.
+        let win = RecentWindow.getMostRecentBrowserWindow();
+        for (let addon of sideloaded) {
+          win.openUILinkIn(`about:newaddon?id=${addon.id}`, "tab");
+        }
+      }
+    });
+  },
+
+  showAddonsManager(browser, info) {
+    let loadPromise = new Promise(resolve => {
+      let listener = (subject, topic) => {
+        if (subject.location.href == "about:addons") {
+          Services.obs.removeObserver(listener, topic);
+          resolve(subject);
+        }
+      };
+      Services.obs.addObserver(listener, "EM-loaded", false);
+    });
+    let tab = browser.addTab("about:addons");
+    browser.selectedTab = tab;
+
+    return loadPromise.then(win => {
+      win.loadView("addons://list/extension");
+      return this.showPermissionsPrompt(browser.selectedBrowser, info);
+    });
+  },
+
+  showSideloaded(browser, addon) {
+    addon.markAsSeen();
+    this.sideloaded.delete(addon);
+    this.emit("change");
+
+    let info = {
+      addon,
+      permissions: addon.userPermissions,
+      icon: addon.iconURL || DEFAULT_EXTENSION_ICON,
+      type: "sideload",
+    };
+    this.showAddonsManager(browser, info).then(answer => {
+      addon.userDisabled = !answer;
+    });
+  },
+
+  showUpdate(browser, info) {
+    info.type = "update";
+    this.showAddonsManager(browser, info).then(answer => {
+      if (answer) {
+        info.resolve();
+      } else {
+        info.reject();
+      }
+      // At the moment, this prompt will re-appear next time we do an update
+      // check.  See bug 1332360 for proposal to avoid this.
+      this.updates.delete(info);
+      this.emit("change");
+    });
   },
 
   observe(subject, topic, data) {
@@ -30,15 +127,41 @@ this.ExtensionsUI = {
         progressNotification.remove();
       }
 
-      this.showPermissionsPrompt(target, info).then(answer => {
+      let reply = answer => {
         Services.obs.notifyObservers(subject, "webextension-permission-response",
                                      JSON.stringify(answer));
+      };
+
+      let perms = info.addon.userPermissions;
+      if (!perms) {
+        reply(true);
+      } else {
+        info.permissions = perms;
+        this.showPermissionsPrompt(target, info).then(reply);
+      }
+    } else if (topic == "webextension-update-permissions") {
+      this.updates.add(subject.wrappedJSObject);
+      this.emit("change");
+    } else if (topic == "webextension-install-notify") {
+      let {target, addon, callback} = subject.wrappedJSObject;
+      this.showInstallNotification(target, addon).then(() => {
+        if (callback) {
+          callback();
+        }
       });
     }
   },
 
+  // Escape &, <, and > characters in a string so that it may be
+  // injected as part of raw markup.
+  _sanitizeName(name) {
+    return name.replace(/&/g, "&amp;")
+               .replace(/</g, "&lt;")
+               .replace(/>/g, "&gt;");
+  },
+
   showPermissionsPrompt(target, info) {
-    let perms = info.addon.userPermissions;
+    let perms = info.permissions;
     if (!perms) {
       return Promise.resolve();
     }
@@ -49,61 +172,97 @@ this.ExtensionsUI = {
     if (name.length > 50) {
       name = name.slice(0, 49) + "…";
     }
+    name = this._sanitizeName(name);
 
-    // The strings below are placeholders, they will switch over to the
-    // bundle.get*String() calls as part of bug 1316996.
+    let addonLabel = `<label class="addon-webext-name">${name}</label>`;
+    let bundle = win.gNavigatorBundle;
 
-    // let bundle = win.gNavigatorBundle;
-    // let header = bundle.getFormattedString("webextPerms.header", [name])
-    // let listHeader = bundle.getString("webextPerms.listHeader");
-    let header = "Add ADDON?".replace("ADDON", name);
-    let listHeader = "It can:";
+    let header = bundle.getFormattedString("webextPerms.header", [addonLabel]);
+    let text = "";
+    let listIntro = bundle.getString("webextPerms.listIntro");
 
-    let formatPermission = perm => {
-      try {
-        // return bundle.getString(`webextPerms.description.${perm}`);
-        return `localized description of permission ${perm}`;
-      } catch (err) {
-        // return bundle.getFormattedString("webextPerms.description.unknown",
-        //                                  [perm]);
-        return `localized description of unknown permission ${perm}`;
+    let acceptText = bundle.getString("webextPerms.add.label");
+    let acceptKey = bundle.getString("webextPerms.add.accessKey");
+    let cancelText = bundle.getString("webextPerms.cancel.label");
+    let cancelKey = bundle.getString("webextPerms.cancel.accessKey");
+
+    if (info.type == "sideload") {
+      header = bundle.getFormattedString("webextPerms.sideloadHeader", [addonLabel]);
+      text = bundle.getString("webextPerms.sideloadText");
+      acceptText = bundle.getString("webextPerms.sideloadEnable.label");
+      acceptKey = bundle.getString("webextPerms.sideloadEnable.accessKey");
+      cancelText = bundle.getString("webextPerms.sideloadDisable.label");
+      cancelKey = bundle.getString("webextPerms.sideloadDisable.accessKey");
+    } else if (info.type == "update") {
+      header = "";
+      text = bundle.getFormattedString("webextPerms.updateText", [addonLabel]);
+      acceptText = bundle.getString("webextPerms.updateAccept.label");
+      acceptKey = bundle.getString("webextPerms.updateAccept.accessKey");
+    }
+
+    let msgs = [];
+    for (let permission of perms.permissions) {
+      let key = `webextPerms.description.${permission}`;
+      if (permission == "nativeMessaging") {
+        let brandBundle = win.document.getElementById("bundle_brand");
+        let appName = brandBundle.getString("brandShortName");
+        msgs.push(bundle.getFormattedString(key, [appName]));
+      } else {
+        try {
+          msgs.push(bundle.getString(key));
+        } catch (err) {
+          // We deliberately do not include all permissions in the prompt.
+          // So if we don't find one then just skip it.
+        }
       }
-    };
+    }
 
-    let formatHostPermission = perm => {
-      if (perm == "<all_urls>") {
-        // return bundle.getString("webextPerms.hostDescription.allUrls");
-        return "localized description of <all_urls> host permission";
+    let allUrls = false, wildcards = [], sites = [];
+    for (let permission of perms.hosts) {
+      if (permission == "<all_urls>") {
+        allUrls = true;
+        break;
       }
-      let match = /^[htps*]+:\/\/([^/]+)\//.exec(perm);
+      let match = /^[htps*]+:\/\/([^/]+)\//.exec(permission);
       if (!match) {
         throw new Error("Unparseable host permission");
       }
-      if (match[1].startsWith("*.")) {
-        let domain = match[1].slice(2);
-        // return bundle.getFormattedString("webextPerms.hostDescription.wildcard", [domain]);
-        return `localized description of wildcard host permission for ${domain}`;
+      if (match[1] == "*") {
+        allUrls = true;
+      } else if (match[1].startsWith("*.")) {
+        wildcards.push(match[1].slice(2));
+      } else {
+        sites.push(match[1]);
+      }
+    }
+
+    if (allUrls) {
+      msgs.push(bundle.getString("webextPerms.hostDescription.allUrls"));
+    } else {
+      // Formats a list of host permissions.  If we have 4 or fewer, display
+      // them all, otherwise display the first 3 followed by an item that
+      // says "...plus N others"
+      function format(list, itemKey, moreKey) {
+        function formatItems(items) {
+          msgs.push(...items.map(item => bundle.getFormattedString(itemKey, [item])));
+        }
+        if (list.length < 5) {
+          formatItems(list);
+        } else {
+          formatItems(list.slice(0, 3));
+
+          let remaining = list.length - 3;
+          msgs.push(PluralForm.get(remaining, bundle.getString(moreKey))
+                              .replace("#1", remaining));
+        }
       }
 
-      //  return bundle.getFormattedString("webextPerms.hostDescription.oneSite", [match[1]]);
-      return `localized description of single host permission for ${match[1]}`;
-    };
+      format(wildcards, "webextPerms.hostDescription.wildcard",
+             "webextPerms.hostDescription.tooManyWildcards");
+      format(sites, "webextPerms.hostDescription.oneSite",
+             "webextPerms.hostDescription.tooManySites");
+    }
 
-    let msgs = [
-      ...perms.permissions.map(formatPermission),
-      ...perms.hosts.map(formatHostPermission),
-    ];
-
-    // let acceptText = bundle.getString("webextPerms.accept.label");
-    // let acceptKey = bundle.getString("webextPerms.accept.accessKey");
-    // let cancelText = bundle.getString("webextPerms.cancel.label");
-    // let cancelKey = bundle.getString("webextPerms.cancel.accessKey");
-    let acceptText = "Add extension";
-    let acceptKey = "A";
-    let cancelText = "Cancel";
-    let cancelKey = "C";
-
-    let rendered = false;
     let popupOptions = {
       hideClose: true,
       popupIconURL: info.icon,
@@ -111,33 +270,28 @@ this.ExtensionsUI = {
 
       eventCallback(topic) {
         if (topic == "showing") {
-          // This check can be removed when bug 1325223 is resolved.
-          if (rendered) {
-            return false;
-          }
-
           let doc = this.browser.ownerDocument;
-          doc.getElementById("addon-webext-perm-header").textContent = header;
+          doc.getElementById("addon-webext-perm-header").innerHTML = header;
+
+          let textEl = doc.getElementById("addon-webext-perm-text");
+          textEl.innerHTML = text;
+          textEl.hidden = !text;
+
+          let listIntroEl = doc.getElementById("addon-webext-perm-intro");
+          listIntroEl.value = listIntro;
+          listIntroEl.hidden = (msgs.length == 0);
 
           let list = doc.getElementById("addon-webext-perm-list");
           while (list.firstChild) {
             list.firstChild.remove();
           }
 
-          let listHeaderEl = doc.getElementById("addon-webext-perm-text");
-          listHeaderEl.value = listHeader;
-          listHeaderEl.hidden = (msgs.length == 0);
-
           for (let msg of msgs) {
             let item = doc.createElementNS(HTML_NS, "li");
             item.textContent = msg;
             list.appendChild(item);
           }
-          rendered = true;
-        } else if (topic == "dismissed") {
-          rendered = false;
         } else if (topic == "swapping") {
-          rendered = false;
           return true;
         }
         return false;
@@ -161,4 +315,52 @@ this.ExtensionsUI = {
                                   ], popupOptions);
     });
   },
+
+  showInstallNotification(target, addon) {
+    let win = target.ownerGlobal;
+    let popups = win.PopupNotifications;
+
+    let name = this._sanitizeName(addon.name);
+    let addonLabel = `<label class="addon-webext-name">${name}</label>`;
+    let addonIcon = '<image class="addon-addon-icon"/>';
+    let toolbarIcon = '<image class="addon-toolbar-icon"/>';
+
+    let brandBundle = win.document.getElementById("bundle_brand");
+    let appName = brandBundle.getString("brandShortName");
+
+    let bundle = win.gNavigatorBundle;
+    let msg1 = bundle.getFormattedString("addonPostInstall.message1",
+                                         [addonLabel, appName]);
+    let msg2 = bundle.getFormattedString("addonPostInstall.messageDetail",
+                                         [addonIcon, toolbarIcon]);
+
+    return new Promise(resolve => {
+      let action = {
+        label: bundle.getString("addonPostInstall.okay.label"),
+        accessKey: bundle.getString("addonPostInstall.okay.key"),
+        callback: resolve,
+      };
+
+      let options = {
+        hideClose: true,
+        popupIconURL: addon.iconURL || DEFAULT_EXTENSION_ICON,
+        eventCallback(topic) {
+          if (topic == "showing") {
+            let doc = this.browser.ownerDocument;
+            doc.getElementById("addon-installed-notification-header")
+               .innerHTML = msg1;
+            doc.getElementById("addon-installed-notification-message")
+               .innerHTML = msg2;
+          } else if (topic == "dismissed") {
+            resolve();
+          }
+        }
+      };
+
+      popups.show(target, "addon-installed", "", "addons-notification-icon",
+                  action, null, options);
+    });
+  },
 };
+
+EventEmitter.decorate(ExtensionsUI);

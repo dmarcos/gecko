@@ -515,7 +515,7 @@ class MDefinition : public MNode
     }
 
   protected:
-    virtual void setBlock(MBasicBlock* block) {
+    void setBlock(MBasicBlock* block) {
         block_ = block;
     }
 
@@ -10669,26 +10669,12 @@ class InlinePropertyTable : public TempObject
     bool appendRoots(MRootList& roots) const;
 };
 
-class CacheLocationList : public InlineConcatList<CacheLocationList>
-{
-  public:
-    CacheLocationList()
-      : pc(nullptr),
-        script(nullptr)
-    { }
-
-    jsbytecode* pc;
-    JSScript* script;
-};
-
 class MGetPropertyCache
   : public MBinaryInstruction,
-    public MixPolicy<ObjectPolicy<0>, CacheIdPolicy<1>>::Data
+    public MixPolicy<BoxExceptPolicy<0, MIRType::Object>, CacheIdPolicy<1>>::Data
 {
     bool idempotent_ : 1;
     bool monitoredResult_ : 1;
-
-    CacheLocationList location_;
 
     InlinePropertyTable* inlinePropertyTable_;
 
@@ -10696,7 +10682,6 @@ class MGetPropertyCache
       : MBinaryInstruction(obj, id),
         idempotent_(false),
         monitoredResult_(monitoredResult),
-        location_(),
         inlinePropertyTable_(nullptr)
     {
         setResultType(MIRType::Value);
@@ -10710,7 +10695,7 @@ class MGetPropertyCache
   public:
     INSTRUCTION_HEADER(GetPropertyCache)
     TRIVIAL_NEW_WRAPPERS
-    NAMED_OPERANDS((0, object), (1, idval))
+    NAMED_OPERANDS((0, value), (1, idval))
 
     InlinePropertyTable* initInlinePropertyTable(TempAllocator& alloc, jsbytecode* pc) {
         MOZ_ASSERT(inlinePropertyTable_ == nullptr);
@@ -10736,9 +10721,6 @@ class MGetPropertyCache
     bool monitoredResult() const {
         return monitoredResult_;
     }
-    CacheLocationList& location() {
-        return location_;
-    }
 
     bool congruentTo(const MDefinition* ins) const override {
         if (!idempotent_)
@@ -10756,9 +10738,6 @@ class MGetPropertyCache
         }
         return AliasSet::Store(AliasSet::Any);
     }
-
-    void setBlock(MBasicBlock* block) override;
-    MOZ_MUST_USE bool updateForReplacement(MDefinition* ins) override;
 
     bool allowDoubleResult() const;
 
@@ -14220,7 +14199,8 @@ bool ElementAccessIsTypedArray(CompilerConstraintList* constraints,
 bool ElementAccessIsPacked(CompilerConstraintList* constraints, MDefinition* obj);
 bool ElementAccessMightBeCopyOnWrite(CompilerConstraintList* constraints, MDefinition* obj);
 bool ElementAccessMightBeFrozen(CompilerConstraintList* constraints, MDefinition* obj);
-bool ElementAccessHasExtraIndexedProperty(IonBuilder* builder, MDefinition* obj);
+AbortReasonOr<bool>
+ElementAccessHasExtraIndexedProperty(IonBuilder* builder, MDefinition* obj);
 MIRType DenseNativeElementType(CompilerConstraintList* constraints, MDefinition* obj);
 BarrierKind PropertyReadNeedsTypeBarrier(JSContext* propertycx,
                                          CompilerConstraintList* constraints,
@@ -14245,8 +14225,10 @@ bool PropertyWriteNeedsTypeBarrier(TempAllocator& alloc, CompilerConstraintList*
                                    MBasicBlock* current, MDefinition** pobj,
                                    PropertyName* name, MDefinition** pvalue,
                                    bool canModify, MIRType implicitType = MIRType::None);
-bool ArrayPrototypeHasIndexedProperty(IonBuilder* builder, JSScript* script);
-bool TypeCanHaveExtraIndexedProperties(IonBuilder* builder, TemporaryTypeSet* types);
+AbortReasonOr<bool>
+ArrayPrototypeHasIndexedProperty(IonBuilder* builder, JSScript* script);
+AbortReasonOr<bool>
+TypeCanHaveExtraIndexedProperties(IonBuilder* builder, TemporaryTypeSet* types);
 
 } // namespace jit
 } // namespace js

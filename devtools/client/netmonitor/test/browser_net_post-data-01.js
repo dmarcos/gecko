@@ -47,17 +47,16 @@ add_task(function* () {
     });
 
   // Wait for all tree sections updated by react
-  wait = waitForDOM(document, "#params-tabpanel .tree-section", 2);
+  wait = waitForDOM(document, "#params-panel .tree-section", 2);
   EventUtils.sendMouseEvent({ type: "mousedown" },
     document.getElementById("details-pane-toggle"));
-  EventUtils.sendMouseEvent({ type: "mousedown" },
-    document.querySelectorAll("#details-pane tab")[2]);
+  document.querySelector("#params-tab").click();
   yield wait;
   yield testParamsTab("urlencoded");
 
   // Wait for all tree sections and editor updated by react
-  let waitForSections = waitForDOM(document, "#params-tabpanel .tree-section", 2);
-  let waitForEditor = waitForDOM(document, "#params-tabpanel .editor-mount iframe");
+  let waitForSections = waitForDOM(document, "#params-panel .tree-section", 2);
+  let waitForEditor = waitForDOM(document, "#params-panel .editor-mount iframe");
   RequestsMenu.selectedIndex = 1;
   let [, editorFrames] = yield Promise.all([waitForSections, waitForEditor]);
   yield once(editorFrames[0], "DOMContentLoaded");
@@ -67,11 +66,7 @@ add_task(function* () {
   return teardown(monitor);
 
   function* testParamsTab(type) {
-    let tabEl = document.querySelectorAll("#details-pane tab")[2];
-    let tabpanel = document.querySelectorAll("#details-pane tabpanel")[2];
-
-    is(tabEl.getAttribute("selected"), "true",
-      "The params tab in the network details pane should be selected.");
+    let tabpanel = document.querySelector("#params-panel");
 
     function checkVisibility(box) {
       is(!tabpanel.querySelector(".treeTable"), !box.includes("params"),

@@ -316,6 +316,14 @@ nsFormFillController::MarkAsAutofillField(nsIDOMHTMLInputElement *aInput)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsFormFillController::GetFocusedInput(nsIDOMHTMLInputElement** aRetVal) {
+  if (!aRetVal) {
+    return NS_ERROR_INVALID_POINTER;
+  }
+  *aRetVal = mFocusedInput;
+  return NS_OK;
+}
 
 ////////////////////////////////////////////////////////////////////////
 //// nsIAutoCompleteInput
@@ -694,10 +702,19 @@ nsFormFillController::StartSearch(const nsAString &aSearchString, const nsAStrin
                                   nsIAutoCompleteResult *aPreviousResult, nsIAutoCompleteObserver *aListener)
 {
   nsresult rv;
+  nsCOMPtr<nsIFormControl> formControl = do_QueryInterface(mFocusedInputNode);
 
   // If the login manager has indicated it's responsible for this field, let it
   // handle the autocomplete. Otherwise, handle with form history.
-  if (mPwmgrInputs.Get(mFocusedInputNode)) {
+  if (mFocusedInputNode && (mPwmgrInputs.Get(mFocusedInputNode) ||
+                            formControl->GetType() == NS_FORM_INPUT_PASSWORD)) {
+
+    // Handle the case where a password field is focused but
+    // MarkAsLoginManagerField wasn't called because password manager is disabled.
+    if (!mLoginManager) {
+      mLoginManager = do_GetService("@mozilla.org/login-manager;1");
+    }
+
     // XXX aPreviousResult shouldn't ever be a historyResult type, since we're not letting
     // satchel manage the field?
     mLastListener = aListener;
@@ -990,9 +1007,23 @@ nsFormFillController::Focus(nsIDOMEvent* aEvent)
     aEvent->InternalDOMEvent()->GetTarget());
   MaybeStartControllingInput(input);
 
+  // Bail if we didn't start controlling the input.
+  if (!mFocusedInputNode) {
+    mContextMenuFiredBeforeFocus = false;
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIFormControl> formControl = do_QueryInterface(mFocusedInputNode);
+  MOZ_ASSERT(formControl);
+
   // If this focus doesn't immediately follow a contextmenu event then show
   // the autocomplete popup
-  if (!mContextMenuFiredBeforeFocus && mPwmgrInputs.Get(mFocusedInputNode)) {
+  if (!mContextMenuFiredBeforeFocus &&
+      (mPwmgrInputs.Get(mFocusedInputNode)
+#ifndef ANDROID
+       || formControl->GetType() == NS_FORM_INPUT_PASSWORD
+#endif
+       )) {
     ShowPopup();
   }
 

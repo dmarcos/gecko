@@ -7,6 +7,7 @@
 #define mozilla_EditorBase_h
 
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc.
+#include "mozilla/FlushType.h"          // for FlushType enum
 #include "mozilla/OwningNonNull.h"      // for OwningNonNull
 #include "mozilla/SelectionState.h"     // for RangeUpdater, etc.
 #include "mozilla/StyleSheet.h"   // for StyleSheet
@@ -339,16 +340,14 @@ protected:
   /**
    * Create a transaction for adding a style sheet.
    */
-  NS_IMETHOD CreateTxnForAddStyleSheet(
-               StyleSheet* aSheet,
-               AddStyleSheetTransaction** aTransaction);
+  already_AddRefed<mozilla::AddStyleSheetTransaction>
+    CreateTxnForAddStyleSheet(StyleSheet* aSheet);
 
   /**
    * Create a transaction for removing a style sheet.
    */
-  NS_IMETHOD CreateTxnForRemoveStyleSheet(
-               StyleSheet* aSheet,
-               RemoveStyleSheetTransaction** aTransaction);
+  already_AddRefed<mozilla::RemoveStyleSheetTransaction>
+    CreateTxnForRemoveStyleSheet(StyleSheet* aSheet);
 
   nsresult DeleteText(nsGenericDOMDataNode& aElement,
                       uint32_t aOffset, uint32_t aLength);
@@ -951,6 +950,14 @@ public:
    * nsCaret.  Therefore, this is stateless.
    */
   void HideCaret(bool aHide);
+
+  void FlushFrames()
+  {
+    nsCOMPtr<nsIDocument> doc = GetDocument();
+    if (doc) {
+      doc->FlushPendingNotifications(FlushType::Frames);
+    }
+  }
 
 protected:
   enum Tristate

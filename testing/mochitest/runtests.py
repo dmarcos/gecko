@@ -322,6 +322,7 @@ def killPid(pid, log):
     except Exception as e:
         log.info("Failed to kill process %d: %s" % (pid, str(e)))
 
+
 if mozinfo.isWin:
     import ctypes.wintypes
 
@@ -825,7 +826,6 @@ class MochitestDesktop(object):
         self.result = {}
 
         self.start_script = os.path.join(here, 'start_desktop.js')
-        self.disable_leak_checking = False
 
     def update_mozinfo(self):
         """walk up directories to find mozinfo.json update the info"""
@@ -1091,7 +1091,9 @@ class MochitestDesktop(object):
 
         command = [sys.executable,
                    os.path.join("websocketprocessbridge",
-                                "websocketprocessbridge.py")]
+                                "websocketprocessbridge.py"),
+                   "--port",
+                   options.websocket_process_bridge_port]
         self.websocketProcessBridge = mozprocess.ProcessHandler(command,
                                                                 cwd=SCRIPT_DIR)
         self.websocketProcessBridge.run()
@@ -1375,6 +1377,11 @@ toolbar#nav-bar {
                                    manifest.fmt_filters()))
 
         paths = []
+
+        # When running mochitest locally the manifest is based on topsrcdir,
+        # but when running in automation it is based on the test root.
+        manifest_root = build_obj.topsrcdir if build_obj else self.testRootAbs
+        manifests = set()
         for test in tests:
             if len(tests) == 1 and 'disabled' in test:
                 del test['disabled']
@@ -1388,6 +1395,8 @@ toolbar#nav-bar {
                     'Warning: %s from manifest %s is not a valid test' %
                     (test['name'], test['manifest']))
                 continue
+
+            manifests.add(os.path.relpath(test['manifest'], manifest_root))
 
             testob = {'path': tp}
             if 'disabled' in test:
@@ -1404,16 +1413,22 @@ toolbar#nav-bar {
             return cmp(path1, path2)
 
         paths.sort(path_sort)
-        self._active_tests = paths
         if options.dump_tests:
             options.dump_tests = os.path.expanduser(options.dump_tests)
             assert os.path.exists(os.path.dirname(options.dump_tests))
             with open(options.dump_tests, 'w') as dumpFile:
-                dumpFile.write(json.dumps({'active_tests': self._active_tests}))
+                dumpFile.write(json.dumps({'active_tests': paths}))
 
             self.log.info("Dumping active_tests to %s file." % options.dump_tests)
             sys.exit()
 
+        # Upload a list of test manifests that were executed in this run.
+        if 'MOZ_UPLOAD_DIR' in os.environ:
+            artifact = os.path.join(os.environ['MOZ_UPLOAD_DIR'], 'manifests.list')
+            with open(artifact, 'a') as fh:
+                fh.write('\n'.join(sorted(manifests)))
+
+        self._active_tests = paths
         return self._active_tests
 
     def getTestManifest(self, options):
@@ -1495,8 +1510,7 @@ toolbar#nav-bar {
             self.log.error(str(e))
             return None
 
-        if not self.disable_leak_checking:
-            browserEnv["XPCOM_MEM_BLOAT_LOG"] = self.leak_report_file
+        browserEnv["XPCOM_MEM_BLOAT_LOG"] = self.leak_report_file
 
         try:
             gmp_path = self.getGMPPluginPath(options)
@@ -1514,9 +1528,6 @@ toolbar#nav-bar {
         self.mozLogs = MOZ_LOG and "MOZ_UPLOAD_DIR" in os.environ
         if self.mozLogs:
             browserEnv["MOZ_LOG"] = MOZ_LOG
-
-        if debugger and not options.slowscript:
-            browserEnv["JS_DISABLE_SLOW_SCRIPT_SIGNALS"] = "1"
 
         # For e10s, our tests default to suppressing the "unsafe CPOW usage"
         # warnings that can plague test logs.
@@ -1634,9 +1645,11 @@ toolbar#nav-bar {
                 "testing.browserTestHarness.timeout=%d" %
                 options.timeout)
         # browser-chrome tests use a fairly short default timeout of 45 seconds;
-        # this is sometimes too short on asan, where we expect reduced performance.
-        if mozinfo.info["asan"] and options.flavor == 'browser' and options.timeout is None:
-            self.log.info("Increasing default timeout to 90 seconds on ASAN")
+        # this is sometimes too short on asan and debug, where we expect reduced
+        # performance.
+        if (mozinfo.info["asan"] or mozinfo.info["debug"]) and \
+                options.flavor == 'browser' and options.timeout is None:
+            self.log.info("Increasing default timeout to 90 seconds")
             options.extraPrefs.append("testing.browserTestHarness.timeout=90")
 
         options.extraPrefs.append(
@@ -1940,13 +1953,12 @@ toolbar#nav-bar {
             args.append('-foreground')
             self.start_script_kwargs['testUrl'] = testUrl or 'about:blank'
 
-            if detectShutdownLeaks and not self.disable_leak_checking:
+            if detectShutdownLeaks:
                 shutdownLeaks = ShutdownLeaks(self.log)
             else:
                 shutdownLeaks = None
 
-            if mozinfo.info["asan"] and (mozinfo.isLinux or mozinfo.isMac) \
-                    and not self.disable_leak_checking:
+            if mozinfo.info["asan"] and (mozinfo.isLinux or mozinfo.isMac):
                 lsanLeaks = LSANLeaks(self.log)
             else:
                 lsanLeaks = None
@@ -2218,32 +2230,6 @@ toolbar#nav-bar {
         result = 1  # default value, if no tests are run.
         for d in dirs:
             print("dir: %s" % d)
-
-            # BEGIN LEAKCHECK HACK
-            # Leak checking was broken in mochitest unnoticed for a length of time. During
-            # this time, several leaks slipped through. The leak checking was fixed by bug
-            # 1325148, but it couldn't land until all the regressions were also fixed or
-            # backed out. Rather than waiting and risking new regressions, in the meantime
-            # this code will selectively disable leak checking on flavors/directories where
-            # known regressions exist. At least this way we can prevent further damage while
-            # they get fixed.
-
-            info = mozinfo.info
-            skip_leak_conditions = [
-                (info['debug'] and options.flavor == 'plain' and d.startswith('toolkit/components/extensions/test/mochitest') and info['os'] == 'mac', 'bug 1326456'),  # noqa
-                (info['debug'] and options.flavor == 'plain' and d == 'toolkit/components/prompts/test' and info['os'] == 'mac', 'bug 1325275'),  # noqa
-            ]
-
-            for condition, reason in skip_leak_conditions:
-                if condition:
-                    self.log.warning('WARNING | disabling leakcheck due to {}'.format(reason))
-                    self.disable_leak_checking = True
-                    break
-            else:
-                self.disable_leak_checking = False
-
-            # END LEAKCHECK HACK
-
             tests_in_dir = [t for t in testsToRun if os.path.dirname(t) == d]
 
             # If we are using --run-by-dir, we should not use the profile path (if) provided
@@ -2350,6 +2336,7 @@ toolbar#nav-bar {
             self.browserEnv["MOZ_LOG_FILE"] = "{}/moz-pid=%PID-uid={}.log".format(
                 self.browserEnv["MOZ_UPLOAD_DIR"], str(uuid.uuid4()))
 
+        status = 0
         try:
             self.startServers(options, debuggerInfo)
 
@@ -2409,23 +2396,25 @@ toolbar#nav-bar {
 
                 self.log.info("runtests.py | Running with e10s: {}".format(options.e10s))
                 self.log.info("runtests.py | Running tests: start.\n")
-                status = self.runApp(testURL,
-                                     self.browserEnv,
-                                     options.app,
-                                     profile=self.profile,
-                                     extraArgs=options.browserArgs,
-                                     utilityPath=options.utilityPath,
-                                     debuggerInfo=debuggerInfo,
-                                     valgrindPath=valgrindPath,
-                                     valgrindArgs=valgrindArgs,
-                                     valgrindSuppFiles=valgrindSuppFiles,
-                                     symbolsPath=options.symbolsPath,
-                                     timeout=timeout,
-                                     detectShutdownLeaks=detectShutdownLeaks,
-                                     screenshotOnFail=options.screenshotOnFail,
-                                     bisectChunk=options.bisectChunk,
-                                     marionette_args=marionette_args,
-                                     )
+                ret = self.runApp(
+                    testURL,
+                    self.browserEnv,
+                    options.app,
+                    profile=self.profile,
+                    extraArgs=options.browserArgs,
+                    utilityPath=options.utilityPath,
+                    debuggerInfo=debuggerInfo,
+                    valgrindPath=valgrindPath,
+                    valgrindArgs=valgrindArgs,
+                    valgrindSuppFiles=valgrindSuppFiles,
+                    symbolsPath=options.symbolsPath,
+                    timeout=timeout,
+                    detectShutdownLeaks=detectShutdownLeaks,
+                    screenshotOnFail=options.screenshotOnFail,
+                    bisectChunk=options.bisectChunk,
+                    marionette_args=marionette_args,
+                )
+                status = ret or status
         except KeyboardInterrupt:
             self.log.info("runtests.py | Received keyboard interrupt.\n")
             status = -1
@@ -2726,6 +2715,7 @@ def cli(args=sys.argv[1:]):
         sys.exit(1)
 
     return run_test_harness(parser, options)
+
 
 if __name__ == "__main__":
     sys.exit(cli())

@@ -244,12 +244,7 @@ var LoginManagerContent = {
       case "RemoteLogins:loginsAutoCompleted": {
         let loginsFound =
           LoginHelper.vanillaObjectsToLogins(msg.data.logins);
-        // If we're in the parent process, don't pass a message manager so our
-        // autocomplete result objects know they can remove the login from the
-        // login manager directly.
-        let messageManager =
-          (Services.appinfo.processType === Services.appinfo.PROCESS_TYPE_CONTENT) ?
-            msg.target : undefined;
+        let messageManager = msg.target;
         request.promise.resolve({ logins: loginsFound, messageManager });
         break;
       }
@@ -297,9 +292,6 @@ var LoginManagerContent = {
 
     let messageManager = messageManagerFromWindow(win);
 
-    let remote = (Services.appinfo.processType ===
-                  Services.appinfo.PROCESS_TYPE_CONTENT);
-
     let previousResult = aPreviousResult ?
                            { searchString: aPreviousResult.searchString,
                              logins: LoginHelper.loginsToVanillaObjects(aPreviousResult.logins) } :
@@ -313,7 +305,7 @@ var LoginManagerContent = {
                         rect: aRect,
                         isSecure: InsecurePasswordUtils.isFormSecure(form),
                         isPasswordField: aElement.type == "password",
-                        remote };
+                      };
 
     return this._sendRequest(messageManager, requestData,
                              "RemoteLogins:autoCompleteLogins",
@@ -394,11 +386,10 @@ var LoginManagerContent = {
       log("Arming the DeferredTask we just created since document.readyState == 'complete'");
       deferredTask.arm();
     } else {
-      window.addEventListener("DOMContentLoaded", function armPasswordAddedTask() {
-        window.removeEventListener("DOMContentLoaded", armPasswordAddedTask);
+      window.addEventListener("DOMContentLoaded", function() {
         log("Arming the onDOMInputPasswordAdded DeferredTask due to DOMContentLoaded");
         deferredTask.arm();
-      });
+      }, {once: true});
     }
   },
 
@@ -459,7 +450,9 @@ var LoginManagerContent = {
     let hasInsecureLoginForms = (thisWindow) => {
       let doc = thisWindow.document;
       let hasLoginForm = this.stateForDocument(doc).loginFormRootElements.size > 0;
-      return (hasLoginForm && !thisWindow.isSecureContext) ||
+      // Ignores window.opener, because it's not relevant for indicating
+      // form security. See InsecurePasswordUtils docs for details.
+      return (hasLoginForm && !thisWindow.isSecureContextIfOpenerIgnored) ||
              Array.some(thisWindow.frames,
                         frame => hasInsecureLoginForms(frame));
     };
@@ -615,7 +608,7 @@ var LoginManagerContent = {
         continue;
       }
 
-      if (skipEmptyFields && !element.value) {
+      if (skipEmptyFields && !element.value.trim()) {
         continue;
       }
 
@@ -1251,24 +1244,48 @@ var LoginUtils = {
 
 // nsIAutoCompleteResult implementation
 function UserAutoCompleteResult(aSearchString, matchingLogins, {isSecure, messageManager, isPasswordField}) {
-  this.searchString = aSearchString;
+  function loginSort(a, b) {
+    var userA = a.username.toLowerCase();
+    var userB = b.username.toLowerCase();
 
+    if (userA < userB)
+      return -1;
+
+    if (userA > userB)
+      return 1;
+
+    return 0;
+  }
+
+  function findDuplicates(loginList) {
+    let seen = new Set();
+    let duplicates = new Set();
+    for (let login of loginList) {
+      if (seen.has(login.username)) {
+        duplicates.add(login.username);
+      }
+      seen.add(login.username);
+    }
+    return duplicates;
+  }
+
+  this._showInsecureFieldWarning = (!isSecure && LoginHelper.showInsecureFieldWarning) ? 1 : 0;
+  this.searchString = aSearchString;
+  this.logins = matchingLogins.sort(loginSort);
+  this.matchCount = matchingLogins.length + this._showInsecureFieldWarning;
+  this._messageManager = messageManager;
   this._stringBundle = Services.strings.createBundle("chrome://passwordmgr/locale/passwordmgr.properties");
   this._dateAndTimeFormatter = new Intl.DateTimeFormat(undefined,
                               { day: "numeric", month: "short", year: "numeric" });
 
-  this._messageManager = messageManager;
-  this._matchingLogins = matchingLogins;
   this._isPasswordField = isPasswordField;
-  this._isSecure = isSecure;
 
-  Services.prefs.addObserver("security.insecure_field_warning.contextual.enabled",
-                             this.updateWithPrefChange.bind(this), false);
+  this._duplicateUsernames = findDuplicates(matchingLogins);
 
-  Services.prefs.addObserver("signon.autofillForms.http",
-                             this.updateWithPrefChange.bind(this), false);
-
-  this.updateWithPrefChange();
+  if (this.matchCount > 0) {
+    this.searchResult = Ci.nsIAutoCompleteResult.RESULT_SUCCESS;
+    this.defaultIndex = 0;
+  }
 }
 
 UserAutoCompleteResult.prototype = {
@@ -1282,43 +1299,6 @@ UserAutoCompleteResult.prototype = {
   // modify some readonly properties for internal use.
   get wrappedJSObject() {
     return this;
-  },
-
-  updateWithPrefChange() {
-    function loginSort(a, b) {
-      var userA = a.username.toLowerCase();
-      var userB = b.username.toLowerCase();
-
-      if (userA < userB)
-        return -1;
-
-      if (userA > userB)
-        return 1;
-
-      return 0;
-    }
-
-    function findDuplicates(loginList) {
-      let seen = new Set();
-      let duplicates = new Set();
-      for (let login of loginList) {
-        if (seen.has(login.username)) {
-          duplicates.add(login.username);
-        }
-        seen.add(login.username);
-      }
-      return duplicates;
-    }
-
-    this._showInsecureFieldWarning = (!this._isSecure && LoginHelper.showInsecureFieldWarning) ? 1 : 0;
-    this.logins = this._matchingLogins.sort(loginSort);
-    this.matchCount = this._matchingLogins.length + this._showInsecureFieldWarning;
-    this._duplicateUsernames = findDuplicates(this._matchingLogins);
-
-    if (this.matchCount > 0) {
-      this.searchResult = Ci.nsIAutoCompleteResult.RESULT_SUCCESS;
-      this.defaultIndex = 0;
-    }
   },
 
   // Interfaces from idl...

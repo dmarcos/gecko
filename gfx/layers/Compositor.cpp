@@ -280,12 +280,17 @@ Compositor::DrawGeometry(const gfx::Rect& aRect,
     return;
   }
 
-  // Cull invisible polygons.
+  // Cull completely invisible polygons.
   if (aRect.Intersect(aGeometry->BoundingBox()).IsEmpty()) {
     return;
   }
 
   const gfx::Polygon clipped = aGeometry->ClipPolygon(aRect);
+
+  // Cull polygons with no area.
+  if (clipped.IsEmpty()) {
+    return;
+  }
 
   DrawPolygon(clipped, aRect, aClipRect, aEffectChain,
               aOpacity, aTransform, aVisibleRect);
@@ -334,13 +339,10 @@ Compositor::DrawPolygon(const gfx::Polygon& aPolygon,
 
     // Since the texture was created for non-split geometry, we need to
     // update the texture coordinates to account for the split.
-    const EffectTypes type = aEffectChain.mPrimaryEffect->mType;
+    TexturedEffect* texturedEffect =
+      aEffectChain.mPrimaryEffect->AsTexturedEffect();
 
-    if (type == EffectTypes::RGB || type == EffectTypes::YCBCR ||
-        type == EffectTypes::NV12 || type == EffectTypes::RENDER_TARGET) {
-      TexturedEffect* texturedEffect =
-        static_cast<TexturedEffect*>(aEffectChain.mPrimaryEffect.get());
-
+    if (texturedEffect) {
       UpdateTextureCoordinates(texturedTriangle, aRect, intersection,
                                texturedEffect->mTextureCoords);
     }

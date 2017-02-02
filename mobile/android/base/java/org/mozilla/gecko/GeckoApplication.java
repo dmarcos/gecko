@@ -148,7 +148,6 @@ public class GeckoApplication extends Application
         final Context context = getApplicationContext();
         GeckoAppShell.setApplicationContext(context);
         HardwareUtils.init(context);
-        Clipboard.init(context);
         FilePicker.init(context);
         DownloadsIntegration.init();
         HomePanelsManager.getInstance().init(context);
@@ -190,10 +189,6 @@ public class GeckoApplication extends Application
                     }
                 }
             });
-        }
-
-        if (AppConstants.MOZ_ANDROID_DOWNLOAD_CONTENT_SERVICE) {
-            DownloadContentService.startStudy(this);
         }
 
         GeckoAccessibility.setAccessibilityManagerListeners(this);

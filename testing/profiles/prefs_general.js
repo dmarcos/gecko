@@ -62,6 +62,8 @@ user_pref("dom.htmlimports.enabled", true);
 // Existing tests assume there is no font size inflation.
 user_pref("font.size.inflation.emPerLine", 0);
 user_pref("font.size.inflation.minTwips", 0);
+// Disable the caret blinking so we get stable snapshot
+user_pref("ui.caretBlinkTime", -1);
 
 // AddonManager tests require that the experiments provider be present.
 user_pref("experiments.supported", true);
@@ -192,12 +194,6 @@ user_pref("layout.spammy_warnings.enabled", false);
 // Enable Media Source Extensions for testing
 user_pref("media.mediasource.mp4.enabled", true);
 user_pref("media.mediasource.webm.enabled", true);
-
-// Enable mozContacts
-user_pref("dom.mozContacts.enabled", true);
-
-// Enable mozSettings
-user_pref("dom.mozSettings.enabled", true);
 
 // Make sure the disk cache doesn't get auto disabled
 user_pref("network.http.bypass-cachelock-threshold", 200000);

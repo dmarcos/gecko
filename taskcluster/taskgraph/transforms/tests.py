@@ -35,6 +35,7 @@ from voluptuous import (
 import copy
 import logging
 import os.path
+import re
 
 ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
 WORKER_TYPE = {
@@ -163,7 +164,7 @@ test_description_schema = Schema({
     # test platform.
     Optional('worker-implementation'): Any(
         'docker-worker',
-        'macosx-engine',
+        'native-engine',
         'generic-worker',
         # coming soon:
         'docker-engine',
@@ -195,6 +196,9 @@ test_description_schema = Schema({
 
     # Whether to perform a gecko checkout.
     Required('checkout', default=False): bool,
+
+    # Wheter to perform a machine reboot after test is done
+    Optional('reboot', default=False): bool,
 
     # What to run
     Required('mozharness'): optionally_keyed_by(
@@ -332,6 +336,7 @@ def set_defaults(config, tests):
         test.setdefault('run-on-projects', ['all'])
         test.setdefault('instance-size', 'default')
         test.setdefault('max-run-time', 3600)
+        test.setdefault('reboot', False)
         test['mozharness'].setdefault('extra-options', [])
         yield test
 
@@ -394,7 +399,7 @@ def set_worker_implementation(config, tests):
         elif test['test-platform'].startswith('win'):
             test['worker-implementation'] = 'generic-worker'
         elif test['test-platform'].startswith('macosx'):
-            test['worker-implementation'] = 'macosx-engine'
+            test['worker-implementation'] = 'native-engine'
         else:
             test['worker-implementation'] = 'docker-worker'
         yield test
@@ -410,10 +415,15 @@ def set_tier(config, tests):
 
         # only override if not set for the test
         if 'tier' not in test or test['tier'] == 'default':
-            if test['test-platform'] in ['linux64/debug',
+            if test['test-platform'] in ['linux32/opt',
+                                         'linux32/debug',
+                                         'linux64/opt',
+                                         'linux64/debug',
+                                         'linux64-pgo/opt',
                                          'linux64-asan/opt',
+                                         'android-4.3-arm7-api-15/opt',
                                          'android-4.3-arm7-api-15/debug',
-                                         'android-x86/opt']:
+                                         'android-4.2-x86/opt']:
                 test['tier'] = 1
             elif test['test-platform'].startswith('windows'):
                 test['tier'] = 3
@@ -469,6 +479,16 @@ def handle_keyed_by(config, tests):
     for test in tests:
         for field in fields:
             resolve_keyed_by(test, field, item_name=test['test-name'])
+        yield test
+
+
+@transforms.add
+def enable_code_coverage(config, tests):
+    """Enable code coverage for linux64-ccov/opt build-platforms"""
+    for test in tests:
+        if test['build-platform'] == 'linux64-ccov/opt':
+            test['mozharness'].setdefault('extra-options', []).append('--code-coverage')
+            test['run-on-projects'] = []
         yield test
 
 
@@ -548,6 +568,28 @@ def set_retry_exit_status(config, tests):
 
 
 @transforms.add
+def remove_linux_pgo_try_talos(config, tests):
+    """linux64-pgo talos tests don't run on try."""
+    def predicate(test):
+        return not(
+            test['test-platform'] == 'linux64-pgo/opt'
+            and test['suite'] == 'talos'
+            and config.params['project'] == 'try'
+        )
+    for test in filter(predicate, tests):
+        yield test
+
+
+@transforms.add
+def remove_native_non_try(config, tests):
+    """Remove native-engine jobs if they are not in try branch."""
+    for test in tests:
+        if test['worker-implementation'] != 'native-engine' \
+                or config.params['project'] != 'try':
+            yield test
+
+
+@transforms.add
 def make_task_description(config, tests):
     """Convert *test* descriptions to *task* descriptions (input to
     taskgraph.transforms.task)"""
@@ -619,7 +661,6 @@ def make_task_description(config, tests):
 
         # yield only the task description, discarding the test description
         yield taskdesc
-
 
 worker_setup_functions = {}
 
@@ -873,7 +914,7 @@ def generic_worker_setup(config, test, taskdesc):
     ]
 
 
-@worker_setup_function("macosx-engine")
+@worker_setup_function("native-engine")
 def macosx_engine_setup(config, test, taskdesc):
     mozharness = test['mozharness']
 
@@ -889,6 +930,7 @@ def macosx_engine_setup(config, test, taskdesc):
     worker = taskdesc['worker'] = {}
     worker['implementation'] = test['worker-implementation']
 
+    worker['reboot'] = test['reboot']
     worker['artifacts'] = [{
         'name': prefix.rstrip('/'),
         'path': path.rstrip('/'),
@@ -906,7 +948,7 @@ def macosx_engine_setup(config, test, taskdesc):
 
     # assemble the command line
 
-    worker['link'] = '{}/raw-file/{}/taskcluster/scripts/tester/test-macosx.sh'.format(
+    worker['context'] = '{}/raw-file/{}/taskcluster/scripts/tester/test-macosx.sh'.format(
         config.params['head_repository'], config.params['head_rev']
     )
 
@@ -959,9 +1001,15 @@ def buildbot_bridge_setup(config, test, taskdesc):
     taskdesc['worker-type'] = 'buildbot-bridge/buildbot-bridge'
 
     if test.get('suite', '') == 'talos':
-        buildername = '{} {} talos {}'.format(
+        # on linux64-<variant>/<build>, we add the variant to the buildername
+        m = re.match(r'\w+-([^/]+)/.*', test['test-platform'])
+        variant = ''
+        if m and m.group(1):
+            variant = m.group(1) + ' '
+        buildername = '{} {} {}talos {}'.format(
             BUILDER_NAME_PREFIX[platform],
             branch,
+            variant,
             test_name
         )
         if buildername.startswith('Ubuntu'):

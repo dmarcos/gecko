@@ -21,6 +21,10 @@
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
 
+#ifdef FUZZING
+#include "builtin/TestingFunctions.h"
+#endif
+
 using namespace js;
 
 using js::frontend::IsIdentifier;
@@ -68,18 +72,18 @@ js::obj_propertyIsEnumerable(JSContext* cx, unsigned argc, Value* vp)
         JSObject* obj = &args.thisv().toObject();
 
         /* Step 3. */
-        Shape* shape;
+        PropertyResult prop;
         if (obj->isNative() &&
-            NativeLookupOwnProperty<NoGC>(cx, &obj->as<NativeObject>(), id, &shape))
+            NativeLookupOwnProperty<NoGC>(cx, &obj->as<NativeObject>(), id, &prop))
         {
             /* Step 4. */
-            if (!shape) {
+            if (!prop) {
                 args.rval().setBoolean(false);
                 return true;
             }
 
             /* Step 5. */
-            unsigned attrs = GetShapeAttributes(obj, shape);
+            unsigned attrs = GetPropertyAttributes(obj, prop);
             args.rval().setBoolean((attrs & JSPROP_ENUMERATE) != 0);
             return true;
         }
@@ -419,18 +423,6 @@ js::obj_toString(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-
-bool
-js::obj_valueOf(JSContext* cx, unsigned argc, Value* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    RootedObject obj(cx, ToObject(cx, args.thisv()));
-    if (!obj)
-        return false;
-    args.rval().setObject(*obj);
-    return true;
-}
-
 static bool
 obj_setPrototypeOf(JSContext* cx, unsigned argc, Value* vp)
 {
@@ -580,11 +572,11 @@ js::obj_hasOwnProperty(JSContext* cx, unsigned argc, Value* vp)
     jsid id;
     if (args.thisv().isObject() && ValueToId<NoGC>(cx, idValue, &id)) {
         JSObject* obj = &args.thisv().toObject();
-        Shape* prop;
+        PropertyResult prop;
         if (obj->isNative() &&
             NativeLookupOwnProperty<NoGC>(cx, &obj->as<NativeObject>(), id, &prop))
         {
-            args.rval().setBoolean(!!prop);
+            args.rval().setBoolean(prop.isFound());
             return true;
         }
     }
@@ -839,7 +831,7 @@ EnumerableOwnProperties(JSContext* cx, const JS::CallArgs& args, EnumerableOwnPr
                 value = nobj->getDenseOrTypedArrayElement(JSID_TO_INT(id));
             } else {
                 shape = nobj->lookup(cx, id);
-                if (!shape || !(GetShapeAttributes(nobj, shape) & JSPROP_ENUMERATE))
+                if (!shape || !(shape->attributes() & JSPROP_ENUMERATE))
                     continue;
                 if (!shape->isAccessorShape()) {
                     if (!NativeGetExistingProperty(cx, nobj, nobj, shape, &value))
@@ -1195,7 +1187,7 @@ static const JSFunctionSpec object_methods[] = {
 #endif
     JS_FN(js_toString_str,             obj_toString,                0,0),
     JS_SELF_HOSTED_FN(js_toLocaleString_str, "Object_toLocaleString", 0, 0),
-    JS_FN(js_valueOf_str,              obj_valueOf,                 0,0),
+    JS_SELF_HOSTED_FN(js_valueOf_str,  "Object_valueOf",            0,0),
 #if JS_HAS_OBJ_WATCHPOINT
     JS_FN(js_watch_str,                obj_watch,                   2,0),
     JS_FN(js_unwatch_str,              obj_unwatch,                 1,0),
@@ -1300,6 +1292,16 @@ FinishObjectClassInit(JSContext* cx, JS::HandleObject ctor, JS::HandleObject pro
     if (!evalobj)
         return false;
     global->setOriginalEval(evalobj);
+
+#ifdef FUZZING
+    if (cx->options().fuzzing()) {
+        if (!DefineTestingFunctions(cx, global, /* fuzzingSafe = */ true,
+                                    /* disableOOMFunctions = */ false))
+        {
+            return false;
+        }
+    }
+#endif
 
     Rooted<NativeObject*> holder(cx, GlobalObject::getIntrinsicsHolder(cx, global));
     if (!holder)

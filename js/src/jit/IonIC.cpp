@@ -42,6 +42,7 @@ IonIC::scratchRegisterForEntryJump()
         return output.hasValue() ? output.valueReg().scratchReg() : output.typedReg().gpr();
       }
       case CacheKind::GetName:
+      case CacheKind::SetProp:
         MOZ_CRASH("Baseline-specific for now");
     }
 
@@ -115,7 +116,7 @@ IonGetPropertyIC::maybeDisable(Zone* zone, bool attached)
 
 /* static */ bool
 IonGetPropertyIC::update(JSContext* cx, HandleScript outerScript, IonGetPropertyIC* ic,
-			 HandleObject obj, HandleValue idVal, MutableHandleValue res)
+			 HandleValue val, HandleValue idVal, MutableHandleValue res)
 {
     // Override the return value if we are invalidated (bug 728188).
     AutoDetectInvalidation adi(cx, res, outerScript->ionScript());
@@ -134,11 +135,10 @@ IonGetPropertyIC::update(JSContext* cx, HandleScript outerScript, IonGetProperty
             CanAttachGetter canAttachGetter =
                 ic->monitoredResult() ? CanAttachGetter::Yes : CanAttachGetter::No;
             jsbytecode* pc = ic->idempotent() ? nullptr : ic->pc();
-            RootedValue objVal(cx, ObjectValue(*obj));
             bool isTemporarilyUnoptimizable;
             GetPropIRGenerator gen(cx, pc, ic->kind(), ICStubEngine::IonIC,
                                    &isTemporarilyUnoptimizable,
-                                   objVal, idVal, canAttachGetter);
+                                   val, idVal, canAttachGetter);
             if (ic->idempotent() ? gen.tryAttachIdempotentStub() : gen.tryAttachStub()) {
                 attached = ic->attachCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
                                                  outerScript);
@@ -168,11 +168,12 @@ IonGetPropertyIC::update(JSContext* cx, HandleScript outerScript, IonGetProperty
     }
 
     if (ic->kind() == CacheKind::GetProp) {
-        if (!GetProperty(cx, obj, obj, idVal.toString()->asAtom().asPropertyName(), res))
+        RootedPropertyName name(cx, idVal.toString()->asAtom().asPropertyName());
+        if (!GetProperty(cx, val, name, res))
             return false;
     } else {
         MOZ_ASSERT(ic->kind() == CacheKind::GetElem);
-        if (!GetObjectElementOperation(cx, JSOp(*ic->pc()), obj, obj, idVal, res))
+        if (!GetElementOperation(cx, JSOp(*ic->pc()), val, idVal, res))
             return false;
     }
 

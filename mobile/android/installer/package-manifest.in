@@ -113,6 +113,7 @@
 @BINPATH@/components/docshell.xpt
 @BINPATH@/components/dom.xpt
 @BINPATH@/components/dom_base.xpt
+@BINPATH@/components/dom_bindings.xpt
 @BINPATH@/components/dom_canvas.xpt
 @BINPATH@/components/dom_core.xpt
 @BINPATH@/components/dom_css.xpt
@@ -132,7 +133,6 @@
 @BINPATH@/components/dom_quota.xpt
 @BINPATH@/components/dom_range.xpt
 @BINPATH@/components/dom_security.xpt
-@BINPATH@/components/dom_settings.xpt
 @BINPATH@/components/dom_sidebar.xpt
 @BINPATH@/components/dom_mobilemessage.xpt
 @BINPATH@/components/dom_storage.xpt
@@ -173,11 +173,14 @@
 @BINPATH@/components/layout_xul.xpt
 @BINPATH@/components/locale.xpt
 @BINPATH@/components/lwbrk.xpt
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 @BINPATH@/components/memory_profiler.xpt
 #endif
 @BINPATH@/components/mimetype.xpt
 @BINPATH@/components/mozfind.xpt
+#ifdef ENABLE_INTL_API
+@BINPATH@/components/mozintl.xpt
+#endif
 @BINPATH@/components/necko_about.xpt
 @BINPATH@/components/necko_cache.xpt
 @BINPATH@/components/necko_cache2.xpt
@@ -205,7 +208,7 @@
 @BINPATH@/components/plugin.xpt
 @BINPATH@/components/pref.xpt
 @BINPATH@/components/prefetch.xpt
-#ifdef MOZ_ENABLE_PROFILER_SPS
+#ifdef MOZ_GECKO_PROFILER
 @BINPATH@/components/profiler.xpt
 #endif
 @BINPATH@/components/rdf.xpt
@@ -270,14 +273,14 @@
 @BINPATH@/components/Push.manifest
 @BINPATH@/components/PushComponents.js
 #endif
-@BINPATH@/components/SettingsManager.js
-@BINPATH@/components/SettingsManager.manifest
 @BINPATH@/components/BrowserElementParent.manifest
 @BINPATH@/components/BrowserElementParent.js
 @BINPATH@/components/FeedProcessor.manifest
 @BINPATH@/components/FeedProcessor.js
 @BINPATH@/components/WellKnownOpportunisticUtils.js
 @BINPATH@/components/WellKnownOpportunisticUtils.manifest
+@BINPATH@/components/mozProtocolHandler.js
+@BINPATH@/components/mozProtocolHandler.manifest
 @BINPATH@/components/nsDNSServiceDiscovery.manifest
 @BINPATH@/components/nsDNSServiceDiscovery.js
 @BINPATH@/components/toolkitsearch.manifest

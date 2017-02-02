@@ -22,6 +22,7 @@ var currentBrowser = null;
 var currentMenulist = null;
 var currentZoom = 1;
 var closedWithEnter = false;
+var selectRect;
 
 this.SelectParentHelper = {
   populate(menulist, items, selectedIndex, zoom) {
@@ -36,9 +37,10 @@ this.SelectParentHelper = {
     menulist.hidden = false;
     currentBrowser = browser;
     closedWithEnter = false;
+    selectRect = rect;
     this._registerListeners(browser, menulist.menupopup);
 
-    let win = browser.ownerDocument.defaultView;
+    let win = browser.ownerGlobal;
 
     // Set the maximum height to show exactly MAX_ROWS items.
     let menupopup = menulist.menupopup;
@@ -76,7 +78,14 @@ this.SelectParentHelper = {
   handleEvent(event) {
     switch (event.type) {
       case "mouseup":
-        currentBrowser.messageManager.sendAsyncMessage("Forms:MouseUp", {});
+        function inRect(rect, x, y) {
+          return x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height;
+        }
+
+        let x = event.screenX, y = event.screenY;
+        let onAnchor = !inRect(currentMenulist.menupopup.getOuterScreenRect(), x, y) &&
+                        inRect(selectRect, x, y) && currentMenulist.menupopup.state == "open";
+        currentBrowser.messageManager.sendAsyncMessage("Forms:MouseUp", { onAnchor });
         break;
 
       case "mouseover":
@@ -139,9 +148,9 @@ this.SelectParentHelper = {
     popup.addEventListener("popuphidden", this);
     popup.addEventListener("mouseover", this);
     popup.addEventListener("mouseout", this);
-    browser.ownerDocument.defaultView.addEventListener("mouseup", this, true);
-    browser.ownerDocument.defaultView.addEventListener("keydown", this, true);
-    browser.ownerDocument.defaultView.addEventListener("fullscreen", this, true);
+    browser.ownerGlobal.addEventListener("mouseup", this, true);
+    browser.ownerGlobal.addEventListener("keydown", this, true);
+    browser.ownerGlobal.addEventListener("fullscreen", this, true);
     browser.messageManager.addMessageListener("Forms:UpdateDropDown", this);
   },
 
@@ -150,9 +159,9 @@ this.SelectParentHelper = {
     popup.removeEventListener("popuphidden", this);
     popup.removeEventListener("mouseover", this);
     popup.removeEventListener("mouseout", this);
-    browser.ownerDocument.defaultView.removeEventListener("mouseup", this, true);
-    browser.ownerDocument.defaultView.removeEventListener("keydown", this, true);
-    browser.ownerDocument.defaultView.removeEventListener("fullscreen", this, true);
+    browser.ownerGlobal.removeEventListener("mouseup", this, true);
+    browser.ownerGlobal.removeEventListener("keydown", this, true);
+    browser.ownerGlobal.removeEventListener("fullscreen", this, true);
     browser.messageManager.removeMessageListener("Forms:UpdateDropDown", this);
   },
 
@@ -166,7 +175,7 @@ function populateChildren(menulist, options, selectedIndex, zoom,
   // -1 just means we haven't calculated it yet. When we recurse through this function
   // we will pass in adjustedTextSize to save on recalculations.
   if (adjustedTextSize == -1) {
-    let win = element.ownerDocument.defaultView;
+    let win = element.ownerGlobal;
 
     // Grab the computed text size and multiply it by the remote browser's fullZoom to ensure
     // the popup's text size is matched with the content's. We can't just apply a CSS transform
@@ -187,6 +196,21 @@ function populateChildren(menulist, options, selectedIndex, zoom,
     // them on search input
     item.hiddenByContent = item.hidden;
     item.setAttribute("tooltiptext", option.tooltip);
+
+    if (option.backgroundColor && option.backgroundColor != "transparent") {
+      item.style.backgroundColor = option.backgroundColor;
+    }
+
+    if (option.color && option.color != "transparent") {
+      item.style.color = option.color;
+    }
+
+    if ((option.backgroundColor && option.backgroundColor != "transparent") ||
+        (option.color && option.color != "rgb(0, 0, 0)")) {
+      item.setAttribute("customoptionstyling", "true");
+    } else {
+      item.removeAttribute("customoptionstyling");
+    }
 
     element.appendChild(item);
 

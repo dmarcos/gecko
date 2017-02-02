@@ -322,7 +322,7 @@ HTMLEditRules::BeforeEdit(EditAction action,
     RefPtr<Selection> selection = htmlEditor->GetSelection();
 
     // Get the selection location
-    if (!selection->RangeCount()) {
+    if (NS_WARN_IF(!selection) || !selection->RangeCount()) {
       return NS_ERROR_UNEXPECTED;
     }
     mRangeItem->startNode = selection->GetRangeAt(0)->GetStartParent();
@@ -7435,9 +7435,9 @@ HTMLEditRules::AdjustSelection(Selection* aSelection,
   }
 
   // are we in a text node?
-  nsCOMPtr<nsIDOMCharacterData> textNode = do_QueryInterface(selNode);
-  if (textNode)
+  if (EditorBase::IsTextNode(selNode)) {
     return NS_OK; // we LIKE it when we are in a text node.  that RULZ
+  }
 
   // do we need to insert a special mozBR?  We do if we are:
   // 1) prior node is in same block where selection is AND

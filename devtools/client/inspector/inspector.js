@@ -169,6 +169,10 @@ Inspector.prototype = {
     return this._target.client.traits.getUniqueSelector;
   },
 
+  get canGetCssPath() {
+    return this._target.client.traits.getCssPath;
+  },
+
   get canGetUsedFontFaces() {
     return this._target.client.traits.getUsedFontFaces;
   },
@@ -1113,6 +1117,15 @@ Inspector.prototype = {
       click: () => this.copyUniqueSelector(),
     }));
     copySubmenu.append(new MenuItem({
+      id: "node-menu-copycsspath",
+      label: INSPECTOR_L10N.getStr("inspectorCopyCSSPath.label"),
+      accesskey:
+        INSPECTOR_L10N.getStr("inspectorCopyCSSPath.accesskey"),
+      disabled: !isSelectionElement,
+      hidden: !this.canGetCssPath,
+      click: () => this.copyCssPath(),
+    }));
+    copySubmenu.append(new MenuItem({
       id: "node-menu-copyimagedatauri",
       label: INSPECTOR_L10N.getStr("inspectorImageDataUri.label"),
       disabled: !isSelectionElement || !markupContainer ||
@@ -1393,7 +1406,7 @@ Inspector.prototype = {
     }
 
     if (this._markupFrame) {
-      this._markupFrame.parentNode.removeChild(this._markupFrame);
+      this._markupFrame.remove();
       this._markupFrame = null;
     }
 
@@ -1715,9 +1728,24 @@ Inspector.prototype = {
       return;
     }
 
-    this.selection.nodeFront.getUniqueSelector().then((selector) => {
+    this.telemetry.toolOpened("copyuniquecssselector");
+    this.selection.nodeFront.getUniqueSelector().then(selector => {
       clipboardHelper.copyString(selector);
-    }).then(null, console.error);
+    }).catch(e => console.error);
+  },
+
+  /**
+   * Copy the full CSS Path of the selected Node to the clipboard.
+   */
+  copyCssPath: function () {
+    if (!this.selection.isNode()) {
+      return;
+    }
+
+    this.telemetry.toolOpened("copyfullcssselector");
+    this.selection.nodeFront.getCssPath().then(path => {
+      clipboardHelper.copyString(path);
+    }).catch(e => console.error);
   },
 
   /**
@@ -1727,14 +1755,11 @@ Inspector.prototype = {
     const command = Services.prefs.getBoolPref("devtools.screenshot.clipboard.enabled") ?
       "screenshot --file --clipboard --selector" :
       "screenshot --file --selector";
-    CommandUtils.createRequisition(this._target, {
-      environment: CommandUtils.createEnvironment(this, "_target")
-    }).then(requisition => {
-      // Bug 1180314 -  CssSelector might contain white space so need to make sure it is
-      // passed to screenshot as a single parameter.  More work *might* be needed if
-      // CssSelector could contain escaped single- or double-quotes, backslashes, etc.
-      requisition.updateExec(`${command} '${this.selectionCssSelector}'`);
-    });
+    // Bug 1180314 -  CssSelector might contain white space so need to make sure it is
+    // passed to screenshot as a single parameter.  More work *might* be needed if
+    // CssSelector could contain escaped single- or double-quotes, backslashes, etc.
+    CommandUtils.executeOnTarget(this._target,
+      `${command} '${this.selectionCssSelector}'`);
   },
 
   /**

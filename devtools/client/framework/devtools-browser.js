@@ -146,7 +146,10 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       devtoolsTheme = "light";
     }
 
-    win.document.documentElement.setAttribute("devtoolstheme", devtoolsTheme);
+    // Style gcli and the splitter between the toolbox and page content.  This used to
+    // set the attribute on the browser's root node but that regressed tpaint: bug 1331449.
+    win.document.getElementById("browser-bottombox").setAttribute("devtoolstheme", devtoolsTheme);
+    win.document.getElementById("content").setAttribute("devtoolstheme", devtoolsTheme);
 
     // If the toolbox color changes and we have the opposite compact theme applied,
     // change it to match.  For example:
@@ -295,7 +298,13 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
   inspectNode: function (tab, node) {
     let target = TargetFactory.forTab(tab);
-    let selector = findCssSelector(node);
+
+    // Generate a cross iframes query selector
+    let selectors = [];
+    while(node) {
+      selectors.push(findCssSelector(node));
+      node = node.ownerDocument.defaultView.frameElement;
+    }
 
     return gDevTools.showToolbox(target, "inspector").then(toolbox => {
       let inspector = toolbox.getCurrentPanel();
@@ -304,11 +313,28 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       // browser is remote or not.
       let onNewNode = inspector.selection.once("new-node-front");
 
-      inspector.walker.getRootNode().then(rootNode => {
-        return inspector.walker.querySelector(rootNode, selector);
-      }).then(node => {
-        inspector.selection.setNodeFront(node, "browser-context-menu");
-      });
+      // Evaluate the cross iframes query selectors
+      function querySelectors(nodeFront) {
+        let selector = selectors.pop();
+        if (!selector) {
+          return Promise.resolve(nodeFront);
+        }
+        return inspector.walker.querySelector(nodeFront, selector)
+          .then(node => {
+            if (selectors.length > 0) {
+              return inspector.walker.children(node).then(({ nodes }) => {
+                return nodes[0]; // This is the NodeFront for the document node inside the iframe
+              });
+            }
+            return node;
+          }).then(querySelectors);
+      }
+      inspector.walker.getRootNode()
+        .then(querySelectors)
+        .then(node =>  {
+          // Select the final node
+          inspector.selection.setNodeFront(node, "browser-context-menu");
+        });
 
       return onNewNode.then(() => {
         // Now that the node has been selected, wait until the inspector is

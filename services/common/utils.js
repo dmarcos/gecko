@@ -132,20 +132,6 @@ this.CommonUtils = {
   },
 
   /**
-   * Spin the event loop and return once the next tick is executed.
-   *
-   * This is an evil function and should not be used in production code. It
-   * exists in this module for ease-of-use.
-   */
-  waitForNextTick: function waitForNextTick() {
-    let cb = Async.makeSyncCallback();
-    this.nextTick(cb);
-    Async.waitForSyncCallback(cb);
-
-
-  },
-
-  /**
    * Return a timer that is scheduled to call the callback after waiting the
    * provided time or as soon as possible. The timer will be set as a property
    * of the provided object with the given timer name.
@@ -237,12 +223,10 @@ this.CommonUtils = {
    */
   encodeBase32: function encodeBase32(bytes) {
     const key = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    let quanta = Math.floor(bytes.length / 5);
     let leftover = bytes.length % 5;
 
     // Pad the last quantum with zeros so the length is a multiple of 5.
     if (leftover) {
-      quanta += 1;
       for (let i = leftover; i < 5; i++)
         bytes += "\0";
     }

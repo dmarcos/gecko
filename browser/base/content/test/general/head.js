@@ -86,19 +86,17 @@ function openToolbarCustomizationUI(aCallback, aBrowserWin) {
 
   aBrowserWin.gCustomizeMode.enter();
 
-  aBrowserWin.gNavToolbox.addEventListener("customizationready", function UI_loaded() {
-    aBrowserWin.gNavToolbox.removeEventListener("customizationready", UI_loaded);
+  aBrowserWin.gNavToolbox.addEventListener("customizationready", function() {
     executeSoon(function() {
       aCallback(aBrowserWin)
     });
-  });
+  }, {once: true});
 }
 
 function closeToolbarCustomizationUI(aCallback, aBrowserWin) {
-  aBrowserWin.gNavToolbox.addEventListener("aftercustomization", function unloaded() {
-    aBrowserWin.gNavToolbox.removeEventListener("aftercustomization", unloaded);
+  aBrowserWin.gNavToolbox.addEventListener("aftercustomization", function() {
     executeSoon(aCallback);
-  });
+  }, {once: true});
 
   aBrowserWin.gCustomizeMode.exit();
 }
@@ -235,10 +233,9 @@ function resetBlocklist() {
 
 function whenNewWindowLoaded(aOptions, aCallback) {
   let win = OpenBrowserWindow(aOptions);
-  win.addEventListener("load", function onLoad() {
-    win.removeEventListener("load", onLoad);
+  win.addEventListener("load", function() {
     aCallback(win);
-  });
+  }, {once: true});
 }
 
 function promiseWindowWillBeClosed(win) {
@@ -271,10 +268,9 @@ function promiseOpenAndLoadWindow(aOptions, aWaitForDelayedStartup = false) {
     }, "browser-delayed-startup-finished", false);
 
   } else {
-    win.addEventListener("load", function onLoad() {
-      win.removeEventListener("load", onLoad);
+    win.addEventListener("load", function() {
       deferred.resolve(win);
-    });
+    }, {once: true});
   }
   return deferred.promise;
 }
@@ -574,12 +570,11 @@ var FullZoomHelper = {
       let didPs = false;
       let didZoom = false;
 
-      gBrowser.addEventListener("pageshow", function listener(event) {
-        gBrowser.removeEventListener("pageshow", listener, true);
+      gBrowser.addEventListener("pageshow", function(event) {
         didPs = true;
         if (didZoom)
           resolve();
-      }, true);
+      }, {capture: true, once: true});
 
       if (direction == this.BACK)
         gBrowser.goBack();
@@ -864,10 +859,9 @@ function promisePopupEvent(popup, eventSuffix) {
 
   let eventType = "popup" + eventSuffix;
   let deferred = Promise.defer();
-  popup.addEventListener(eventType, function onPopupShown(event) {
-    popup.removeEventListener(eventType, onPopupShown);
+  popup.addEventListener(eventType, function(event) {
     deferred.resolve();
-  });
+  }, {once: true});
 
   return deferred.promise;
 }
@@ -1020,16 +1014,9 @@ function* loadBadCertPage(url) {
                              "cert-exception-ui-ready", false);
   });
 
-  // Sometimes clearing the cert override is not immediately picked up,
-  // so we reload until we are on an actual cert error page.
-  yield BrowserTestUtils.waitForCondition(function*() {
-    yield BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
-    yield promiseErrorPageLoaded(gBrowser.selectedBrowser);
-    let isErrorPage = yield ContentTask.spawn(gBrowser.selectedBrowser, null, function*() {
-      return content.document.documentURI.startsWith("about:certerror");
-    });
-    return isErrorPage;
-  }, "Could not load error page", 1000);
+  let loaded = BrowserTestUtils.waitForErrorPage(gBrowser.selectedBrowser);
+  yield BrowserTestUtils.loadURI(gBrowser.selectedBrowser, url);
+  yield loaded;
 
   yield ContentTask.spawn(gBrowser.selectedBrowser, null, function*() {
     content.document.getElementById("exceptionDialogButton").click();

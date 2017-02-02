@@ -261,10 +261,8 @@ class IonBuilder
                                                          size_t fieldIndex);
     AbortReasonOr<Ok> getPropTryInnerize(bool* emitted, MDefinition* obj, PropertyName* name,
                                          TemporaryTypeSet* types);
-    AbortReasonOr<Ok> getPropTryCache(bool* emitted, MDefinition* obj, PropertyName* name,
+    AbortReasonOr<Ok> getPropAddCache(MDefinition* obj, PropertyName* name,
                                       BarrierKind barrier, TemporaryTypeSet* types);
-    AbortReasonOr<Ok> getPropTrySharedStub(bool* emitted, MDefinition* obj,
-                                           TemporaryTypeSet* types);
 
     // jsop_setprop() helpers.
     AbortReasonOr<Ok> setPropTryCommonSetter(bool* emitted, MDefinition* obj,
@@ -388,7 +386,7 @@ class IonBuilder
                                                        const LinearSum& byteOffset,
                                                        ReferenceTypeDescr::Type type,
                                                        PropertyName* name);
-    JSObject* getStaticTypedArrayObject(MDefinition* obj, MDefinition* index);
+    AbortReasonOr<JSObject*> getStaticTypedArrayObject(MDefinition* obj, MDefinition* index);
 
     // jsop_setelem() helpers.
     AbortReasonOr<Ok> setElemTryTypedArray(bool* emitted, MDefinition* object,
@@ -1036,7 +1034,7 @@ class IonBuilder
         {}
     };
 
-    Vector<MInstruction*, 2, JitAllocPolicy> iterators_;
+    Vector<MDefinition*, 2, JitAllocPolicy> iterators_;
     Vector<LoopHeader, 0, JitAllocPolicy> loopHeaders_;
     Vector<MBasicBlock*, 0, JitAllocPolicy> loopHeaderStack_;
 #ifdef DEBUG

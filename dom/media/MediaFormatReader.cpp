@@ -15,6 +15,7 @@
 #include "VideoFrameContainer.h"
 #include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/layers/ShadowLayers.h"
+#include "mozilla/AbstractThread.h"
 #include "mozilla/CDMProxy.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Preferences.h"
@@ -118,6 +119,7 @@ DecoderAllocPolicy::DecoderAllocPolicy(TrackType aTrack)
   , mDecoderLimit(MediaPrefs::MediaDecoderLimit())
   , mTrack(aTrack)
 {
+  // Non DocGroup-version AbstractThread::MainThread is fine for ClearOnShutdown().
   AbstractThread::MainThread()->Dispatch(NS_NewRunnableFunction([this] () {
     ClearOnShutdown(this, ShutdownPhase::ShutdownThreads);
   }));
@@ -439,9 +441,10 @@ class MediaFormatReader::DemuxerProxy
   class Wrapper;
 
 public:
-  explicit DemuxerProxy(MediaDataDemuxer* aDemuxer)
+  explicit DemuxerProxy(MediaDataDemuxer* aDemuxer, AbstractThread* mainThread)
     : mTaskQueue(new AutoTaskQueue(
-                   GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER)))
+                   GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
+                   mainThread))
     , mData(new Data(aDemuxer))
   {
     MOZ_COUNT_CTOR(DemuxerProxy);
@@ -788,7 +791,7 @@ MediaFormatReader::MediaFormatReader(AbstractMediaDecoder* aDecoder,
            Preferences::GetUint("media.audio-max-decode-error", 3))
   , mVideo(this, MediaData::VIDEO_DATA,
            Preferences::GetUint("media.video-max-decode-error", 2))
-  , mDemuxer(new DemuxerProxy(aDemuxer))
+  , mDemuxer(new DemuxerProxy(aDemuxer, aDecoder->AbstractMainThread()))
   , mDemuxerInitDone(false)
   , mLastReportedNumDecodedFrames(0)
   , mPreviousDecodedKeyframeTime_us(sNoPreviousDecodedKeyframe)
@@ -2652,7 +2655,7 @@ MediaFormatReader::GetImageContainer()
 }
 
 void
-MediaFormatReader::GetMozDebugReaderData(nsAString& aString)
+MediaFormatReader::GetMozDebugReaderData(nsACString& aString)
 {
   nsAutoCString result;
   const char* audioName = "unavailable";
@@ -2712,7 +2715,7 @@ MediaFormatReader::GetMozDebugReaderData(nsAString& aString)
                               mVideo.mWaitingForData, mVideo.mWaitingForKey,
                               mVideo.mLastStreamSourceID);
   }
-  aString += NS_ConvertUTF8toUTF16(result);
+  aString += result;
 }
 
 void
@@ -2726,21 +2729,18 @@ void
 MediaFormatReader::SetBlankDecode(TrackType aTrack, bool aIsBlankDecode)
 {
   MOZ_ASSERT(OnTaskQueue());
+
   auto& decoder = GetDecoderData(aTrack);
-
-  LOG("%s, decoder.mIsBlankDecode = %d => aIsBlankDecode = %d",
-      TrackTypeToStr(aTrack), decoder.mIsBlankDecode, aIsBlankDecode);
-
   if (decoder.mIsBlankDecode == aIsBlankDecode) {
     return;
   }
 
+  LOG("%s, decoder.mIsBlankDecode = %d => aIsBlankDecode = %d",
+      TrackTypeToStr(aTrack), decoder.mIsBlankDecode, aIsBlankDecode);
+
   decoder.mIsBlankDecode = aIsBlankDecode;
   decoder.Flush();
   decoder.ShutdownDecoder();
-  ScheduleUpdate(TrackInfo::kVideoTrack);
-
-  return;
 }
 
 void

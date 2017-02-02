@@ -26,9 +26,12 @@ const {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm", {})
 // use to select our configuration.
 if (gTestPath.includes("test-oop-extensions")) {
   SpecialPowers.pushPrefEnv({set: [
-    ["dom.ipc.processCount", 1],
+    ["dom.ipc.processCount.extension", 1],
     ["extensions.webextensions.remote", true],
   ]});
+  // We don't want to reset this at the end of the test, so that we don't have
+  // to spawn a new extension child process for each test unit.
+  SpecialPowers.setIntPref("dom.ipc.keepProcessesAlive.extension", 1);
 }
 
 // Bug 1239884: Our tests occasionally hit a long GC pause at unpredictable
@@ -53,10 +56,9 @@ var focusWindow = Task.async(function* focusWindow(win) {
   }
 
   let promise = new Promise(resolve => {
-    win.addEventListener("focus", function listener() {
-      win.removeEventListener("focus", listener, true);
+    win.addEventListener("focus", function() {
       resolve();
-    }, true);
+    }, {capture: true, once: true});
   });
 
   win.focus();
@@ -67,7 +69,7 @@ let img = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQImWNgYGBgAAAAB
 var imageBuffer = Uint8Array.from(atob(img), byte => byte.charCodeAt(0)).buffer;
 
 function getListStyleImage(button) {
-  let style = button.ownerDocument.defaultView.getComputedStyle(button);
+  let style = button.ownerGlobal.getComputedStyle(button);
 
   let match = /^url\("(.*)"\)$/.exec(style.listStyleImage);
 
@@ -255,10 +257,10 @@ function* openExtensionContextMenu(selector = "#img1") {
   return extensionMenu;
 }
 
-function* closeExtensionContextMenu(itemToSelect) {
+function* closeExtensionContextMenu(itemToSelect, modifiers = {}) {
   let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
   let popupHiddenPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popuphidden");
-  EventUtils.synthesizeMouseAtCenter(itemToSelect, {});
+  EventUtils.synthesizeMouseAtCenter(itemToSelect, modifiers);
   yield popupHiddenPromise;
 }
 
