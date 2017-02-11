@@ -815,16 +815,6 @@ public:
   GetOriginAttributes(nsILoadGroup* aLoadGroup);
 
   /**
-   * Returns true if this document is in a Private Browsing window.
-   */
-  static bool IsInPrivateBrowsing(nsIDocument* aDoc);
-
-  /**
-   * Returns true if this loadGroup uses Private Browsing.
-   */
-  static bool IsInPrivateBrowsing(nsILoadGroup* aLoadGroup);
-
-  /**
    * If aNode is not an element, return true exactly when aContent's binding
    * parent is null.
    *
@@ -2742,6 +2732,16 @@ public:
   static void AppendDocumentLevelNativeAnonymousContentTo(
       nsIDocument* aDocument,
       nsTArray<nsIContent*>& aElements);
+
+  /**
+   * Returns the content policy type that should be used for loading images
+   * for displaying in the UI.  The sources of such images can be <xul:image>,
+   * <xul:menuitem> on OSX where we load the image through nsMenuItemIconX, etc.
+   */
+  static void
+  GetContentPolicyTypeForUIImageLoading(nsIContent* aLoadingNode,
+                                        nsIPrincipal** aLoadingPrincipal,
+                                        nsContentPolicyType& aContentPolicyType);
 
 private:
   static bool InitializeEventTable();

@@ -349,7 +349,7 @@ pref("media.wmf.skip-blacklist", false);
 pref("media.wmf.vp9.enabled", true);
 pref("media.wmf.allow-unsupported-resolutions", false);
 pref("media.windows-media-foundation.allow-d3d11-dxva", true);
-pref("media.wmf.disable-d3d11-for-dlls", "igd11dxva64.dll: 20.19.15.4463, 20.19.15.4454, 20.19.15.4444, 20.19.15.4416, 20.19.15.4404, 20.19.15.4390, 20.19.15.4380, 20.19.15.4377, 20.19.15.4364, 20.19.15.4360, 20.19.15.4352, 20.19.15.4331, 20.19.15.4326, 20.19.15.4300; igd10iumd32.dll: 20.19.15.4444, 20.19.15.4424, 20.19.15.4409, 20.19.15.4390, 20.19.15.4380, 20.19.15.4360, 10.18.10.4358, 20.19.15.4331, 20.19.15.4312, 20.19.15.4300, 10.18.15.4281, 10.18.15.4279, 10.18.10.4276, 10.18.15.4268, 10.18.15.4256, 10.18.10.4252, 10.18.15.4248, 10.18.14.4112, 10.18.10.3958, 10.18.10.3496, 10.18.10.3431, 10.18.10.3412, 10.18.10.3355, 9.18.10.3234, 9.18.10.3071, 9.18.10.3055, 9.18.10.3006; igd10umd32.dll: 9.17.10.4229, 9.17.10.3040, 9.17.10.2857, 8.15.10.2274, 8.15.10.2272, 8.15.10.2246, 8.15.10.1840, 8.15.10.1808; igd10umd64.dll: 9.17.10.4229, 9.17.10.2857, 10.18.10.3496; isonyvideoprocessor.dll: 4.1.2247.8090, 4.1.2153.6200; tosqep.dll: 1.2.15.526, 1.1.12.201, 1.0.11.318, 1.0.11.215, 1.0.10.1224; tosqep64.dll: 1.1.12.201, 1.0.11.215; nvwgf2um.dll: 10.18.13.6510, 10.18.13.5891, 10.18.13.5887, 10.18.13.5582, 10.18.13.5382, 9.18.13.4195, 9.18.13.3165; atidxx32.dll: 21.19.151.3, 21.19.137.1, 21.19.134.1, 20.19.0.32837, 20.19.0.32832, 8.17.10.682, 8.17.10.671, 8.17.10.661, 8.17.10.648, 8.17.10.644, 8.17.10.625, 8.17.10.605, 8.17.10.581, 8.17.10.569, 8.17.10.560, 8.17.10.545, 8.17.10.539, 8.17.10.531, 8.17.10.525, 8.17.10.520, 8.17.10.519, 8.17.10.514, 8.17.10.511, 8.17.10.494, 8.17.10.489, 8.17.10.483, 8.17.10.453, 8.17.10.451, 8.17.10.441, 8.17.10.436, 8.17.10.432, 8.17.10.425, 8.17.10.418, 8.17.10.414, 8.17.10.401, 8.17.10.395, 8.17.10.385, 8.17.10.378, 8.17.10.362, 8.17.10.355, 8.17.10.342, 8.17.10.331, 8.17.10.318, 8.17.10.310, 8.17.10.286, 8.17.10.269, 8.17.10.261, 8.17.10.247, 8.17.10.240, 8.15.10.212; atidxx64.dll: 21.19.151.3, 21.19.137.1, 21.19.134.1, 20.19.0.32832, 8.17.10.682, 8.17.10.661, 8.17.10.644, 8.17.10.625; nvumdshim.dll: 10.18.13.6822");
+pref("media.wmf.disable-d3d11-for-dlls", "igd11dxva64.dll: 20.19.15.4463, 20.19.15.4454, 20.19.15.4444, 20.19.15.4416, 20.19.15.4404, 20.19.15.4390, 20.19.15.4380, 20.19.15.4377, 20.19.15.4364, 20.19.15.4360, 20.19.15.4352, 20.19.15.4331, 20.19.15.4326, 20.19.15.4300; igd10iumd32.dll: 20.19.15.4444, 20.19.15.4424, 20.19.15.4409, 20.19.15.4390, 20.19.15.4380, 20.19.15.4360, 10.18.10.4358, 20.19.15.4331, 20.19.15.4312, 20.19.15.4300, 10.18.15.4281, 10.18.15.4279, 10.18.10.4276, 10.18.15.4268, 10.18.15.4256, 10.18.10.4252, 10.18.15.4248, 10.18.14.4112, 10.18.10.3958, 10.18.10.3496, 10.18.10.3431, 10.18.10.3412, 10.18.10.3355, 9.18.10.3234, 9.18.10.3071, 9.18.10.3055, 9.18.10.3006; igd10umd32.dll: 9.17.10.4229, 9.17.10.3040, 9.17.10.2857, 8.15.10.2274, 8.15.10.2272, 8.15.10.2246, 8.15.10.1840, 8.15.10.1808; igd10umd64.dll: 9.17.10.4229, 9.17.10.2857, 10.18.10.3496; isonyvideoprocessor.dll: 4.1.2247.8090, 4.1.2153.6200; tosqep.dll: 1.2.15.526, 1.1.12.201, 1.0.11.318, 1.0.11.215, 1.0.10.1224; tosqep64.dll: 1.1.12.201, 1.0.11.215; nvwgf2um.dll: 10.18.13.6510, 10.18.13.5891, 10.18.13.5887, 10.18.13.5582, 10.18.13.5382, 9.18.13.4195, 9.18.13.3165; atidxx32.dll: 21.19.151.3, 21.19.142.257, 21.19.137.514, 21.19.137.1, 21.19.134.1, 21.19.128.7, 21.19.128.4, 20.19.0.32837, 20.19.0.32832, 8.17.10.682, 8.17.10.671, 8.17.10.661, 8.17.10.648, 8.17.10.644, 8.17.10.625, 8.17.10.605, 8.17.10.581, 8.17.10.569, 8.17.10.560, 8.17.10.545, 8.17.10.539, 8.17.10.531, 8.17.10.525, 8.17.10.520, 8.17.10.519, 8.17.10.514, 8.17.10.511, 8.17.10.494, 8.17.10.489, 8.17.10.483, 8.17.10.453, 8.17.10.451, 8.17.10.441, 8.17.10.436, 8.17.10.432, 8.17.10.425, 8.17.10.418, 8.17.10.414, 8.17.10.401, 8.17.10.395, 8.17.10.385, 8.17.10.378, 8.17.10.362, 8.17.10.355, 8.17.10.342, 8.17.10.331, 8.17.10.318, 8.17.10.310, 8.17.10.286, 8.17.10.269, 8.17.10.261, 8.17.10.247, 8.17.10.240, 8.15.10.212; atidxx64.dll: 21.19.151.3, 21.19.142.257, 21.19.137.514, 21.19.137.1, 21.19.134.1, 21.19.128.7, 21.19.128.4, 20.19.0.32832, 8.17.10.682, 8.17.10.661, 8.17.10.644, 8.17.10.625; nvumdshim.dll: 10.18.13.6822");
 pref("media.wmf.disable-d3d9-for-dlls", "igdumd64.dll: 8.15.10.2189, 8.15.10.2119, 8.15.10.2104, 8.15.10.2102, 8.771.1.0; atiumd64.dll: 7.14.10.833, 7.14.10.867, 7.14.10.885, 7.14.10.903, 7.14.10.911, 8.14.10.768, 9.14.10.1001, 9.14.10.1017, 9.14.10.1080, 9.14.10.1128, 9.14.10.1162, 9.14.10.1171, 9.14.10.1183, 9.14.10.1197, 9.14.10.945, 9.14.10.972, 9.14.10.984, 9.14.10.996");
 #endif
 #if defined(MOZ_FFMPEG)
@@ -516,7 +516,7 @@ pref("media.navigator.audio.full_duplex", true);
 #elif defined(ANDROID)
 pref("media.peerconnection.capture_delay", 100);
 pref("media.getusermedia.playout_delay", 100);
-pref("media.navigator.audio.full_duplex", false);
+pref("media.navigator.audio.full_duplex", true);
 // Whether to enable Webrtc Hardware acceleration support
 pref("media.navigator.hardware.vp8_encode.acceleration_enabled", false);
 pref("media.navigator.hardware.vp8_decode.acceleration_enabled", false);
@@ -597,6 +597,10 @@ pref("media.video_stats.enabled", true);
 
 // Whether to check the decoder supports recycling.
 pref("media.decoder.recycle.enabled", false);
+
+// Log level for cubeb, the audio input/output system. Valid values are
+// "verbose", "normal" and "" (log disabled).
+pref("media.cubeb.log_level", "");
 
 // Weather we allow AMD switchable graphics
 pref("layers.amd-switchable-gfx.enabled", true);
@@ -930,11 +934,6 @@ pref("toolkit.telemetry.infoURL", "https://www.mozilla.org/legal/privacy/firefox
 pref("toolkit.telemetry.debugSlowSql", false);
 // Whether to use the unified telemetry behavior, requires a restart.
 pref("toolkit.telemetry.unified", true);
-
-// Identity module
-pref("toolkit.identity.enabled", false);
-pref("toolkit.identity.debug", false);
-
 // AsyncShutdown delay before crashing in case of shutdown freeze
 pref("toolkit.asyncshutdown.crash_timeout", 60000);
 // Extra logging for AsyncShutdown barriers and phases
@@ -1216,12 +1215,16 @@ pref("privacy.popups.disable_from_plugins", 2);
 
 // send "do not track" HTTP header, disabled by default
 pref("privacy.donottrackheader.enabled",    false);
+// If true, close buton will be shown on permission prompts
+// and for all PopupNotifications, the secondary action of
+// the popup will be called when the popup is dismissed.
+pref("privacy.permissionPrompts.showCloseButton", false);
 // Enforce tracking protection in all modes
 pref("privacy.trackingprotection.enabled",  false);
 // Enforce tracking protection in Private Browsing mode
 pref("privacy.trackingprotection.pbmode.enabled",  true);
 // Annotate channels based on the tracking protection list in all modes
-pref("privacy.trackingprotection.annotate_channels",  false);
+pref("privacy.trackingprotection.annotate_channels",  true);
 // Lower the priority of network loads for resources on the tracking protection list.
 // Note that this requires the privacy.trackingprotection.annotate_channels pref to be on in order to have any effect.
 pref("privacy.trackingprotection.lower_network_priority",  false);
@@ -1296,12 +1299,7 @@ pref("javascript.options.mem.gc_max_empty_chunk_count", 30);
 
 pref("javascript.options.showInConsole", false);
 
-#ifdef RELEASE_OR_BETA
-// Disabled in Beta and Release for now, see bug 1225406
-pref("javascript.options.shared_memory", false);
-#else
 pref("javascript.options.shared_memory", true);
-#endif
 
 pref("javascript.options.throw_on_debuggee_would_run", false);
 pref("javascript.options.dump_stack_on_debuggee_would_run", false);
@@ -2821,6 +2819,20 @@ pref("plugin.sessionPermissionNow.intervalInMinutes", 60);
 // to allow it persistently.
 pref("plugin.persistentPermissionAlways.intervalInDays", 90);
 
+// This pref can take 3 possible string values:
+// "always"     - always use favor fallback mode
+// "follow-ctp" - activate if ctp is active for the given
+//                plugin object (could be due to a plugin-wide
+//                setting or a site-specific setting)
+// "never"      - never use favor fallback mode
+pref("plugins.favorfallback.mode", "never");
+
+// A comma-separated list of rules to follow when deciding
+// whether an object has been provided with good fallback content.
+// The valid values can be found at nsObjectLoadingContent::HasGoodFallback.
+pref("plugins.favorfallback.rules", "");
+
+
 // Set IPC timeouts for plugins and tabs, except in leak-checking and
 // dynamic analysis builds.  (NS_FREE_PERMANENT_DATA is C++ only, so
 // approximate its definition here.)
@@ -2881,13 +2893,20 @@ pref("dom.ipc.plugins.asyncdrawing.enabled", false);
 pref("dom.ipc.plugins.asyncdrawing.enabled", true);
 #endif
 
+#ifdef NIGHTLY_BUILD
+pref("dom.ipc.processCount", 2);
+#else
 pref("dom.ipc.processCount", 1);
+#endif
 
 // Disable support for SVG
 pref("svg.disabled", false);
 
 // Override default dom.ipc.processCount for some remote content process types.
-pref("dom.ipc.processCount.webLargeAllocation", 2);
+pref("dom.ipc.processCount.webLargeAllocation", 10);
+
+// Enable the Large-Allocation header
+pref("dom.largeAllocationHeader.enabled", true);
 
 // Pref to control whether we use separate content processes for top-level load
 // of file:// URIs.
@@ -4745,6 +4764,14 @@ pref("extensions.webextensions.keepUuidOnUninstall", false);
 pref("extensions.webextensions.identity.redirectDomain", "extensions.allizom.org");
 pref("extensions.webextensions.remote", false);
 
+// Report Site Issue button
+pref("extensions.webcompat-reporter.newIssueEndpoint", "https://webcompat.com/issues/new");
+#ifdef NIGHTLY_BUILD
+pref("extensions.webcompat-reporter.enabled", true);
+#else
+pref("extensions.webcompat-reporter.enabled", false);
+#endif
+
 pref("network.buffer.cache.count", 24);
 pref("network.buffer.cache.size",  32768);
 
@@ -4853,9 +4880,6 @@ pref("dom.push.requestTimeout", 10000);
 pref("dom.push.http2.reset_retry_count_after_ms", 60000);
 pref("dom.push.http2.maxRetries", 2);
 pref("dom.push.http2.retryInterval", 5000);
-
-// WebSettings
-pref("dom.mozSettings.enabled", false);
 
 // W3C touch events
 // 0 - disabled, 1 - enabled, 2 - autodetect
@@ -5184,6 +5208,8 @@ pref("browser.safebrowsing.id", "navclient-auto-ffox");
 pref("browser.safebrowsing.id", "Firefox");
 #endif
 
+pref("browser.safebrowsing.temporary.take_v4_completion_result", false);
+
 // Turn off Spatial navigation by default.
 pref("snav.enabled", false);
 
@@ -5295,30 +5321,13 @@ pref("intl.allow-insecure-text-input", false);
 // Enable meta-viewport support in remote APZ-enabled frames.
 pref("dom.meta-viewport.enabled", false);
 
-// MozSettings debugging prefs for each component
-pref("dom.mozSettings.SettingsDB.debug.enabled", false);
-pref("dom.mozSettings.SettingsManager.debug.enabled", false);
-pref("dom.mozSettings.SettingsRequestManager.debug.enabled", false);
-pref("dom.mozSettings.SettingsService.debug.enabled", false);
-
-// MozSettings verbose mode to track everything
-pref("dom.mozSettings.SettingsDB.verbose.enabled", false);
-pref("dom.mozSettings.SettingsManager.verbose.enabled", false);
-pref("dom.mozSettings.SettingsRequestManager.verbose.enabled", false);
-pref("dom.mozSettings.SettingsService.verbose.enabled", false);
-
-// Controlling whether we want to allow forcing some Settings
-// IndexedDB transactions to be opened as readonly or keep everything as
-// readwrite.
-pref("dom.mozSettings.allowForceReadOnly", false);
-
 // The interval at which to check for slow running addons
 #ifdef NIGHTLY_BUILD
 pref("browser.addon-watch.interval", 15000);
 #else
 pref("browser.addon-watch.interval", -1);
 #endif
-pref("browser.addon-watch.ignore", "[\"mochikit@mozilla.org\",\"special-powers@mozilla.org\",\"fxdevtools-adapters@mozilla.org\",\"fx-devtools\"]");
+pref("browser.addon-watch.ignore", "[\"mochikit@mozilla.org\",\"special-powers@mozilla.org\",\"fxdevtools-adapters@mozilla.org\",\"fx-devtools\",\"webcompat-reporter@mozilla.org\"]");
 
 // Search service settings
 pref("browser.search.log", false);
@@ -5479,13 +5488,8 @@ pref("webextensions.tests", false);
 // 16MB default non-parseable upload limit for requestBody.raw.bytes
 pref("webextensions.webRequest.requestBodyMaxRawBytes", 16777216);
 
-// This functionality is still experimental
-pref("webextensions.storage.sync.enabled", false);
-#ifdef RELEASE_OR_BETA
+pref("webextensions.storage.sync.enabled", true);
 pref("webextensions.storage.sync.serverURL", "https://webextensions.settings.services.mozilla.com/v1");
-#else
-pref("webextensions.storage.sync.serverURL", "https://webextensions.dev.mozaws.net/v1");
-#endif
 
 // Allow customization of the fallback directory for file uploads
 pref("dom.input.fallbackUploadDir", "");
@@ -5558,6 +5562,10 @@ pref ("security.mixed_content.hsts_priming_cache_timeout", 10080);
 // expects a time in milliseconds
 pref ("security.mixed_content.hsts_priming_request_timeout", 3000);
 
+// If true, data: URIs inherit the principal (security context) of the parent.
+// If false, data: URIs use a NullPrincipal as the security context.
+pref ("security.data_uri.inherit_security_context", true);
+
 // Disable Storage api in release builds.
 #ifdef NIGHTLY_BUILD
 pref("dom.storageManager.enabled", true);
@@ -5575,3 +5583,7 @@ pref("prompts.authentication_dialog_abuse_limit", 3);
 // To enable the DOM implementation, turn on "dom.storageManager.enabled"
 pref("browser.storageManager.enabled", false);
 pref("dom.IntersectionObserver.enabled", false);
+
+#ifdef FUZZING
+pref("fuzzing.enabled", false);
+#endif

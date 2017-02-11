@@ -8,7 +8,7 @@ const {utils: Cu} = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Timer.jsm"); /* globals setTimeout */
 Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource://gre/modules/Log.jsm");
+Cu.import("resource://shield-recipe-client/lib/LogManager.jsm");
 Cu.import("resource://shield-recipe-client/lib/NormandyDriver.jsm");
 Cu.import("resource://shield-recipe-client/lib/EnvExpressions.jsm");
 Cu.import("resource://shield-recipe-client/lib/NormandyApi.jsm");
@@ -17,7 +17,7 @@ Cu.importGlobalProperties(["fetch"]); /* globals fetch */
 
 this.EXPORTED_SYMBOLS = ["RecipeRunner"];
 
-const log = Log.repository.getLogger("extensions.shield-recipe-client");
+const log = LogManager.getLogger("recipe-runner");
 const prefs = Services.prefs.getBranch("extensions.shield-recipe-client.");
 
 this.RecipeRunner = {
@@ -72,7 +72,7 @@ this.RecipeRunner = {
     try {
       extraContext = yield this.getExtraContext();
     } catch (e) {
-      log.warning(`Couldn't get extra filter context: ${e}`);
+      log.warn(`Couldn't get extra filter context: ${e}`);
       extraContext = {};
     }
 
@@ -128,35 +128,61 @@ this.RecipeRunner = {
    * @promise Resolves when the action has executed
    */
   executeRecipe: Task.async(function* (recipe, extraContext) {
-    const sandboxManager = new SandboxManager();
-    const {sandbox} = sandboxManager;
-
     const action = yield NormandyApi.fetchAction(recipe.action);
     const response = yield fetch(action.implementation_url);
 
     const actionScript = yield response.text();
-    const prepScript = `
-      var pendingAction = null;
-
-      function registerAction(name, Action) {
-        let a = new Action(sandboxedDriver, sandboxedRecipe);
-        pendingAction = a.execute()
-          .catch(err => sandboxedDriver.log(err, 'error'));
-      };
-
-      window.registerAction = registerAction;
-      window.setTimeout = sandboxedDriver.setTimeout;
-      window.clearTimeout = sandboxedDriver.clearTimeout;
-    `;
-
-    const driver = new NormandyDriver(sandboxManager, extraContext);
-    sandbox.sandboxedDriver = Cu.cloneInto(driver, sandbox, {cloneFunctions: true});
-    sandbox.sandboxedRecipe = Cu.cloneInto(recipe, sandbox);
-
-    Cu.evalInSandbox(prepScript, sandbox);
-    Cu.evalInSandbox(actionScript, sandbox);
-
-    sandboxManager.addHold("recipeExecution");
-    sandbox.pendingAction.then(() => sandboxManager.removeHold("recipeExecution"));
+    yield this.executeAction(recipe, extraContext, actionScript);
   }),
+
+  /**
+   * Execute an action in a sandbox for a specific recipe.
+   * @param  {Object} recipe A recipe to execute
+   * @param  {Object} extraContext Extra data about the user, see NormandyDriver
+   * @param  {String} actionScript The JavaScript for the action to execute.
+   * @promise Resolves or rejects when the action has executed or failed.
+   */
+  executeAction(recipe, extraContext, actionScript) {
+    return new Promise((resolve, reject) => {
+      const sandboxManager = new SandboxManager();
+      const prepScript = `
+        function registerAction(name, Action) {
+          let a = new Action(sandboxedDriver, sandboxedRecipe);
+          a.execute()
+            .then(actionFinished)
+            .catch(actionFailed);
+        };
+
+        this.window = this;
+        this.registerAction = registerAction;
+        this.setTimeout = sandboxedDriver.setTimeout;
+        this.clearTimeout = sandboxedDriver.clearTimeout;
+      `;
+
+      const driver = new NormandyDriver(sandboxManager, extraContext);
+      sandboxManager.cloneIntoGlobal("sandboxedDriver", driver, {cloneFunctions: true});
+      sandboxManager.cloneIntoGlobal("sandboxedRecipe", recipe);
+
+      // Results are cloned so that they don't become inaccessible when
+      // the sandbox they came from is nuked when the hold is removed.
+      sandboxManager.addGlobal("actionFinished", result => {
+        const clonedResult = Cu.cloneInto(result, {});
+        sandboxManager.removeHold("recipeExecution");
+        resolve(clonedResult);
+      });
+      sandboxManager.addGlobal("actionFailed", err => {
+        Cu.reportError(err);
+
+        // Error objects can't be cloned, so we just copy the message
+        // (which doesn't need to be cloned) to be somewhat useful.
+        const message = err.message;
+        sandboxManager.removeHold("recipeExecution");
+        reject(new Error(message));
+      });
+
+      sandboxManager.addHold("recipeExecution");
+      sandboxManager.evalInSandbox(prepScript);
+      sandboxManager.evalInSandbox(actionScript);
+    });
+  },
 };

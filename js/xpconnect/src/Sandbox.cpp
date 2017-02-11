@@ -197,6 +197,7 @@ SandboxImport(JSContext* cx, unsigned argc, Value* vp)
             return false;
         }
     }
+    JS_MarkCrossZoneIdValue(cx, StringValue(funname));
 
     RootedId id(cx);
     if (!JS_StringToId(cx, funname, &id))
@@ -616,11 +617,10 @@ NS_IMPL_ADDREF(nsXPCComponents_utils_Sandbox)
 NS_IMPL_RELEASE(nsXPCComponents_utils_Sandbox)
 
 // We use the nsIXPScriptable macros to generate lots of stuff for us.
-#define XPC_MAP_CLASSNAME           nsXPCComponents_utils_Sandbox
-#define XPC_MAP_QUOTED_CLASSNAME   "nsXPCComponents_utils_Sandbox"
-#define                             XPC_MAP_WANT_CALL
-#define                             XPC_MAP_WANT_CONSTRUCT
-#define XPC_MAP_FLAGS               0
+#define XPC_MAP_CLASSNAME         nsXPCComponents_utils_Sandbox
+#define XPC_MAP_QUOTED_CLASSNAME "nsXPCComponents_utils_Sandbox"
+#define XPC_MAP_FLAGS (XPC_SCRIPTABLE_WANT_CALL | \
+                       XPC_SCRIPTABLE_WANT_CONSTRUCT)
 #include "xpc_map_end.h" /* This #undef's the above. */
 
 const xpc::SandboxProxyHandler xpc::sandboxProxyHandler;

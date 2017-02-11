@@ -22,17 +22,13 @@ add_task(function* () {
   });
   yield wait;
 
-  wait = waitForDOM(document, "#security-tabpanel");
+  wait = waitForDOM(document, "#security-panel");
   EventUtils.sendMouseEvent({ type: "mousedown" },
-    document.getElementById("details-pane-toggle"));
-  EventUtils.sendMouseEvent({ type: "mousedown" },
-    document.querySelectorAll("#details-pane tab")[5]);
+    document.querySelector("#details-pane-toggle"));
+  document.querySelector("#security-tab").click();
   yield wait;
 
-  is(document.querySelector("#security-error"), null, "Error box is hidden.");
-  ok(document.querySelector("#security-information"), "Information box visible.");
-
-  let tabpanel = document.querySelector("#security-tabpanel");
+  let tabpanel = document.querySelector("#security-panel");
   let textboxes = tabpanel.querySelectorAll(".textbox-input");
 
   // Connection

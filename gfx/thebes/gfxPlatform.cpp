@@ -94,6 +94,7 @@
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "TexturePoolOGL.h"
+#include "mozilla/layers/UiCompositorControllerChild.h"
 #endif
 
 #ifdef USE_SKIA
@@ -500,7 +501,6 @@ gfxPlatform::gfxPlatform()
   , mTilesInfoCollector(this, &gfxPlatform::GetTilesSupportInfo)
   , mCompositorBackend(layers::LayersBackend::LAYERS_NONE)
   , mScreenDepth(0)
-  , mDeviceCounter(0)
 {
     mAllowDownloadableFonts = UNINITIALIZED_VALUE;
     mFallbackUsesCmaps = UNINITIALIZED_VALUE;
@@ -962,7 +962,9 @@ gfxPlatform::ShutdownLayersIPC()
         gfx::VRManagerChild::ShutDown();
         layers::CompositorBridgeChild::ShutDown();
         layers::ImageBridgeChild::ShutDown();
-
+#if defined(MOZ_WIDGET_ANDROID)
+        layers::UiCompositorControllerChild::Shutdown();
+#endif // defined(MOZ_WIDGET_ANDROID)
         // This has to happen after shutting down the child protocols.
         layers::CompositorThreadHolder::Shutdown();
     } else {
@@ -2218,25 +2220,25 @@ gfxPlatform::InitGPUProcessPrefs()
 
   FeatureState& gpuProc = gfxConfig::GetFeature(Feature::GPU_PROCESS);
 
-  gpuProc.SetDefaultFromPref(
-    gfxPrefs::GetGPUProcessEnabledPrefName(),
-    true,
-    gfxPrefs::GetGPUProcessEnabledPrefDefault());
+  // We require E10S - otherwise, there is very little benefit to the GPU
+  // process, since the UI process must still use acceleration for
+  // performance.
+  if (!BrowserTabsRemoteAutostart()) {
+    gpuProc.DisableByDefault(
+      FeatureStatus::Unavailable,
+      "Multi-process mode is not enabled",
+      NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_E10S"));
+  } else {
+    gpuProc.SetDefaultFromPref(
+      gfxPrefs::GetGPUProcessEnabledPrefName(),
+      true,
+      gfxPrefs::GetGPUProcessEnabledPrefDefault());
+  }
 
   if (gfxPrefs::GPUProcessForceEnabled()) {
     gpuProc.UserForceEnable("User force-enabled via pref");
   }
 
-  // We require E10S - otherwise, there is very little benefit to the GPU
-  // process, since the UI process must still use acceleration for
-  // performance.
-  if (!BrowserTabsRemoteAutostart()) {
-    gpuProc.ForceDisable(
-      FeatureStatus::Unavailable,
-      "Multi-process mode is not enabled",
-      NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_E10S"));
-    return;
-  }
   if (InSafeMode()) {
     gpuProc.ForceDisable(
       FeatureStatus::Blocked,
@@ -2412,6 +2414,27 @@ gfxPlatform::GetDefaultFrameRate()
 }
 
 void
+gfxPlatform::GetAzureBackendInfo(mozilla::widget::InfoObject& aObj)
+{
+  if (gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
+    aObj.DefineProperty("AzureCanvasBackend (UI Process)", GetBackendName(mPreferredCanvasBackend));
+    aObj.DefineProperty("AzureFallbackCanvasBackend (UI Process)", GetBackendName(mFallbackCanvasBackend));
+    aObj.DefineProperty("AzureContentBackend (UI Process)", GetBackendName(mContentBackend));
+
+    if (gfxConfig::IsEnabled(gfx::Feature::DIRECT2D)) {
+      aObj.DefineProperty("AzureCanvasBackend", "Direct2D 1.1");
+      aObj.DefineProperty("AzureContentBackend", "Direct2D 1.1");
+    }
+  } else {
+    aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
+    aObj.DefineProperty("AzureFallbackCanvasBackend", GetBackendName(mFallbackCanvasBackend));
+    aObj.DefineProperty("AzureContentBackend", GetBackendName(mContentBackend));
+  }
+
+  aObj.DefineProperty("AzureCanvasAccelerated", AllowOpenGLCanvas());
+}
+
+void
 gfxPlatform::GetApzSupportInfo(mozilla::widget::InfoObject& aObj)
 {
   if (!gfxPlatform::AsyncPanZoomEnabled()) {
@@ -2566,12 +2589,6 @@ bool
 gfxPlatform::SupportsApzDragInput() const
 {
   return gfxPrefs::APZDragEnabled();
-}
-
-void
-gfxPlatform::BumpDeviceCounter()
-{
-  mDeviceCounter++;
 }
 
 void

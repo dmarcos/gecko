@@ -9,7 +9,6 @@
 #include "mozilla/FlushType.h"           // for enum
 #include "nsAutoPtr.h"                   // for member
 #include "nsCOMArray.h"                  // for member
-#include "nsCRT.h"                       // for NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
 #include "nsCompatibility.h"             // for member
 #include "nsCOMPtr.h"                    // for member
 #include "nsGkAtoms.h"                   // for static class members
@@ -102,6 +101,7 @@ class nsIGlobalObject;
 struct nsCSSSelectorList;
 
 namespace mozilla {
+class AbstractThread;
 class CSSStyleSheet;
 class ErrorResult;
 class EventStates;
@@ -216,7 +216,6 @@ public:
   typedef mozilla::dom::FullscreenRequest FullscreenRequest;
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_IDOCUMENT_IID)
-  NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
 
 #ifdef MOZILLA_INTERNAL_API
   nsIDocument();
@@ -1210,10 +1209,10 @@ public:
   }
 
   mozilla::StyleBackendType GetStyleBackendType() const {
-    if (mStyleBackendType == mozilla::StyleBackendType(0)) {
+    if (mStyleBackendType == mozilla::StyleBackendType::None) {
       const_cast<nsIDocument*>(this)->UpdateStyleBackendType();
     }
-    MOZ_ASSERT(mStyleBackendType != mozilla::StyleBackendType(0));
+    MOZ_ASSERT(mStyleBackendType != mozilla::StyleBackendType::None);
     return mStyleBackendType;
   }
 
@@ -2817,7 +2816,7 @@ public:
     }
   }
 
-  gfxUserFontSet* GetUserFontSet();
+  gfxUserFontSet* GetUserFontSet(bool aFlushUserFontSet = true);
   void FlushUserFontSet();
   void RebuildUserFontSet(); // asynchronously
   mozilla::dom::FontFaceSet* GetFonts() { return mFontFaceSet; }
@@ -2877,11 +2876,14 @@ public:
 
   // Dispatch a runnable related to the document.
   virtual nsresult Dispatch(const char* aName,
-                            mozilla::dom::TaskCategory aCategory,
+                            mozilla::TaskCategory aCategory,
                             already_AddRefed<nsIRunnable>&& aRunnable) override;
 
   virtual nsIEventTarget*
-  EventTargetFor(mozilla::dom::TaskCategory aCategory) const override;
+  EventTargetFor(mozilla::TaskCategory aCategory) const override;
+
+  virtual mozilla::AbstractThread*
+  AbstractMainThreadFor(mozilla::TaskCategory aCategory) override;
 
   // The URLs passed to these functions should match what
   // JS::DescribeScriptedCaller() returns, since these APIs are used to

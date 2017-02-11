@@ -10,6 +10,7 @@
 #include "jshashutil.h"
 #include "jsobj.h"
 
+#include "builtin/DataViewObject.h"
 #include "gc/Marking.h"
 #include "gc/Policy.h"
 #include "gc/StoreBuffer.h"
@@ -282,8 +283,11 @@ JSObject::splicePrototype(JSContext* cx, HandleObject obj, const Class* clasp,
     // Windows may not appear on prototype chains.
     MOZ_ASSERT_IF(proto.isObject(), !IsWindow(proto.toObject()));
 
-    if (proto.isObject() && !proto.toObject()->setDelegate(cx))
-        return false;
+    if (proto.isObject()) {
+        RootedObject protoObj(cx, proto.toObject());
+        if (!JSObject::setDelegate(cx, protoObj))
+            return false;
+    }
 
     // Force type instantiation when splicing lazy group.
     RootedObjectGroup group(cx, JSObject::getGroup(cx, obj));
@@ -350,7 +354,7 @@ JSObject::makeLazyGroup(JSContext* cx, HandleObject obj)
 JSObject::setNewGroupUnknown(JSContext* cx, const js::Class* clasp, JS::HandleObject obj)
 {
     ObjectGroup::setDefaultNewGroupUnknown(cx, clasp, obj);
-    return obj->setFlags(cx, BaseShape::NEW_GROUP_UNKNOWN);
+    return JSObject::setFlags(cx, obj, BaseShape::NEW_GROUP_UNKNOWN);
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -518,7 +522,7 @@ ObjectGroup::defaultNewGroup(ExclusiveContext* cx, const Class* clasp,
 
     if (proto.isObject() && !proto.toObject()->isDelegate()) {
         RootedObject protoObj(cx, proto.toObject());
-        if (!protoObj->setDelegate(cx))
+        if (!JSObject::setDelegate(cx, protoObj))
             return nullptr;
 
         // Objects which are prototypes of one another should be singletons, so

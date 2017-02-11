@@ -586,7 +586,6 @@ add_task(function* test_signCertificate() {
 });
 
 add_task(function* test_accountExists() {
-  let sessionMessage = JSON.stringify({sessionToken: FAKE_SESSION_TOKEN});
   let existsMessage = JSON.stringify({error: "wrong password", code: 400, errno: 103});
   let doesntExistMessage = JSON.stringify({error: "no such account", code: 400, errno: 102});
   let emptyMessage = "{}";
@@ -619,7 +618,6 @@ add_task(function* test_accountExists() {
 
         default:
           throw new Error("Unexpected login from " + jsonBody.email);
-          break;
       }
     },
   });
@@ -744,6 +742,7 @@ add_task(function* test_updateDevice() {
 add_task(function* test_signOutAndDestroyDevice() {
   const DEVICE_ID = "device id";
   const ERROR_ID = "test that the client promise rejects";
+  let emptyMessage = "{}";
 
   const server = httpd_setup({
     "/account/device/destroy": function(request, response) {
@@ -837,7 +836,7 @@ add_task(function* test_client_metrics() {
 
   let client = new FxAccountsClient(server.baseURI);
 
-  yield rejects(client.signOut(FAKE_SESSION_TOKEN, {
+  yield Assert.rejects(client.signOut(FAKE_SESSION_TOKEN, {
     service: "sync",
   }), function(err) {
     return err.errno == 111;

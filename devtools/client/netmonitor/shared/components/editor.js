@@ -2,12 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* eslint-disable react/prop-types */
+
 "use strict";
 
 const { createClass, DOM, PropTypes } = require("devtools/client/shared/vendor/react");
 const SourceEditor = require("devtools/client/sourceeditor/editor");
 
 const { div } = DOM;
+const SYNTAX_HIGHLIGHT_MAX_SIZE = 102400;
 
 /**
  * CodeMirror editor as a React component
@@ -37,7 +40,7 @@ const Editor = createClass({
 
     this.editor = new SourceEditor({
       lineNumbers: true,
-      mode,
+      mode: text.length < SYNTAX_HIGHLIGHT_MAX_SIZE ? mode : null,
       readOnly: true,
       value: text,
     });
@@ -52,7 +55,7 @@ const Editor = createClass({
       return;
     }
 
-    if (prevProps.mode !== mode) {
+    if (prevProps.mode !== mode && text.length < SYNTAX_HIGHLIGHT_MAX_SIZE) {
       this.deferEditor.then(() => {
         this.editor.setMode(mode);
       });
@@ -96,3 +99,5 @@ const Editor = createClass({
 });
 
 module.exports = Editor;
+
+/* eslint-enable react/prop-types */

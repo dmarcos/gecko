@@ -9,7 +9,7 @@ from collections import OrderedDict
 import ipdl.ast
 import ipdl.builtin
 from ipdl.cxx.ast import *
-from ipdl.type import Actor, ActorType, ProcessGraph, TypeVisitor, builtinHeaderIncludes
+from ipdl.type import ActorType, ProcessGraph, TypeVisitor, builtinHeaderIncludes
 
 ##-----------------------------------------------------------------------------
 ## "Public" interface to lowering
@@ -305,7 +305,7 @@ function would return true for |Actor[]|."""
 
 def _abortIfFalse(cond, msg):
     return StmtExpr(ExprCall(
-        ExprVar('MOZ_DIAGNOSTIC_ASSERT'),
+        ExprVar('MOZ_RELEASE_ASSERT'),
         [ cond, ExprLiteral.String(msg) ]))
 
 def _refptr(T):
@@ -419,10 +419,6 @@ def _killProcess(pid):
                ExprVar('base::PROCESS_END_KILLED_BY_USER'),
                ExprLiteral.FALSE ])
 
-def _badTransition():
-    # FIXME: make this a FatalError()
-    return [ _printWarningMessage('bad state transition!') ]
-
 # Results that IPDL-generated code returns back to *Channel code.
 # Users never see these
 class _Result:
@@ -502,9 +498,6 @@ class _ConvertToCxxType(TypeVisitor):
             return thing.fullname()
         return thing.name()
 
-    def visitBuiltinCxxType(self, t):
-        return Type(self.typename(t))
-
     def visitImportedCxxType(self, t):
         return Type(self.typename(t))
 
@@ -581,10 +574,10 @@ def _cxxConstPtrToType(ipdltype, side):
     return t
 
 def _allocMethod(ptype, side):
-    return ExprVar('Alloc'+ str(Actor(ptype, side)))
+    return ExprVar('Alloc' + ptype.name() + side.title())
 
 def _deallocMethod(ptype, side):
-    return ExprVar('Dealloc'+ str(Actor(ptype, side)))
+    return ExprVar('Dealloc' + ptype.name() + side.title())
 
 ##
 ## A _HybridDecl straddles IPDL and C++ decls.  It knows which C++
@@ -1778,11 +1771,6 @@ stmt.  Some types generate both kinds.'''
     def maybeTypedef(self, fqname, name):
         if fqname != name or self.unqualifiedTypedefs:
             self.usingTypedefs.append(Typedef(Type(fqname), name))
-
-    def visitBuiltinCxxType(self, t):
-        if t in self.visited: return
-        self.visited.add(t)
-        self.maybeTypedef(t.fullname(), t.name())
 
     def visitImportedCxxType(self, t):
         if t in self.visited: return

@@ -94,8 +94,11 @@ def target_tasks_ash(full_task_graph, parameters):
         if platform == 'linux64-asan' and task.attributes['build_type'] == 'debug':
             return False
         # no non-e10s tests
-        if task.attributes.get('unittest_suite') or task.attributes.get('talos_suite'):
+        if task.attributes.get('unittest_suite'):
             if not task.attributes.get('e10s'):
+                return False
+            # don't run talos on ash
+            if task.attributes.get('unittest_suite') == 'talos':
                 return False
         # don't upload symbols
         if task.attributes['kind'] == 'upload-symbols':
@@ -156,4 +159,16 @@ def target_tasks_nightly_linux(full_task_graph, parameters):
         platform = task.attributes.get('build_platform')
         if platform in ('linux64-nightly', 'linux-nightly'):
             return task.attributes.get('nightly', False)
+    return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]
+
+
+@_target_task('stylo_tasks')
+def target_tasks_stylo(full_task_graph, parameters):
+    """Target stylotasks that only run on the m-c branch."""
+    def filter(task):
+        platform = task.attributes.get('build_platform')
+        # only select platforms
+        if platform not in ('linux64-stylo'):
+            return False
+        return True
     return [l for l, t in full_task_graph.tasks.iteritems() if filter(t)]

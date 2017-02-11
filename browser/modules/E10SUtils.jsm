@@ -34,6 +34,7 @@ const NOT_REMOTE = null;
 // These must match any similar ones in ContentParent.h.
 const WEB_REMOTE_TYPE = "web";
 const FILE_REMOTE_TYPE = "file";
+const EXTENSION_REMOTE_TYPE = "extension";
 const DEFAULT_REMOTE_TYPE = WEB_REMOTE_TYPE;
 
 function validatedWebRemoteType(aPreferredRemoteType) {
@@ -46,6 +47,7 @@ this.E10SUtils = {
   NOT_REMOTE,
   WEB_REMOTE_TYPE,
   FILE_REMOTE_TYPE,
+  EXTENSION_REMOTE_TYPE,
 
   canLoadURIInProcess(aURL, aProcess) {
     let remoteType = aProcess == Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT
@@ -69,9 +71,11 @@ this.E10SUtils = {
       return aPreferredRemoteType;
     }
 
-    // We need data: URIs to load in any remote process, because some of our
-    // tests rely on this.
-    if (aURL.startsWith("data:")) {
+    // We need data: URI's to load in a remote process, because some of our
+    // tests rely on this. For blob: URI's, load them in their originating
+    // process unless it is non-remote. In that case, favor a remote (sandboxed)
+    // process with fewer privileges to limit exposure.
+    if (aURL.startsWith("data:") || aURL.startsWith("blob:")) {
       return aPreferredRemoteType == NOT_REMOTE ? DEFAULT_REMOTE_TYPE
                                                 : aPreferredRemoteType;
     }
@@ -100,9 +104,10 @@ this.E10SUtils = {
         return DEFAULT_REMOTE_TYPE;
       }
 
-      if (flags & Ci.nsIAboutModule.URI_CAN_LOAD_IN_CHILD &&
-          aPreferredRemoteType != NOT_REMOTE) {
-        return DEFAULT_REMOTE_TYPE;
+      // If the about page can load in parent or child, it should be safe to
+      // load in any remote type.
+      if (flags & Ci.nsIAboutModule.URI_CAN_LOAD_IN_CHILD) {
+        return aPreferredRemoteType;
       }
 
       return NOT_REMOTE;
@@ -133,7 +138,7 @@ this.E10SUtils = {
     }
 
     if (aURL.startsWith("moz-extension:")) {
-      return useRemoteWebExtensions ? WEB_REMOTE_TYPE : NOT_REMOTE;
+      return useRemoteWebExtensions ? EXTENSION_REMOTE_TYPE : NOT_REMOTE;
     }
 
     if (aURL.startsWith("view-source:")) {
@@ -154,10 +159,12 @@ this.E10SUtils = {
     if (aDocShell.QueryInterface(Ci.nsIDocShellTreeItem).sameTypeParent)
       return true;
 
-    // If we are in a fresh process, and it wouldn't be content visible to
-    // change processes, we want to load into a new process so that we can throw
+    // If we are in a Large-Allocation process, and it wouldn't be content visible
+    // to change processes, we want to load into a new process so that we can throw
     // this one out.
-    if (aDocShell.inFreshProcess && aDocShell.isOnlyToplevelInTabGroup) {
+    if (aDocShell.inLargeAllocProcess &&
+        !aDocShell.awaitingLargeAlloc &&
+        aDocShell.isOnlyToplevelInTabGroup) {
       return false;
     }
 
@@ -165,7 +172,7 @@ this.E10SUtils = {
     return this.shouldLoadURIInThisProcess(aURI);
   },
 
-  redirectLoad(aDocShell, aURI, aReferrer, aTriggeringPrincipal, aFreshProcess) {
+  redirectLoad(aDocShell, aURI, aReferrer, aTriggeringPrincipal, aFreshProcess, aFlags) {
     // Retarget the load to the correct process
     let messageManager = aDocShell.QueryInterface(Ci.nsIInterfaceRequestor)
                                   .getInterface(Ci.nsIContentFrameMessageManager);
@@ -174,7 +181,7 @@ this.E10SUtils = {
     messageManager.sendAsyncMessage("Browser:LoadURI", {
       loadOptions: {
         uri: aURI.spec,
-        flags: Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
+        flags: aFlags || Ci.nsIWebNavigation.LOAD_FLAGS_NONE,
         referrer: aReferrer ? aReferrer.spec : null,
         triggeringPrincipal: aTriggeringPrincipal
                              ? Utils.serializePrincipal(aTriggeringPrincipal)

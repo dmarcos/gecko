@@ -1114,10 +1114,9 @@
             var forwardButtonContainer = document.getElementById("urlbar-wrapper");
             if (forwardButtonContainer) {
               forwardButtonContainer.setAttribute("switchingtabs", "true");
-              window.addEventListener("MozAfterPaint", function removeSwitchingtabsAttr() {
-                window.removeEventListener("MozAfterPaint", removeSwitchingtabsAttr);
+              window.addEventListener("MozAfterPaint", function() {
                 forwardButtonContainer.removeAttribute("switchingtabs");
-              });
+              }, {once: true});
             }
 
             this._appendStatusPanel();
@@ -1505,6 +1504,7 @@
         <parameter name="aIsPrerendered"/>
         <body>
           <![CDATA[
+            var aTriggeringPrincipal;
             var aReferrerPolicy;
             var aFromExternal;
             var aRelatedToCurrent;
@@ -1521,6 +1521,7 @@
                 typeof arguments[1] == "object" &&
                 !(arguments[1] instanceof Ci.nsIURI)) {
               let params = arguments[1];
+              aTriggeringPrincipal  = params.triggeringPrincipal
               aReferrerURI          = params.referrerURI;
               aReferrerPolicy       = params.referrerPolicy;
               aCharset              = params.charset;
@@ -1544,7 +1545,9 @@
             var bgLoad = (aLoadInBackground != null) ? aLoadInBackground :
                          Services.prefs.getBoolPref("browser.tabs.loadInBackground");
             var owner = bgLoad ? null : this.selectedTab;
+
             var tab = this.addTab(aURI, {
+                                  triggeringPrincipal: aTriggeringPrincipal,
                                   referrerURI: aReferrerURI,
                                   referrerPolicy: aReferrerPolicy,
                                   charset: aCharset,
@@ -1703,8 +1706,9 @@
             }
 
             // Abort if we're not going to change anything
+            let currentRemoteType = aBrowser.getAttribute("remoteType");
             if (isRemote == aShouldBeRemote && !aOptions.newFrameloader && !aOptions.freshProcess &&
-                (!isRemote || aBrowser.getAttribute("remoteType") == aOptions.remoteType) &&
+                (!isRemote || currentRemoteType == aOptions.remoteType) &&
                 !aBrowser.frameLoader.isFreshProcess) {
               return false;
             }
@@ -1751,8 +1755,12 @@
             }
 
             // NB: This works with the hack in the browser constructor that
-            // turns this normal property into a field.
-            aBrowser.relatedBrowser = relatedBrowser;
+            // turns this normal property into a field. When switching remote
+            // type copying related browser would stop the switch and the
+            // previously related browser will no longer be relevant.
+            if (!aShouldBeRemote || currentRemoteType == aOptions.remoteType) {
+              aBrowser.relatedBrowser = relatedBrowser;
+            }
 
             if (aOptions.opener) {
               // Set the opener window on the browser, such that when the frame
@@ -2141,6 +2149,7 @@
             "use strict";
 
             const NS_XUL = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+            var aTriggeringPrincipal;
             var aReferrerPolicy;
             var aFromExternal;
             var aRelatedToCurrent;
@@ -2159,6 +2168,7 @@
                 typeof arguments[1] == "object" &&
                 !(arguments[1] instanceof Ci.nsIURI)) {
               let params = arguments[1];
+              aTriggeringPrincipal      = params.triggeringPrincipal;
               aReferrerURI              = params.referrerURI;
               aReferrerPolicy           = params.referrerPolicy;
               aCharset                  = params.charset;
@@ -2306,6 +2316,7 @@
               try {
                 b.loadURIWithFlags(aURI, {
                   flags,
+                  triggeringPrincipal: aTriggeringPrincipal,
                   referrerURI: aNoReferrer ? null : aReferrerURI,
                   referrerPolicy: aReferrerPolicy,
                   charset: aCharset,
@@ -2759,7 +2770,7 @@
             // This will unload the document. An unload handler could remove
             // dependant tabs, so it's important that the tabbrowser is now in
             // a consistent state (tab removed, tab positions updated, etc.).
-            browser.parentNode.removeChild(browser);
+            browser.remove();
 
             // Release the browser in case something is erroneously holding a
             // reference to the tab after its removal.
@@ -2830,7 +2841,7 @@
             // Do not allow transfering a private tab to a non-private window
             // and vice versa.
             if (PrivateBrowsingUtils.isWindowPrivate(window) !=
-                PrivateBrowsingUtils.isWindowPrivate(aOtherTab.ownerDocument.defaultView))
+                PrivateBrowsingUtils.isWindowPrivate(aOtherTab.ownerGlobal))
               return;
 
             let ourBrowser = this.getBrowserForTab(aOurTab);
@@ -2846,7 +2857,7 @@
             }
 
             // That's gBrowser for the other window, not the tab's browser!
-            var remoteBrowser = aOtherTab.ownerDocument.defaultView.gBrowser;
+            var remoteBrowser = aOtherTab.ownerGlobal.gBrowser;
             var isPending = aOtherTab.hasAttribute("pending");
 
             let otherTabListener = remoteBrowser._tabListeners.get(aOtherTab);
@@ -2999,7 +3010,7 @@
 
             // Unmap old outerWindowIDs.
             this._outerWindowIDBrowserMap.delete(ourBrowser.outerWindowID);
-            let remoteBrowser = aOtherBrowser.ownerDocument.defaultView.gBrowser;
+            let remoteBrowser = aOtherBrowser.ownerGlobal.gBrowser;
             if (remoteBrowser) {
               remoteBrowser._outerWindowIDBrowserMap.delete(aOtherBrowser.outerWindowID);
             }
@@ -3091,7 +3102,11 @@
         <parameter name="aTab"/>
         <body>
           <![CDATA[
-            this.getBrowserForTab(aTab).reload();
+            let browser = this.getBrowserForTab(aTab);
+            // Reset temporary permissions on the current tab. This is done here
+            // because we only want to reset permissions on user reload.
+            SitePermissions.clearTemporaryPermissions(browser);
+            browser.reload();
           ]]>
         </body>
       </method>
@@ -3498,7 +3513,7 @@
         <parameter name="aEvent"/>
         <body>
           <![CDATA[
-            var direction = window.getComputedStyle(this.parentNode, null).direction;
+            var direction = window.getComputedStyle(this.parentNode).direction;
             if ((direction == "ltr" && aEvent.keyCode == KeyEvent.DOM_VK_RIGHT) ||
                 (direction == "rtl" && aEvent.keyCode == KeyEvent.DOM_VK_LEFT))
               this.moveTabForward();
@@ -4110,7 +4125,7 @@
               // our window. We save the state of otherBrowser since ourBrowser
               // needs to take on that state at the end of the swap.
 
-              let otherTabbrowser = otherBrowser.ownerDocument.defaultView.gBrowser;
+              let otherTabbrowser = otherBrowser.ownerGlobal.gBrowser;
               let otherState;
               if (otherTabbrowser && otherTabbrowser._switcher) {
                 let otherTab = otherTabbrowser.getTabForBrowser(otherBrowser);
@@ -4605,7 +4620,7 @@
               case "}".charCodeAt(0):
                 offset = -1;
               case "{".charCodeAt(0):
-                if (window.getComputedStyle(this, null).direction == "ltr")
+                if (window.getComputedStyle(this).direction == "ltr")
                   offset *= -1;
                 this.tabContainer.advanceSelectedTab(offset, true);
                 aEvent.preventDefault();
@@ -4658,8 +4673,15 @@
               label = this.mStringBundle.getString(stringID);
             }
           } else {
-            label = tab.getAttribute("label") +
-                      (this.AppConstants.E10S_TESTING_ONLY && tab.linkedBrowser && tab.linkedBrowser.isRemoteBrowser ? " - e10s" : "");
+            label = tab.getAttribute("label");
+            if (this.AppConstants.E10S_TESTING_ONLY &&
+                tab.linkedBrowser &&
+                tab.linkedBrowser.isRemoteBrowser) {
+              label += " - e10s";
+              if (Services.prefs.getIntPref("dom.ipc.processCount") > 1) {
+                label += " (" + tab.linkedBrowser.frameLoader.tabParent.osPid + ")";
+              }
+            }
             if (tab.userContextId) {
               label = this.mStringBundle.getFormattedString("tabs.containers.tooltip", [label, ContextualIdentityService.getUserContextLabel(tab.userContextId)]);
             }
@@ -5386,7 +5408,7 @@
         <body><![CDATA[
           if (this._tabMarginLeft === null || this._tabMarginRight === null) {
             let tabMiddle = document.getAnonymousElementByAttribute(aTab, "class", "tab-background-middle");
-            let tabMiddleStyle = window.getComputedStyle(tabMiddle, null);
+            let tabMiddleStyle = window.getComputedStyle(tabMiddle);
             this._tabMarginLeft = parseFloat(tabMiddleStyle.marginLeft);
             this._tabMarginRight = parseFloat(tabMiddleStyle.marginRight);
           }
@@ -6128,7 +6150,7 @@
         <body><![CDATA[
           var tabs = this.childNodes;
           var tab = this._getDragTargetTab(event, isLink);
-          if (window.getComputedStyle(this, null).direction == "ltr") {
+          if (window.getComputedStyle(this).direction == "ltr") {
             for (let i = tab ? tab._tPos : 0; i < tabs.length; i++)
               if (event.screenX < tabs[i].boxObject.screenX + tabs[i].boxObject.width / 2)
                 return i;
@@ -6152,17 +6174,17 @@
               let sourceNode = dt.mozGetDataAt(TAB_DROP_TYPE, 0);
               if (sourceNode instanceof XULElement &&
                   sourceNode.localName == "tab" &&
-                  sourceNode.ownerDocument.defaultView instanceof ChromeWindow &&
+                  sourceNode.ownerGlobal instanceof ChromeWindow &&
                   sourceNode.ownerDocument.documentElement.getAttribute("windowtype") == "navigator:browser" &&
-                  sourceNode.ownerDocument.defaultView.gBrowser.tabContainer == sourceNode.parentNode) {
+                  sourceNode.ownerGlobal.gBrowser.tabContainer == sourceNode.parentNode) {
                 // Do not allow transfering a private tab to a non-private window
                 // and vice versa.
                 if (PrivateBrowsingUtils.isWindowPrivate(window) !=
-                    PrivateBrowsingUtils.isWindowPrivate(sourceNode.ownerDocument.defaultView))
+                    PrivateBrowsingUtils.isWindowPrivate(sourceNode.ownerGlobal))
                   return "none";
 
                 if (window.gMultiProcessBrowser !=
-                    sourceNode.ownerDocument.defaultView.gMultiProcessBrowser)
+                    sourceNode.ownerGlobal.gMultiProcessBrowser)
                   return "none";
 
                 return dt.dropEffect == "copy" ? "copy" : "move";
@@ -6405,7 +6427,7 @@
           // nothing.
           if (this.tabbrowser._removingTabs.length) {
             let visibleTabs = this.tabbrowser.visibleTabs;
-            let ltr = (window.getComputedStyle(this, null).direction == "ltr");
+            let ltr = (window.getComputedStyle(this).direction == "ltr");
             let lastTab = visibleTabs[visibleTabs.length - 1];
             let endOfTab = lastTab.getBoundingClientRect()[ltr ? "right" : "left"];
             if ((ltr && event.clientX > endOfTab) ||
@@ -6572,7 +6594,7 @@
         event.stopPropagation();
 
         var tabStrip = this.mTabstrip;
-        var ltr = (window.getComputedStyle(this, null).direction == "ltr");
+        var ltr = (window.getComputedStyle(this).direction == "ltr");
 
         // autoscroll the tab strip if we drag over the scroll
         // buttons, even if we aren't dragging a tab, but then
@@ -6992,6 +7014,12 @@
         </getter>
       </property>
 
+      <property name="soundBlocked" readonly="true">
+        <getter>
+          return this.getAttribute("blocked") == "true";
+        </getter>
+      </property>
+
       <property name="lastAccessed">
         <getter>
           return this._lastAccessed == Infinity ? Date.now() : this._lastAccessed;
@@ -7038,6 +7066,10 @@
           let tabContainer = this.parentNode;
           let visibleTabs = tabContainer.tabbrowser.visibleTabs;
           let tabIndex = visibleTabs.indexOf(this);
+
+          if (this.selected)
+            tabContainer._handleTabSelect();
+
           if (tabIndex == 0) {
             tabContainer._beforeHoveredTab = null;
           } else {

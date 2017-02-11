@@ -11,6 +11,7 @@
 #include "nsAttrValueInlines.h"
 #include "nsCSSProps.h"
 #include "nsCSSParser.h"
+#include "nsCSSPseudoElements.h"
 #include "nsCSSRuleProcessor.h"
 #include "nsContentUtils.h"
 #include "nsDOMTokenList.h"
@@ -29,7 +30,10 @@
 #include "nsStyleUtil.h"
 #include "nsTArray.h"
 
+#include "mozilla/EffectCompositor.h"
 #include "mozilla/EventStates.h"
+#include "mozilla/Keyframe.h"
+#include "mozilla/ServoAnimationRule.h"
 #include "mozilla/ServoElementSnapshot.h"
 #include "mozilla/ServoRestyleManager.h"
 #include "mozilla/StyleAnimationValue.h"
@@ -322,6 +326,44 @@ Gecko_GetServoDeclarationBlock(RawGeckoElementBorrowed aElement)
   }
   return reinterpret_cast<const RawServoDeclarationBlockStrong*>
     (decl->AsServo()->RefRaw());
+}
+
+RawServoDeclarationBlockStrong
+Gecko_GetAnimationRule(RawGeckoElementBorrowed aElement,
+                       nsIAtom* aPseudoTag,
+                       EffectCompositor::CascadeLevel aCascadeLevel)
+{
+  MOZ_ASSERT(aElement, "Invalid GeckoElement");
+
+  const RawServoDeclarationBlockStrong emptyDeclarationBlock{ nullptr };
+  nsIDocument* doc = aElement->GetComposedDoc();
+  if (!doc || !doc->GetShell()) {
+    return emptyDeclarationBlock;
+  }
+  nsPresContext* presContext = doc->GetShell()->GetPresContext();
+  if (!presContext) {
+    return emptyDeclarationBlock;
+  }
+
+  CSSPseudoElementType pseudoType =
+    aPseudoTag
+    ? nsCSSPseudoElements::GetPseudoType(
+        aPseudoTag,
+        nsCSSProps::EnabledState::eIgnoreEnabledState)
+    : CSSPseudoElementType::NotPseudo;
+  if (pseudoType != CSSPseudoElementType::NotPseudo &&
+      pseudoType != CSSPseudoElementType::before &&
+      pseudoType != CSSPseudoElementType::after) {
+    return emptyDeclarationBlock;
+  }
+
+  ServoAnimationRule* rule =
+    presContext->EffectCompositor()
+               ->GetServoAnimationRule(aElement, pseudoType, aCascadeLevel);
+  if (!rule) {
+    return emptyDeclarationBlock;
+  }
+  return rule->GetValues();
 }
 
 void
@@ -867,9 +909,9 @@ Gecko_ClearPODTArray(void* aArray, size_t aElementSize, size_t aElementAlign)
 }
 
 void
-Gecko_ClearStyleContents(nsStyleContent* aContent)
+Gecko_ClearAndResizeStyleContents(nsStyleContent* aContent, uint32_t aHowMany)
 {
-  aContent->AllocateContents(0);
+  aContent->AllocateContents(aHowMany);
 }
 
 void
@@ -903,7 +945,29 @@ Gecko_EnsureStyleAnimationArrayLength(void* aArray, size_t aLen)
   auto base =
     reinterpret_cast<nsStyleAutoArray<StyleAnimation>*>(aArray);
 
+  size_t oldLength = base->Length();
+
   base->EnsureLengthAtLeast(aLen);
+
+  for (size_t i = oldLength; i < aLen; ++i) {
+    (*base)[i].SetInitialValues();
+  }
+}
+
+Keyframe*
+Gecko_AnimationAppendKeyframe(RawGeckoKeyframeListBorrowedMut aKeyframes,
+                              float aOffset,
+                              const nsTimingFunction* aTimingFunction)
+{
+  Keyframe* keyframe = aKeyframes->AppendElement();
+  keyframe->mOffset.emplace(aOffset);
+  if (aTimingFunction &&
+      aTimingFunction->mType != nsTimingFunction::Type::Linear) {
+    keyframe->mTimingFunction.emplace();
+    keyframe->mTimingFunction->Init(*aTimingFunction);
+  }
+
+  return keyframe;
 }
 
 void

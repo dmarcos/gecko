@@ -34,11 +34,10 @@ add_task(function* () {
       time: true
     });
 
-  wait = waitForDOM(document, "#response-tabpanel");
+  wait = waitForDOM(document, "#response-panel");
   EventUtils.sendMouseEvent({ type: "mousedown" },
     document.getElementById("details-pane-toggle"));
-  EventUtils.sendMouseEvent({ type: "mousedown" },
-    document.querySelectorAll("#details-pane tab")[3]);
+  document.querySelector("#response-tab").click();
   yield wait;
 
   testResponseTab();
@@ -46,7 +45,7 @@ add_task(function* () {
   yield teardown(monitor);
 
   function testResponseTab() {
-    let tabpanel = document.querySelectorAll("#details-pane tabpanel")[3];
+    let tabpanel = document.querySelector("#response-panel");
 
     is(tabpanel.querySelector(".response-error-header") === null, true,
       "The response error header doesn't have the intended visibility.");

@@ -32,13 +32,6 @@ async function promiseClean(engine, server) {
   await promiseStopServer(server);
 }
 
-function configureService(server, username, password) {
-  Service.clusterURL = server.baseURI;
-
-  Service.identity.account = username || "foo";
-  Service.identity.basicPassword = password || "password";
-}
-
 async function createServerAndConfigureClient() {
   let engine = new RotaryEngine(Service);
 
@@ -97,8 +90,7 @@ add_task(async function test_syncStartup_emptyOrOutdatedGlobalsResetsSync() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
-  Service.identity.username = "foo";
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   engine._store.items = {rekolok: "Rekonstruktionslokomotive"};
@@ -141,8 +133,7 @@ add_task(async function test_syncStartup_serverHasNewerVersion() {
       "/1.1/foo/storage/meta/global": global.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
-  Service.identity.username = "foo";
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   try {
@@ -167,8 +158,8 @@ add_task(async function test_syncStartup_syncIDMismatchResetsClient() {
   _("SyncEngine._syncStartup resets sync if syncIDs don't match");
 
   let server = sync_httpd_setup({});
-  let syncTesting = await SyncTestingInfrastructure(server);
-  Service.identity.username = "foo";
+
+  await SyncTestingInfrastructure(server);
 
   // global record with a different syncID than our engine has
   let engine = makeRotaryEngine();
@@ -207,8 +198,7 @@ add_task(async function test_processIncoming_emptyServer() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
-  Service.identity.username = "foo";
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   try {
@@ -246,8 +236,7 @@ add_task(async function test_processIncoming_createFromServer() {
       "/1.1/foo/storage/rotary/scotsman": collection.wbo("scotsman").handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
-  Service.identity.username = "foo";
+  await SyncTestingInfrastructure(server);
 
   generateNewKeys(Service.collectionKeys);
 
@@ -331,8 +320,7 @@ add_task(async function test_processIncoming_reconcile() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
-  Service.identity.username = "foo";
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   engine._store.items = {newerserver: "New data, but not as new as server!",
@@ -608,7 +596,6 @@ add_task(async function test_processIncoming_mobile_batchSize() {
   _("SyncEngine._processIncoming doesn't fetch everything at once on mobile clients");
 
   Svc.Prefs.set("client.type", "mobile");
-  Service.identity.username = "foo";
 
   // A collection that logs each GET
   let collection = new ServerCollection();
@@ -633,7 +620,7 @@ add_task(async function test_processIncoming_mobile_batchSize() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   let meta_global = Service.recordManager.set(engine.metaURL,
@@ -677,7 +664,6 @@ add_task(async function test_processIncoming_mobile_batchSize() {
 
 add_task(async function test_processIncoming_store_toFetch() {
   _("If processIncoming fails in the middle of a batch on mobile, state is saved in toFetch and lastSync.");
-  Service.identity.username = "foo";
   Svc.Prefs.set("client.type", "mobile");
 
   // A collection that throws at the fourth get.
@@ -708,7 +694,7 @@ add_task(async function test_processIncoming_store_toFetch() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -720,11 +706,9 @@ add_task(async function test_processIncoming_store_toFetch() {
     do_check_eq(engine.lastSync, 0);
     do_check_empty(engine._store.items);
 
-    let error;
     try {
       await sync_engine_and_validate_telem(engine, true);
     } catch (ex) {
-      error = ex;
     }
 
     // Only the first two batches have been applied.
@@ -744,7 +728,6 @@ add_task(async function test_processIncoming_store_toFetch() {
 
 add_task(async function test_processIncoming_resume_toFetch() {
   _("toFetch and previousFailed items left over from previous syncs are fetched on the next sync, along with new items.");
-  Service.identity.username = "foo";
 
   const LASTSYNC = Date.now() / 1000;
 
@@ -781,7 +764,7 @@ add_task(async function test_processIncoming_resume_toFetch() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -813,7 +796,6 @@ add_task(async function test_processIncoming_resume_toFetch() {
 
 add_task(async function test_processIncoming_applyIncomingBatchSize_smaller() {
   _("Ensure that a number of incoming items less than applyIncomingBatchSize is still applied.");
-  Service.identity.username = "foo";
 
   // Engine that doesn't like the first and last record it's given.
   const APPLY_BATCH_SIZE = 10;
@@ -839,7 +821,7 @@ add_task(async function test_processIncoming_applyIncomingBatchSize_smaller() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -868,7 +850,6 @@ add_task(async function test_processIncoming_applyIncomingBatchSize_smaller() {
 
 add_task(async function test_processIncoming_applyIncomingBatchSize_multiple() {
   _("Ensure that incoming items are applied according to applyIncomingBatchSize.");
-  Service.identity.username = "foo";
 
   const APPLY_BATCH_SIZE = 10;
 
@@ -895,7 +876,7 @@ add_task(async function test_processIncoming_applyIncomingBatchSize_multiple() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -921,7 +902,6 @@ add_task(async function test_processIncoming_applyIncomingBatchSize_multiple() {
 
 add_task(async function test_processIncoming_notify_count() {
   _("Ensure that failed records are reported only once.");
-  Service.identity.username = "foo";
 
   const APPLY_BATCH_SIZE = 5;
   const NUMBER_OF_RECORDS = 15;
@@ -947,7 +927,7 @@ add_task(async function test_processIncoming_notify_count() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -1010,7 +990,6 @@ add_task(async function test_processIncoming_notify_count() {
 
 add_task(async function test_processIncoming_previousFailed() {
   _("Ensure that failed records are retried.");
-  Service.identity.username = "foo";
   Svc.Prefs.set("client.type", "mobile");
 
   const APPLY_BATCH_SIZE = 4;
@@ -1037,7 +1016,7 @@ add_task(async function test_processIncoming_previousFailed() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -1096,7 +1075,6 @@ add_task(async function test_processIncoming_previousFailed() {
 
 add_task(async function test_processIncoming_failed_records() {
   _("Ensure that failed records from _reconcile and applyIncomingBatch are refetched.");
-  Service.identity.username = "foo";
 
   // Let's create three and a bit batches worth of server side records.
   let collection = new ServerCollection();
@@ -1141,8 +1119,8 @@ add_task(async function test_processIncoming_failed_records() {
   // Keep track of requests made of a collection.
   let count = 0;
   let uris  = [];
-  function recording_handler(collection) {
-    let h = collection.handler();
+  function recording_handler(recordedCollection) {
+    let h = recordedCollection.handler();
     return function(req, res) {
       ++count;
       uris.push(req.path + "?" + req.queryString);
@@ -1153,7 +1131,7 @@ add_task(async function test_processIncoming_failed_records() {
       "/1.1/foo/storage/rotary": recording_handler(collection)
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -1231,8 +1209,6 @@ add_task(async function test_processIncoming_failed_records() {
 add_task(async function test_processIncoming_decrypt_failed() {
   _("Ensure that records failing to decrypt are either replaced or refetched.");
 
-  Service.identity.username = "foo";
-
   // Some good and some bogus records. One doesn't contain valid JSON,
   // the other will throw during decrypt.
   let collection = new ServerCollection();
@@ -1266,7 +1242,7 @@ add_task(async function test_processIncoming_decrypt_failed() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));
@@ -1312,7 +1288,6 @@ add_task(async function test_processIncoming_decrypt_failed() {
 add_task(async function test_uploadOutgoing_toEmptyServer() {
   _("SyncEngine._uploadOutgoing uploads new records to server");
 
-  Service.identity.username = "foo";
   let collection = new ServerCollection();
   collection._wbos.flying = new ServerWBO("flying");
   collection._wbos.scotsman = new ServerWBO("scotsman");
@@ -1323,7 +1298,7 @@ add_task(async function test_uploadOutgoing_toEmptyServer() {
       "/1.1/foo/storage/rotary/scotsman": collection.wbo("scotsman").handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   generateNewKeys(Service.collectionKeys);
 
   let engine = makeRotaryEngine();
@@ -1369,7 +1344,6 @@ add_task(async function test_uploadOutgoing_toEmptyServer() {
 
 
 add_task(async function test_uploadOutgoing_huge() {
-  Service.identity.username = "foo";
   let collection = new ServerCollection();
   collection._wbos.flying = new ServerWBO("flying");
   collection._wbos.scotsman = new ServerWBO("scotsman");
@@ -1379,7 +1353,7 @@ add_task(async function test_uploadOutgoing_huge() {
       "/1.1/foo/storage/rotary/flying": collection.wbo("flying").handler(),
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   generateNewKeys(Service.collectionKeys);
 
   let engine = makeRotaryEngine();
@@ -1418,7 +1392,6 @@ add_task(async function test_uploadOutgoing_huge() {
 add_task(async function test_uploadOutgoing_failed() {
   _("SyncEngine._uploadOutgoing doesn't clear the tracker of objects that failed to upload.");
 
-  Service.identity.username = "foo";
   let collection = new ServerCollection();
   // We only define the "flying" WBO on the server, not the "scotsman"
   // and "peppercorn" ones.
@@ -1428,7 +1401,7 @@ add_task(async function test_uploadOutgoing_failed() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   engine.lastSync = 123; // needs to be non-zero so that tracker is queried
@@ -1484,7 +1457,6 @@ add_task(async function test_uploadOutgoing_failed() {
 add_task(async function test_uploadOutgoing_MAX_UPLOAD_RECORDS() {
   _("SyncEngine._uploadOutgoing uploads in batches of MAX_UPLOAD_RECORDS");
 
-  Service.identity.username = "foo";
   let collection = new ServerCollection();
 
   // Let's count how many times the client posts to the server
@@ -1523,8 +1495,7 @@ add_task(async function test_uploadOutgoing_MAX_UPLOAD_RECORDS() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
-
+  await SyncTestingInfrastructure(server);
   try {
 
     // Confirm initial environment.
@@ -1546,10 +1517,99 @@ add_task(async function test_uploadOutgoing_MAX_UPLOAD_RECORDS() {
   }
 });
 
+async function createRecordFailTelemetry(allowSkippedRecord) {
+  Service.identity.username = "foo";
+  let collection = new ServerCollection();
+  collection._wbos.flying = new ServerWBO("flying");
+  collection._wbos.scotsman = new ServerWBO("scotsman");
+
+  let server = sync_httpd_setup({
+      "/1.1/foo/storage/rotary": collection.handler()
+  });
+
+  await SyncTestingInfrastructure(server);
+
+  let engine = makeRotaryEngine();
+  engine.allowSkippedRecord = allowSkippedRecord;
+  let oldCreateRecord = engine._store.createRecord;
+  engine._store.createRecord = (id, col) => {
+    if (id != "flying") {
+      throw new Error("oops");
+    }
+    return oldCreateRecord.call(engine._store, id, col);
+  }
+  engine.lastSync = 123; // needs to be non-zero so that tracker is queried
+  engine._store.items = {flying: "LNER Class A3 4472",
+                         scotsman: "Flying Scotsman"};
+  // Mark these records as changed
+  const FLYING_CHANGED = 12345;
+  const SCOTSMAN_CHANGED = 23456;
+  engine._tracker.addChangedID("flying", FLYING_CHANGED);
+  engine._tracker.addChangedID("scotsman", SCOTSMAN_CHANGED);
+
+  let meta_global = Service.recordManager.set(engine.metaURL,
+                                              new WBORecord(engine.metaURL));
+  meta_global.payload.engines = {rotary: {version: engine.version,
+                                         syncID: engine.syncID}};
+
+  let ping;
+  try {
+    // Confirm initial environment
+    do_check_eq(engine.lastSyncLocal, 0);
+    do_check_eq(collection.payload("flying"), undefined);
+    do_check_eq(engine._tracker.changedIDs["flying"], FLYING_CHANGED);
+    do_check_eq(engine._tracker.changedIDs["scotsman"], SCOTSMAN_CHANGED);
+
+    engine.enabled = true;
+    ping = await sync_engine_and_validate_telem(engine, true, onErrorPing => {
+      ping = onErrorPing;
+    });
+
+    if (!allowSkippedRecord) {
+      do_throw("should not get here");
+    }
+
+    // Ensure the 'flying' record has been uploaded and is no longer marked.
+    do_check_true(!!collection.payload("flying"));
+    do_check_eq(engine._tracker.changedIDs["flying"], undefined);
+  } catch (err) {
+    if (allowSkippedRecord) {
+      do_throw("should not get here");
+    }
+
+    // Ensure the 'flying' record has not been uploaded and is still marked
+    do_check_false(collection.payload("flying"));
+    do_check_true(engine._tracker.changedIDs["flying"]);
+  } finally {
+    // Local timestamp has been set.
+    do_check_true(engine.lastSyncLocal > 0);
+
+    // We reported in telemetry that we failed a record
+    do_check_eq(ping.engines[0].outgoing[0].failed, 1);
+
+    // In any case, the 'scotsman' record couldn't be created so it wasn't
+    // uploaded nor it was not cleared from the tracker.
+    do_check_false(collection.payload("scotsman"));
+    do_check_eq(engine._tracker.changedIDs["scotsman"], SCOTSMAN_CHANGED);
+
+    engine._store.createRecord = oldCreateRecord;
+    await promiseClean(engine, server);
+  }
+}
+
+add_task(async function test_uploadOutgoing_createRecord_throws_reported_telemetry() {
+  _("SyncEngine._uploadOutgoing reports a failed record to telemetry if createRecord throws");
+  await createRecordFailTelemetry(true);
+});
+
+add_task(async function test_uploadOutgoing_createRecord_throws_dontAllowSkipRecord() {
+  _("SyncEngine._uploadOutgoing will throw if createRecord throws and allowSkipRecord is set to false");
+  await createRecordFailTelemetry(false);
+});
+
 add_task(async function test_uploadOutgoing_largeRecords() {
   _("SyncEngine._uploadOutgoing throws on records larger than MAX_UPLOAD_BYTES");
 
-  Service.identity.username = "foo";
   let collection = new ServerCollection();
 
   let engine = makeRotaryEngine();
@@ -1568,7 +1628,7 @@ add_task(async function test_uploadOutgoing_largeRecords() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   try {
     engine._syncStartup();
@@ -1590,7 +1650,7 @@ add_task(async function test_syncFinish_noDelete() {
 
   let server = httpd_setup({});
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   let engine = makeRotaryEngine();
   engine._delete = {}; // Nothing to delete
   engine._tracker.score = 100;
@@ -1605,7 +1665,6 @@ add_task(async function test_syncFinish_noDelete() {
 add_task(async function test_syncFinish_deleteByIds() {
   _("SyncEngine._syncFinish deletes server records slated for deletion (list of record IDs).");
 
-  Service.identity.username = "foo";
   let collection = new ServerCollection();
   collection._wbos.flying = new ServerWBO(
       "flying", encryptPayload({id: "flying",
@@ -1620,7 +1679,7 @@ add_task(async function test_syncFinish_deleteByIds() {
   let server = httpd_setup({
       "/1.1/foo/storage/rotary": collection.handler()
   });
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   try {
@@ -1645,7 +1704,6 @@ add_task(async function test_syncFinish_deleteByIds() {
 add_task(async function test_syncFinish_deleteLotsInBatches() {
   _("SyncEngine._syncFinish deletes server records in batches of 100 (list of record IDs).");
 
-  Service.identity.username = "foo";
   let collection = new ServerCollection();
 
   // Let's count how many times the client does a DELETE request to the server
@@ -1671,7 +1729,7 @@ add_task(async function test_syncFinish_deleteLotsInBatches() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let engine = makeRotaryEngine();
   try {
@@ -1716,13 +1774,11 @@ add_task(async function test_syncFinish_deleteLotsInBatches() {
 add_task(async function test_sync_partialUpload() {
   _("SyncEngine.sync() keeps changedIDs that couldn't be uploaded.");
 
-  Service.identity.username = "foo";
-
   let collection = new ServerCollection();
   let server = sync_httpd_setup({
       "/1.1/foo/storage/rotary": collection.handler()
   });
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   generateNewKeys(Service.collectionKeys);
 
   let engine = makeRotaryEngine();
@@ -1790,7 +1846,6 @@ add_task(async function test_sync_partialUpload() {
 
 add_task(async function test_canDecrypt_noCryptoKeys() {
   _("SyncEngine.canDecrypt returns false if the engine fails to decrypt items on the server, e.g. due to a missing crypto key collection.");
-  Service.identity.username = "foo";
 
   // Wipe collection keys so we can test the desired scenario.
   Service.collectionKeys.clear();
@@ -1804,7 +1859,7 @@ add_task(async function test_canDecrypt_noCryptoKeys() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   let engine = makeRotaryEngine();
   try {
 
@@ -1817,7 +1872,6 @@ add_task(async function test_canDecrypt_noCryptoKeys() {
 
 add_task(async function test_canDecrypt_true() {
   _("SyncEngine.canDecrypt returns true if the engine can decrypt the items on the server.");
-  Service.identity.username = "foo";
 
   generateNewKeys(Service.collectionKeys);
 
@@ -1830,7 +1884,7 @@ add_task(async function test_canDecrypt_true() {
       "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
   let engine = makeRotaryEngine();
   try {
 
@@ -1843,8 +1897,6 @@ add_task(async function test_canDecrypt_true() {
 });
 
 add_task(async function test_syncapplied_observer() {
-  Service.identity.username = "foo";
-
   const NUMBER_OF_RECORDS = 10;
 
   let engine = makeRotaryEngine();
@@ -1861,7 +1913,7 @@ add_task(async function test_syncapplied_observer() {
     "/1.1/foo/storage/rotary": collection.handler()
   });
 
-  let syncTesting = await SyncTestingInfrastructure(server);
+  await SyncTestingInfrastructure(server);
 
   let meta_global = Service.recordManager.set(engine.metaURL,
                                               new WBORecord(engine.metaURL));

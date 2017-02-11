@@ -45,10 +45,10 @@
 #include "vm/CodeCoverage.h"
 #include "vm/CommonPropertyNames.h"
 #include "vm/DateTime.h"
+#include "vm/GeckoProfiler.h"
 #include "vm/MallocProvider.h"
 #include "vm/Scope.h"
 #include "vm/SharedImmutableStringsCache.h"
-#include "vm/SPSProfiler.h"
 #include "vm/Stack.h"
 #include "vm/Stopwatch.h"
 #include "vm/Symbol.h"
@@ -275,7 +275,7 @@ class PerThreadData
 
   public:
 #ifdef JS_TRACE_LOGGING
-    TraceLoggerThread*  traceLogger;
+    TraceLoggerMainThread*  traceLogger;
 #endif
 
     /* Pointer to the current AutoFlushICache. */
@@ -694,6 +694,13 @@ struct JSRuntime : public JS::shadow::Runtime,
         return numExclusiveThreads > 0;
     }
 
+#ifdef DEBUG
+    bool currentThreadHasExclusiveAccess() const {
+        return (!exclusiveThreadsPresent() && mainThreadHasExclusiveAccess) ||
+            exclusiveAccessLock.ownedByCurrentThread();
+    }
+#endif
+
     // How many compartments there are across all zones. This number includes
     // ExclusiveContext compartments, so it isn't necessarily equal to the
     // number of compartments visited by CompartmentsIter.
@@ -909,8 +916,8 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     mozilla::UniquePtr<js::SourceHook> sourceHook;
 
-    /* SPS profiling metadata */
-    js::SPSProfiler     spsProfiler;
+    /* Gecko profiling metadata */
+    js::GeckoProfiler   geckoProfiler;
 
     /* If true, new scripts must be created with PC counter information. */
     bool                profilingScripts;
@@ -1080,7 +1087,13 @@ struct JSRuntime : public JS::shadow::Runtime,
     js::AtomSet& atoms(js::AutoLockForExclusiveAccess& lock) {
         return *atoms_;
     }
+    js::AtomSet& unsafeAtoms() {
+        return *atoms_;
+    }
     JSCompartment* atomsCompartment(js::AutoLockForExclusiveAccess& lock) {
+        return atomsCompartment_;
+    }
+    JSCompartment* unsafeAtomsCompartment() {
         return atomsCompartment_;
     }
 
@@ -1094,6 +1107,9 @@ struct JSRuntime : public JS::shadow::Runtime,
     bool activeGCInAtomsZone();
 
     js::SymbolRegistry& symbolRegistry(js::AutoLockForExclusiveAccess& lock) {
+        return symbolRegistry_;
+    }
+    js::SymbolRegistry& unsafeSymbolRegistry() {
         return symbolRegistry_;
     }
 

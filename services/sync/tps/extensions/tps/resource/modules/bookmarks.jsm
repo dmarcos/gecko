@@ -22,7 +22,7 @@ Cu.import("resource://tps/logger.jsm");
 var DumpBookmarks = function TPS_Bookmarks__DumpBookmarks() {
   let cb = Async.makeSpinningCallback();
   PlacesBackups.getBookmarksTree().then(result => {
-    let [bookmarks, count] = result;
+    let [bookmarks, ] = result;
     Logger.logInfo("Dumping Bookmarks...\n" + JSON.stringify(bookmarks) + "\n\n");
     cb(null);
   }).then(null, error => {
@@ -217,9 +217,8 @@ PlacesItem.prototype = {
         folder_parts[i]);
       if (subfolder_id == -1) {
         return -1;
-      } else {
-        folder_id = subfolder_id;
       }
+      folder_id = subfolder_id;
     }
     return folder_id;
   },
@@ -264,7 +263,7 @@ PlacesItem.prototype = {
    * @return the folder id if the folder was found or created, otherwise -1
    */
   GetOrCreateFolder(location) {
-    folder_id = this.GetFolder(location);
+    let folder_id = this.GetFolder(location);
     if (folder_id == -1)
       folder_id = this.CreateFolder(location);
     return folder_id;
@@ -785,7 +784,7 @@ Livemark.prototype = {
 
     PlacesUtils.livemarks.addLivemark(livemarkObj).then(
       aLivemark => { spinningCb(null, [Components.results.NS_OK, aLivemark]) },
-      () => { spinningCb(null, [Components.results.NS_ERROR_UNEXPECTED, aLivemark]) }
+      () => { spinningCb(null, [Components.results.NS_ERROR_UNEXPECTED, null]) }
     );
 
     let [status, livemark] = spinningCb.wait();
@@ -934,9 +933,9 @@ Separator.prototype = {
     }
     let expected_pos = -1;
     if (this.props.before) {
-      other_id = this.GetPlacesNodeId(this.props.folder_id,
-                                      null,
-                                      this.props.before);
+      let other_id = this.GetPlacesNodeId(this.props.folder_id,
+                                          null,
+                                          this.props.before);
       if (other_id == -1) {
         Logger.logPotentialError("Can't find places item " + this.props.before +
           " for locating separator");

@@ -19,7 +19,6 @@ Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://services-common/observers.js");
 Cu.import("resource://services-sync/constants.js");
-Cu.import("resource://services-sync/identity.js");
 Cu.import("resource://services-sync/record.js");
 Cu.import("resource://services-sync/resource.js");
 Cu.import("resource://services-sync/util.js");
@@ -614,7 +613,11 @@ EngineManager.prototype = {
     if (val instanceof Engine) {
       name = val.name;
     }
-    delete this._engines[name];
+    if (name in this._engines) {
+      let engine = this._engines[name];
+      delete this._engines[name];
+      engine.finalize();
+    }
   },
 
   clear() {
@@ -727,7 +730,12 @@ Engine.prototype = {
    */
   getValidator() {
     return null;
-  }
+  },
+
+  finalize() {
+    // Ensure the tracker finishes persisting changed IDs to disk.
+    Async.promiseSpinningly(this._tracker._storage.finalize());
+  },
 };
 
 this.SyncEngine = function SyncEngine(name, service) {
@@ -929,15 +937,13 @@ SyncEngine.prototype = {
       engines[this.name] = engineData;
       metaGlobal.payload.engines = engines;
       metaGlobal.changed = true;
-    }
-    // Don't sync this engine if the server has newer data
-    else if (engineData.version > this.version) {
+    } else if (engineData.version > this.version) {
+      // Don't sync this engine if the server has newer data
       let error = new String("New data: " + [engineData.version, this.version]);
       error.failureCode = VERSION_OUT_OF_DATE;
       throw error;
-    }
-    // Changes to syncID mean we'll need to upload everything
-    else if (engineData.syncID != this.syncID) {
+    } else if (engineData.syncID != this.syncID) {
+      // Changes to syncID mean we'll need to upload everything
       this._log.debug("Engine syncIDs: " + [engineData.syncID, this.syncID]);
       this.syncID = engineData.syncID;
       this._resetClient();
@@ -1581,10 +1587,12 @@ SyncEngine.prototype = {
           out.encrypt(this.service.collectionKeys.keyForCollection(this.name));
           ok = true;
         } catch (ex) {
-          if (Async.isShutdownException(ex)) {
+          this._log.warn("Error creating record", ex);
+          ++counts.failed;
+          if (Async.isShutdownException(ex) || !this.allowSkippedRecord) {
+            Observers.notify("weave:engine:sync:uploaded", counts, this.name);
             throw ex;
           }
-          this._log.warn("Error creating record", ex);
         }
         if (ok) {
           let { enqueued, error } = postQueue.enqueue(out);

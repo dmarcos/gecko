@@ -44,13 +44,12 @@ function clearBookmarks() {
   PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.bookmarks.tagsFolder);
   PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.bookmarks.toolbarFolder);
   PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.bookmarks.unfiledBookmarksFolder);
-  startCount = smartBookmarkCount();
 }
 
-function serverForFoo(engine) {
+function serverForFoo(engineData) {
   return serverForUsers({"foo": "password"}, {
-    meta: {global: {engines: {bookmarks: {version: engine.version,
-                                          syncID: engine.syncID}}}},
+    meta: {global: {engines: {bookmarks: {version: engineData.version,
+                                          syncID: engineData.syncID}}}},
     bookmarks: {}
   });
 }
@@ -188,8 +187,6 @@ add_task(async function test_smart_bookmarks_duped() {
   let record = store.createRecord(mostVisitedGUID);
 
   _("Prepare sync.");
-  let collection = server.user("foo").collection("bookmarks");
-
   try {
     engine._syncStartup();
 

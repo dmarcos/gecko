@@ -4,6 +4,8 @@
 
 XPCOMUtils.defineLazyModuleGetter(this, "CustomizableUI",
                                   "resource:///modules/CustomizableUI.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
+                                  "resource:///modules/E10SUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
@@ -26,8 +28,8 @@ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
 var {
   DefaultWeakMap,
-  EventManager,
   promiseEvent,
+  SingletonEventManager,
 } = ExtensionUtils;
 
 // This file provides some useful code for the |tabs| and |windows|
@@ -45,10 +47,9 @@ function promisePopupShown(popup) {
     if (popup.state == "open") {
       resolve();
     } else {
-      popup.addEventListener("popupshown", function onPopupShown(event) {
-        popup.removeEventListener("popupshown", onPopupShown);
+      popup.addEventListener("popupshown", function(event) {
         resolve();
-      });
+      }, {once: true});
     }
   });
 }
@@ -233,6 +234,7 @@ class BasePopup {
 
     if (this.extension.remote) {
       browser.setAttribute("remote", "true");
+      browser.setAttribute("remoteType", E10SUtils.EXTENSION_REMOTE_TYPE);
     }
 
     // We only need flex sizing for the sake of the slide-in sub-views of the
@@ -343,6 +345,7 @@ class BasePopup {
 
     this.panel.style.setProperty("--arrowpanel-background", panelBackground);
     this.panel.style.setProperty("--panel-arrow-image-vertical", panelArrow);
+    this.background = background;
   }
 }
 
@@ -471,6 +474,8 @@ class ViewPopup extends BasePopup {
       // Calculate the extra height available on the screen above and below the
       // menu panel. Use that to calculate the how much the sub-view may grow.
       let popupRect = this.panel.getBoundingClientRect();
+
+      this.setBackground(this.background);
 
       let win = this.window;
       let popupBottom = win.mozInnerScreenY + popupRect.bottom;
@@ -1276,16 +1281,16 @@ global.AllWindowEvents = {
 
 AllWindowEvents.openListener = AllWindowEvents.openListener.bind(AllWindowEvents);
 
-// Subclass of EventManager where we just need to call
+// Subclass of SingletonEventManager where we just need to call
 // add/removeEventListener on each XUL window.
-global.WindowEventManager = function(context, name, event, listener) {
-  EventManager.call(this, context, name, fire => {
-    let listener2 = (...args) => listener(fire, ...args);
-    AllWindowEvents.addListener(event, listener2);
-    return () => {
-      AllWindowEvents.removeListener(event, listener2);
-    };
-  });
+global.WindowEventManager = class extends SingletonEventManager {
+  constructor(context, name, event, listener) {
+    super(context, name, fire => {
+      let listener2 = (...args) => listener(fire, ...args);
+      AllWindowEvents.addListener(event, listener2);
+      return () => {
+        AllWindowEvents.removeListener(event, listener2);
+      };
+    });
+  }
 };
-
-WindowEventManager.prototype = Object.create(EventManager.prototype);

@@ -420,7 +420,7 @@ assertErrorMessage(() => i2v(4), Error, signatureMismatch);
 assertErrorMessage(() => i2v(5), Error, signatureMismatch);
 
 {
-    enableSPSProfiling();
+    enableGeckoProfiling();
 
     var stack;
     wasmFullPass(
@@ -437,7 +437,7 @@ assertErrorMessage(() => i2v(5), Error, signatureMismatch);
         {"":{f:() => { stack = new Error().stack }}}
     );
 
-    disableSPSProfiling();
+    disableGeckoProfiling();
 
     var inner = stack.indexOf("wasm-function[1]");
     var outer = stack.indexOf("wasm-function[3]");
@@ -463,8 +463,10 @@ wasmFailValidateText('(module (func (select (i32.const 0) (i32.const 0) (f32.con
 
 wasmFailValidateText('(module (func (select (i32.const 0) (f32.const 0) (i32.const 0))) (export "" 0))', /select operand types must match/);
 wasmFailValidateText('(module (func (select (block ) (i32.const 0) (i32.const 0))) (export "" 0))', /popping value from empty stack/);
-assertEq(wasmEvalText('(module (func (select (return) (i32.const 0) (i32.const 0))) (export "" 0))').exports[""](), undefined);
-assertEq(wasmEvalText('(module (func (i32.add (i32.const 0) (select (return) (i32.const 0) (i32.const 0)))) (export "" 0))').exports[""](), undefined);
+wasmFailValidateText('(module (func (select (return) (i32.const 0) (i32.const 0))) (export "" 0))', /non-fallthrough instruction must be followed by end or else/);
+wasmFailValidateText('(module (func (i32.add (i32.const 0) (select (return) (i32.const 0) (i32.const 0)))) (export "" 0))', /non-fallthrough instruction must be followed by end or else/);
+assertEq(wasmEvalText('(module (func (select (block (return)) (i32.const 0) (i32.const 0))) (export "" 0))').exports[""](), undefined);
+assertEq(wasmEvalText('(module (func (i32.add (i32.const 0) (select (block (return)) (i32.const 0) (i32.const 0)))) (export "" 0))').exports[""](), undefined);
 wasmFailValidateText('(module (func (select (if i32 (i32.const 1) (i32.const 0) (f32.const 0)) (i32.const 0) (i32.const 0))) (export "" 0))', mismatchError("f32", "i32"));
 wasmFailValidateText('(module (func) (func (select (call 0) (call 0) (i32.const 0))) (export "" 0))', /popping value from empty stack/);
 

@@ -9,12 +9,13 @@ var Ci = Components.interfaces;
 var Cu = Components.utils;
 var Cr = Components.results;
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/AddonManager.jsm");
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/AsyncPrefs.jsm");
 Cu.import("resource://gre/modules/DelayedInit.jsm");
+Cu.import("resource://gre/modules/Messaging.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 if (AppConstants.ACCESSIBILITY) {
   XPCOMUtils.defineLazyModuleGetter(this, "AccessFu",
@@ -44,12 +45,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
 
 XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
                                   "resource://gre/modules/Downloads.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "EventDispatcher",
-                                  "resource://gre/modules/Messaging.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Messaging",
-                                  "resource://gre/modules/Messaging.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "UserAgentOverrides",
                                   "resource://gre/modules/UserAgentOverrides.jsm");
@@ -91,9 +86,11 @@ XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
                                    "@mozilla.org/uuid-generator;1",
                                    "nsIUUIDGenerator");
 
-XPCOMUtils.defineLazyServiceGetter(this, "Profiler",
-                                   "@mozilla.org/tools/profiler;1",
-                                   "nsIProfiler");
+if (AppConstants.MOZ_ENABLE_PROFILER_SPS) {
+  XPCOMUtils.defineLazyServiceGetter(this, "Profiler",
+                                     "@mozilla.org/tools/profiler;1",
+                                     "nsIProfiler");
+}
 
 XPCOMUtils.defineLazyModuleGetter(this, "SimpleServiceDiscovery",
                                   "resource://gre/modules/SimpleServiceDiscovery.jsm");
@@ -128,6 +125,9 @@ XPCOMUtils.defineLazyServiceGetter(this, "FontEnumerator",
   "@mozilla.org/gfx/fontenumerator;1",
   "nsIFontEnumerator");
 
+var GlobalEventDispatcher = EventDispatcher.instance;
+var WindowEventDispatcher = EventDispatcher.for(window);
+
 var lazilyLoadedBrowserScripts = [
   ["SelectHelper", "chrome://browser/content/SelectHelper.js"],
   ["InputWidgetHelper", "chrome://browser/content/InputWidgetHelper.js"],
@@ -155,19 +155,12 @@ lazilyLoadedBrowserScripts.forEach(function (aScript) {
 var lazilyLoadedObserverScripts = [
   ["MemoryObserver", ["memory-pressure", "Memory:Dump"], "chrome://browser/content/MemoryObserver.js"],
   ["ConsoleAPI", ["console-api-log-event"], "chrome://browser/content/ConsoleAPI.js"],
-  ["FindHelper", ["FindInPage:Opened", "FindInPage:Closed"], "chrome://browser/content/FindHelper.js"],
-  ["PermissionsHelper", ["Permissions:Check", "Permissions:Get", "Permissions:Clear"], "chrome://browser/content/PermissionsHelper.js"],
   ["FeedHandler", ["Feeds:Subscribe"], "chrome://browser/content/FeedHandler.js"],
   ["Feedback", ["Feedback:Show"], "chrome://browser/content/Feedback.js"],
   ["EmbedRT", ["GeckoView:ImportScript"], "chrome://browser/content/EmbedRT.js"],
   ["Reader", ["Reader:AddToCache", "Reader:RemoveFromCache"], "chrome://browser/content/Reader.js"],
   ["PrintHelper", ["Print:PDF"], "chrome://browser/content/PrintHelper.js"],
 ];
-
-lazilyLoadedObserverScripts.push(
-["ActionBarHandler", ["TextSelection:Get", "TextSelection:Action", "TextSelection:End"],
-  "chrome://browser/content/ActionBarHandler.js"]
-);
 
 if (AppConstants.MOZ_WEBRTC) {
   lazilyLoadedObserverScripts.push(
@@ -237,21 +230,38 @@ lazilyLoadedObserverScripts.forEach(function (aScript) {
   });
 });
 
-// Lazily-loaded JS modules that use observer notifications
+// Lazily-loaded JS subscripts and modules that use global/window EventDispatcher.
 [
-  ["Home", ["HomeBanner:Get", "HomePanels:Get", "HomePanels:Authenticate", "HomePanels:RefreshView",
-            "HomePanels:Installed", "HomePanels:Uninstalled"], "resource://gre/modules/Home.jsm"],
+  ["ActionBarHandler", WindowEventDispatcher,
+   ["TextSelection:Get", "TextSelection:Action", "TextSelection:End"],
+   "chrome://browser/content/ActionBarHandler.js"],
+  ["FindHelper", GlobalEventDispatcher,
+   ["FindInPage:Opened", "FindInPage:Closed"],
+   "chrome://browser/content/FindHelper.js"],
+  ["Home", GlobalEventDispatcher,
+   ["HomeBanner:Get", "HomePanels:Get", "HomePanels:Authenticate",
+    "HomePanels:RefreshView", "HomePanels:Installed", "HomePanels:Uninstalled"],
+   "resource://gre/modules/Home.jsm"],
+  ["PermissionsHelper", GlobalEventDispatcher,
+   ["Permissions:Check", "Permissions:Get", "Permissions:Clear"],
+   "chrome://browser/content/PermissionsHelper.js"],
 ].forEach(module => {
-  let [name, notifications, resource] = module;
-  XPCOMUtils.defineLazyModuleGetter(this, name, resource);
-  let observer = (s, t, d) => {
-    Services.obs.removeObserver(observer, t);
-    Services.obs.addObserver(this[name], t, false);
-    this[name].observe(s, t, d); // Explicitly notify new observer
-  };
-  notifications.forEach(notification => {
-    Services.obs.addObserver(observer, notification, false);
+  let [name, dispatcher, events, script] = module;
+  XPCOMUtils.defineLazyGetter(window, name, function() {
+    let sandbox = {};
+    if (script.endsWith(".jsm")) {
+      Cu.import(script, sandbox);
+    } else {
+      Services.scriptloader.loadSubScript(script, sandbox);
+    }
+    return sandbox[name];
   });
+  let listener = (event, message, callback) => {
+    dispatcher.unregisterListener(listener, event);
+    dispatcher.registerListener(window[name], event);
+    window[name].onEvent(event, message, callback); // Explicitly notify new listener
+  };
+  dispatcher.registerListener(listener, events);
 });
 
 XPCOMUtils.defineLazyServiceGetter(this, "Haptic",
@@ -338,9 +348,6 @@ function InitLater(fn, object, name) {
   return DelayedInit.schedule(fn, object, name, 15000 /* 15s max wait */);
 }
 
-XPCOMUtils.defineLazyGetter(this, "GlobalEventDispatcher", () => EventDispatcher.instance);
-XPCOMUtils.defineLazyGetter(this, "WindowEventDispatcher", () => EventDispatcher.for(window));
-
 var BrowserApp = {
   _tabs: [],
   _selectedTab: null,
@@ -377,6 +384,7 @@ var BrowserApp = {
       "Tab:Selected",
       "Tab:Closed",
       "Browser:LoadManifest",
+      "Session:Reload",
     ]);
 
     Services.obs.addObserver(this, "Locale:OS", false);
@@ -384,7 +392,6 @@ var BrowserApp = {
     Services.obs.addObserver(this, "Session:Back", false);
     Services.obs.addObserver(this, "Session:Forward", false);
     Services.obs.addObserver(this, "Session:Navigate", false);
-    Services.obs.addObserver(this, "Session:Reload", false);
     Services.obs.addObserver(this, "Session:Stop", false);
     Services.obs.addObserver(this, "SaveAs:PDF", false);
     Services.obs.addObserver(this, "Browser:Quit", false);
@@ -519,9 +526,7 @@ var BrowserApp = {
     // Notify Java that Gecko has loaded.
     GlobalEventDispatcher.sendRequest({ type: "Gecko:Ready" });
 
-    this.deck.addEventListener("DOMContentLoaded", function BrowserApp_delayedStartup() {
-      BrowserApp.deck.removeEventListener("DOMContentLoaded", BrowserApp_delayedStartup);
-
+    this.deck.addEventListener("DOMContentLoaded", function() {
       InitLater(() => Cu.import("resource://gre/modules/NotificationDB.jsm"));
 
       InitLater(() => Services.obs.notifyObservers(window, "browser-delayed-startup-finished", ""));
@@ -550,7 +555,7 @@ var BrowserApp = {
       InitLater(() => Cc["@mozilla.org/login-manager;1"].getService(Ci.nsILoginManager));
       InitLater(() => LoginManagerParent.init(), window, "LoginManagerParent");
 
-    });
+    }, {once: true});
 
     // Pass caret StateChanged events to ActionBarHandler.
     window.addEventListener("mozcaretstatechanged", e => {
@@ -1383,7 +1388,7 @@ var BrowserApp = {
   quit: function quit(aClear = { sanitize: {}, dontSaveSession: false }) {
     // Notify all windows that an application quit has been requested.
     let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"].createInstance(Ci.nsISupportsPRBool);
-    Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
+    Services.obs.notifyObservers(cancelQuit, "quit-application-requested", null);
 
     // Quit aborted.
     if (cancelQuit.data) {
@@ -1470,6 +1475,12 @@ var BrowserApp = {
           promises.push(Sanitizer.clearItem("cookies"));
           promises.push(Sanitizer.clearItem("sessions"));
           break;
+        case "openTabs":
+          if (aShutdown === true) {
+            Services.obs.notifyObservers(null, "browser:purge-session-tabs", "");
+            break;
+          }
+          // fall-through if aShutdown is false
         default:
           promises.push(Sanitizer.clearItem(key));
       }
@@ -1527,7 +1538,7 @@ var BrowserApp = {
         // we are putting focus into a contentEditable frame. scroll the frame into
         // view instead of the contentEditable document contained within, because that
         // results in a better user experience
-        focused = focused.ownerDocument.defaultView.frameElement;
+        focused = focused.ownerGlobal.frameElement;
       }
       return focused;
     }
@@ -1629,6 +1640,58 @@ var BrowserApp = {
         break;
       }
 
+      case "Session:Reload": {
+        let flags = Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
+
+        // Check to see if this is a message to enable/disable mixed content blocking.
+        if (data) {
+          if (data.bypassCache) {
+            flags |= Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE |
+                     Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY;
+          }
+
+          if (data.contentType === "tracking") {
+            // Convert document URI into the format used by
+            // nsChannelClassifier::ShouldEnableTrackingProtection
+            // (any scheme turned into https is correct)
+            let normalizedUrl = Services.io.newURI("https://" + browser.currentURI.hostPort);
+            if (data.allowContent) {
+              // Add the current host in the 'trackingprotection' consumer of
+              // the permission manager using a normalized URI. This effectively
+              // places this host on the tracking protection white list.
+              if (PrivateBrowsingUtils.isBrowserPrivate(browser)) {
+                PrivateBrowsingUtils.addToTrackingAllowlist(normalizedUrl);
+              } else {
+                Services.perms.add(normalizedUrl, "trackingprotection", Services.perms.ALLOW_ACTION);
+                Telemetry.addData("TRACKING_PROTECTION_EVENTS", 1);
+              }
+            } else {
+              // Remove the current host from the 'trackingprotection' consumer
+              // of the permission manager. This effectively removes this host
+              // from the tracking protection white list (any list actually).
+              if (PrivateBrowsingUtils.isBrowserPrivate(browser)) {
+                PrivateBrowsingUtils.removeFromTrackingAllowlist(normalizedUrl);
+              } else {
+                Services.perms.remove(normalizedUrl, "trackingprotection");
+                Telemetry.addData("TRACKING_PROTECTION_EVENTS", 2);
+              }
+            }
+          }
+        }
+
+        // Try to use the session history to reload so that framesets are
+        // handled properly. If the window has no session history, fall back
+        // to using the web navigation's reload method.
+        let webNav = browser.webNavigation;
+        try {
+          let sh = webNav.sessionHistory;
+          if (sh)
+            webNav = sh.QueryInterface(Ci.nsIWebNavigation);
+        } catch (e) {}
+        webNav.reload(flags);
+        break;
+      }
+
       case "Tab:Load": {
         let url = data.url;
         let flags = Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP
@@ -1649,7 +1712,8 @@ var BrowserApp = {
           isPrivate: (data.isPrivate === true),
           pinned: (data.pinned === true),
           delayLoad: (delayLoad === true),
-          desktopMode: (data.desktopMode === true)
+          desktopMode: (data.desktopMode === true),
+          customTab: ("customTab" in data) ? data.customTab : false
         };
 
         params.userRequested = url;
@@ -1716,60 +1780,6 @@ var BrowserApp = {
 
           browser.gotoIndex(index);
           break;
-
-      case "Session:Reload": {
-        let flags = Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
-
-        // Check to see if this is a message to enable/disable mixed content blocking.
-        if (aData) {
-          let data = JSON.parse(aData);
-
-          if (data.bypassCache) {
-            flags |= Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE |
-                     Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY;
-          }
-
-          if (data.contentType === "tracking") {
-            // Convert document URI into the format used by
-            // nsChannelClassifier::ShouldEnableTrackingProtection
-            // (any scheme turned into https is correct)
-            let normalizedUrl = Services.io.newURI("https://" + browser.currentURI.hostPort);
-            if (data.allowContent) {
-              // Add the current host in the 'trackingprotection' consumer of
-              // the permission manager using a normalized URI. This effectively
-              // places this host on the tracking protection white list.
-              if (PrivateBrowsingUtils.isBrowserPrivate(browser)) {
-                PrivateBrowsingUtils.addToTrackingAllowlist(normalizedUrl);
-              } else {
-                Services.perms.add(normalizedUrl, "trackingprotection", Services.perms.ALLOW_ACTION);
-                Telemetry.addData("TRACKING_PROTECTION_EVENTS", 1);
-              }
-            } else {
-              // Remove the current host from the 'trackingprotection' consumer
-              // of the permission manager. This effectively removes this host
-              // from the tracking protection white list (any list actually).
-              if (PrivateBrowsingUtils.isBrowserPrivate(browser)) {
-                PrivateBrowsingUtils.removeFromTrackingAllowlist(normalizedUrl);
-              } else {
-                Services.perms.remove(normalizedUrl, "trackingprotection");
-                Telemetry.addData("TRACKING_PROTECTION_EVENTS", 2);
-              }
-            }
-          }
-        }
-
-        // Try to use the session history to reload so that framesets are
-        // handled properly. If the window has no session history, fall back
-        // to using the web navigation's reload method.
-        let webNav = browser.webNavigation;
-        try {
-          let sh = webNav.sessionHistory;
-          if (sh)
-            webNav = sh.QueryInterface(Ci.nsIWebNavigation);
-        } catch (e) {}
-        webNav.reload(flags);
-        break;
-      }
 
       case "Session:Stop":
         browser.stop();
@@ -2164,8 +2174,10 @@ var BrowserApp = {
 
 var NativeWindow = {
   init: function() {
+    GlobalEventDispatcher.registerListener(this, [
+      "Doorhanger:Reply",
+    ]);
     Services.obs.addObserver(this, "Menu:Clicked", false);
-    Services.obs.addObserver(this, "Doorhanger:Reply", false);
     this.contextmenus.init();
   },
 
@@ -2297,12 +2309,8 @@ var NativeWindow = {
     }
   },
 
-  observe: function(aSubject, aTopic, aData) {
-    if (aTopic == "Menu:Clicked") {
-      if (this.menu._callbacks[aData])
-        this.menu._callbacks[aData]();
-    } else if (aTopic == "Doorhanger:Reply") {
-      let data = JSON.parse(aData);
+  onEvent: function (event, data, callback) {
+    if (event == "Doorhanger:Reply") {
       let reply_id = data["callback"];
 
       if (this.doorhanger._callbacks[reply_id]) {
@@ -2317,6 +2325,13 @@ var NativeWindow = {
           }
         }
       }
+    }
+  },
+
+  observe: function(aSubject, aTopic, aData) {
+    if (aTopic == "Menu:Clicked") {
+      if (this.menu._callbacks[aData])
+        this.menu._callbacks[aData]();
     }
   },
 
@@ -2909,7 +2924,7 @@ var NativeWindow = {
 
       let useTabs = Object.keys(this.menus).length > 1;
       let prompt = new Prompt({
-        window: target.ownerDocument.defaultView,
+        window: target.ownerGlobal,
         title: useTabs ? undefined : title
       });
 
@@ -3066,7 +3081,7 @@ var LightWeightThemeWebInstaller = {
       case "PreviewBrowserTheme":
       case "ResetBrowserThemePreview":
         // ignore requests from background tabs
-        if (event.target.ownerDocument.defaultView.top != content)
+        if (event.target.ownerGlobal.top != content)
           return;
     }
 
@@ -3143,7 +3158,7 @@ var LightWeightThemeWebInstaller = {
       return;
     this._resetPreview();
 
-    this._previewWindow = event.target.ownerDocument.defaultView;
+    this._previewWindow = event.target.ownerGlobal;
     this._previewWindow.addEventListener("pagehide", this, true);
     BrowserApp.deck.addEventListener("TabSelect", this);
     this._manager.previewTheme(data);
@@ -3328,6 +3343,13 @@ nsBrowserAccess.prototype = {
                   aWhere == Ci.nsIBrowserDOMWindow.OPEN_NEWTAB ||
                   aWhere == Ci.nsIBrowserDOMWindow.OPEN_SWITCHTAB);
     let isPrivate = false;
+
+    if (aOpener != null) {
+      let parent = BrowserApp.getTabForWindow(aOpener.top);
+      if ((parent != null) && ("isCustomTab" in parent)) {
+        newTab = newTab && !parent.isCustomTab;
+      }
+    }
 
     if (newTab) {
       let parentId = -1;
@@ -3597,6 +3619,7 @@ Tab.prototype = {
       // The search term the user entered to load the current URL
       this.userRequested = "userRequested" in aParams ? aParams.userRequested : "";
       this.isSearch = "isSearch" in aParams ? aParams.isSearch : false;
+      this.isCustomTab = "customTab" in aParams ? aParams.customTab : false;
 
       try {
         this.browser.loadURIWithFlags(aURL, flags, referrerURI, charset, postData);
@@ -3715,6 +3738,50 @@ Tab.prototype = {
 
   getActive: function getActive() {
     return this.browser.docShellIsActive;
+  },
+
+  /**
+   * Unloads the tab from memory to free up resources. The tab will be restored from its session
+   * store data either automatically when it gets selected or after calling unzombify().
+   */
+  zombify: function zombify() {
+    let browser = this.browser;
+    let data = browser.__SS_data;
+    let extra = browser.__SS_extdata;
+
+    // Notify any interested parties (e.g. the session store)
+    // that the original tab object is going to be destroyed
+    let evt = new UIEvent("TabPreZombify", {"bubbles":true, "cancelable":false, "view":window});
+    browser.dispatchEvent(evt);
+
+    // We need this data to correctly create and position the new browser
+    // If this browser is already a zombie, fallback to the session data
+    let currentURL = browser.__SS_restore ? data.entries[0].url : browser.currentURI.spec;
+    let sibling = browser.nextSibling;
+    let isPrivate = PrivateBrowsingUtils.isBrowserPrivate(browser);
+
+    this.destroy();
+    this.create(currentURL, { sibling: sibling, zombifying: true, delayLoad: true, isPrivate: isPrivate });
+
+    // Reattach session store data and flag this browser so it is restored on select
+    browser = this.browser;
+    browser.__SS_data = data;
+    browser.__SS_extdata = extra;
+    browser.__SS_restore = true;
+    browser.setAttribute("pending", "true");
+
+    // Notify the session store to reattach its listeners to the recreated tab object
+    evt = new UIEvent("TabPostZombify", {"bubbles":true, "cancelable":false, "view":window});
+    browser.dispatchEvent(evt);
+  },
+
+  /**
+   * Restores the tab and reloads its contents if it is unloaded from memory and set for delay
+   * loading ("zombified").
+   */
+  unzombify: function unzombify() {
+    let ss = Cc["@mozilla.org/browser/sessionstore;1"].getService(Ci.nsISessionStore);
+    ss.restoreZombieTab(this);
   },
 
   // These constants are used to prioritize high quality metadata over low quality data, so that
@@ -3970,7 +4037,10 @@ Tab.prototype = {
           let displayHost = IdentityHandler.getEffectiveHost();
           let title = { text: displayHost, resource: hostname };
           let selectObj = { title: title, logins: foundLogins };
-          Messaging.sendRequest({ type: "Doorhanger:Logins", data: selectObj });
+          GlobalEventDispatcher.sendRequest({
+            type: "Doorhanger:Logins",
+            data: selectObj
+          });
         }
         break;
       }
@@ -4193,10 +4263,12 @@ Tab.prototype = {
 
     // Filter optimization: Only really send NETWORK state changes to Java listener
     if (aStateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK) {
-      if (AppConstants.NIGHTLY_BUILD && (aStateFlags & Ci.nsIWebProgressListener.STATE_START)) {
-        Profiler.AddMarker("Load start: " + aRequest.QueryInterface(Ci.nsIChannel).originalURI.spec);
-      } else if (AppConstants.NIGHTLY_BUILD && (aStateFlags & Ci.nsIWebProgressListener.STATE_STOP) && !aWebProgress.isLoadingDocument) {
-        Profiler.AddMarker("Load stop: " + aRequest.QueryInterface(Ci.nsIChannel).originalURI.spec);
+      if (AppConstants.MOZ_ENABLE_PROFILER_SPS && AppConstants.NIGHTLY_BUILD) {
+        if (aStateFlags & Ci.nsIWebProgressListener.STATE_START) {
+          Profiler.AddMarker("Load start: " + aRequest.QueryInterface(Ci.nsIChannel).originalURI.spec);
+        } else if ((aStateFlags & Ci.nsIWebProgressListener.STATE_STOP) && !aWebProgress.isLoadingDocument) {
+          Profiler.AddMarker("Load stop: " + aRequest.QueryInterface(Ci.nsIChannel).originalURI.spec);
+        }
       }
 
       if ((aStateFlags & Ci.nsIWebProgressListener.STATE_STOP) && aWebProgress.isLoadingDocument) {
@@ -4735,11 +4807,11 @@ const ElementTouchHelper = {
     let r = aElement.getBoundingClientRect();
 
     // step out of iframes and frames, offsetting scroll values
-    for (let frame = aElement.ownerDocument.defaultView; frame.frameElement && frame != content; frame = frame.parent) {
+    for (let frame = aElement.ownerGlobal; frame.frameElement && frame != content; frame = frame.parent) {
       // adjust client coordinates' origin to be top left of iframe viewport
       let rect = frame.frameElement.getBoundingClientRect();
-      let left = frame.getComputedStyle(frame.frameElement, "").borderLeftWidth;
-      let top = frame.getComputedStyle(frame.frameElement, "").borderTopWidth;
+      let left = frame.getComputedStyle(frame.frameElement).borderLeftWidth;
+      let top = frame.getComputedStyle(frame.frameElement).borderTopWidth;
       scrollX.value += rect.left + parseInt(left);
       scrollY.value += rect.top + parseInt(top);
     }
@@ -4960,7 +5032,7 @@ var FormAssistant = {
     // Ignore this notificaiton if the current tab doesn't contain the invalid element
     let currentElement = aInvalidElements.queryElementAt(0, Ci.nsISupports);
     if (BrowserApp.selectedBrowser.contentDocument !=
-        currentElement.ownerDocument.defaultView.top.document)
+        currentElement.ownerGlobal.top.document)
       return;
 
     this._invalidSubmit = true;
@@ -5464,6 +5536,7 @@ var XPInstallObserver = {
 
         // If nothing aborted, quit the app
         if (cancelQuit.data == false) {
+          Services.obs.notifyObservers(null, "quit-application-proceeding", null);
           let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"].getService(Ci.nsIAppStartup);
           appStartup.quit(Ci.nsIAppStartup.eRestart | Ci.nsIAppStartup.eAttemptQuit);
         }
@@ -6907,7 +6980,7 @@ var Tabs = {
     // zombify it.
     if (lruTab) {
       if (Date.now() - lruTab.lastTouchedAt > expireTimeMs) {
-        MemoryObserver.zombify(lruTab);
+        lruTab.zombify();
         return true;
       }
     }

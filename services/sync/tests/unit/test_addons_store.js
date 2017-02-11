@@ -174,7 +174,7 @@ add_test(function test_ignore_different_appid() {
   do_check_eq(0, failed.length);
 
   let newAddon = getAddonFromAddonManagerByID(addon.id);
-  do_check_false(addon.userDisabled);
+  do_check_false(newAddon.userDisabled);
 
   uninstallAddon(addon);
 
@@ -193,7 +193,7 @@ add_test(function test_ignore_unknown_source() {
   do_check_eq(0, failed.length);
 
   let newAddon = getAddonFromAddonManagerByID(addon.id);
-  do_check_false(addon.userDisabled);
+  do_check_false(newAddon.userDisabled);
 
   uninstallAddon(addon);
 
@@ -298,7 +298,7 @@ add_test(function test_ignore_hotfixes() {
 
   // A hotfix extension is one that has the id the same as the
   // extensions.hotfix.id pref.
-  let prefs = new Preferences("extensions.");
+  let extensionPrefs = new Preferences("extensions.");
 
   let addon = installAddon("test_bootstrap1_1");
   do_check_true(store.isAddonSyncable(addon));
@@ -312,7 +312,7 @@ add_test(function test_ignore_hotfixes() {
   // Basic sanity check.
   do_check_true(store.isAddonSyncable(dummy));
 
-  prefs.set("hotfix.id", dummy.id);
+  extensionPrefs.set("hotfix.id", dummy.id);
   do_check_false(store.isAddonSyncable(dummy));
 
   // Verify that int values don't throw off checking.
@@ -327,7 +327,7 @@ add_test(function test_ignore_hotfixes() {
 
   uninstallAddon(addon);
 
-  prefs.reset("hotfix.id");
+  extensionPrefs.reset("hotfix.id");
 
   run_next_test();
 });
@@ -431,7 +431,7 @@ add_test(function test_create_bad_install() {
   let guid = Utils.makeGUID();
   let record = createRecordForThisApp(guid, id, true, false);
 
-  let failed = store.applyIncomingBatch([record]);
+  /* let failed = */ store.applyIncomingBatch([record]);
   // This addon had no source URI so was skipped - but it's not treated as
   // failure.
   // XXX - this test isn't testing what we thought it was. Previously the addon
@@ -536,4 +536,3 @@ add_test(function cleanup() {
   reconciler.stopListening();
   run_next_test();
 });
-

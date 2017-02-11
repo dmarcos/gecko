@@ -508,7 +508,7 @@ class ICStub
         return (k > INVALID) && (k < LIMIT);
     }
     static bool IsCacheIRKind(Kind k) {
-        return k == CacheIR_Monitored;
+        return k == CacheIR_Monitored || k == CacheIR_Updated;
     }
 
     static const char* KindString(Kind k) {
@@ -956,6 +956,44 @@ class ICUpdatedStub : public ICStub
     }
 };
 
+class ICCacheIR_Updated : public ICUpdatedStub
+{
+    const CacheIRStubInfo* stubInfo_;
+    GCPtrObjectGroup updateStubGroup_;
+    GCPtrId updateStubId_;
+
+  public:
+    ICCacheIR_Updated(JitCode* stubCode, const CacheIRStubInfo* stubInfo)
+      : ICUpdatedStub(ICStub::CacheIR_Updated, stubCode),
+        stubInfo_(stubInfo),
+        updateStubGroup_(nullptr),
+        updateStubId_(JSID_EMPTY)
+    {}
+
+    static ICCacheIR_Updated* Clone(JSContext* cx, ICStubSpace* space, ICStub* firstMonitorStub,
+                                    ICCacheIR_Updated& other);
+
+    GCPtrObjectGroup& updateStubGroup() {
+        return updateStubGroup_;
+    }
+    GCPtrId& updateStubId() {
+        return updateStubId_;
+    }
+
+    void notePreliminaryObject() {
+        extra_ = 1;
+    }
+    bool hasPreliminaryObject() const {
+        return extra_;
+    }
+
+    const CacheIRStubInfo* stubInfo() const {
+        return stubInfo_;
+    }
+
+    uint8_t* stubDataStart();
+};
+
 // Base class for stubcode compilers.
 class ICStubCompiler
 {
@@ -1014,7 +1052,7 @@ class ICStubCompiler
     void enterStubFrame(MacroAssembler& masm, Register scratch);
     void leaveStubFrame(MacroAssembler& masm, bool calledIntoIon = false);
 
-    // Some stubs need to emit SPS profiler updates.  This emits the guarding
+    // Some stubs need to emit Gecko Profiler updates.  This emits the guarding
     // jitcode for those stubs.  If profiling is not enabled, jumps to the
     // given label.
     void guardProfilingEnabled(MacroAssembler& masm, Register scratch, Label* skip);
@@ -1062,9 +1100,6 @@ class ICStubCompiler
     }
 
   protected:
-    void emitPostWriteBarrierSlot(MacroAssembler& masm, Register obj, ValueOperand val,
-                                  Register scratch, LiveGeneralRegisterSet saveRegs);
-
     template <typename T, typename... Args>
     T* newStub(Args&&... args) {
         return ICStub::New<T>(cx, mozilla::Forward<Args>(args)...);
@@ -1085,6 +1120,10 @@ class ICStubCompiler
         return StubSpaceForStub(ICStub::NonCacheIRStubMakesGCCalls(kind), outerScript, engine_);
     }
 };
+
+void BaselineEmitPostWriteBarrierSlot(MacroAssembler& masm, Register obj, ValueOperand val,
+                                      Register scratch, LiveGeneralRegisterSet saveRegs,
+                                      JSRuntime* rt);
 
 class SharedStubInfo
 {
@@ -2215,10 +2254,6 @@ IsPreliminaryObject(JSObject* obj);
 void
 StripPreliminaryObjectStubs(JSContext* cx, ICFallbackStub* stub);
 
-MOZ_MUST_USE bool
-EffectlesslyLookupProperty(JSContext* cx, HandleObject obj, HandleId name,
-                           MutableHandleObject holder, MutableHandleShape shape);
-
 JSObject*
 GetDOMProxyProto(JSObject* obj);
 
@@ -2244,11 +2279,6 @@ UpdateExistingGetPropCallStubs(ICFallbackStub* fallbackStub,
 MOZ_MUST_USE bool
 CheckHasNoSuchProperty(JSContext* cx, JSObject* obj, jsid id,
                        JSObject** lastProto = nullptr, size_t* protoChainDepthOut = nullptr);
-
-void
-GuardReceiverObject(MacroAssembler& masm, ReceiverGuard guard,
-                    Register object, Register scratch,
-                    size_t receiverGuardOffset, Label* failure);
 
 MOZ_MUST_USE bool
 GetProtoShapes(JSObject* obj, size_t protoChainDepth, MutableHandle<ShapeVector> shapes);
@@ -2352,7 +2382,7 @@ class ICGetProp_Generic : public ICMonitoredStub
     };
 };
 
-static uint32_t
+static inline uint32_t
 SimpleTypeDescrKey(SimpleTypeDescr* descr)
 {
     if (descr->is<ScalarTypeDescr>())

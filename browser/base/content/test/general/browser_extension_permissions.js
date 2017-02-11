@@ -39,13 +39,8 @@ function promiseGetAddonByID(id) {
 function checkNotification(panel, url) {
   let icon = panel.getAttribute("icon");
 
-  let uls = panel.firstChild.getElementsByTagNameNS("http://www.w3.org/1999/xhtml", "ul");
-  is(uls.length, 1, "Found the permissions list");
-  let ul = uls[0];
-
-  let headers = panel.firstChild.getElementsByClassName("addon-webext-perm-text");
-  is(headers.length, 1, "Found the header");
-  let header = headers[0];
+  let ul = document.getElementById("addon-webext-perm-list");
+  let header = document.getElementById("addon-webext-perm-intro");
 
   if (url == PERMS_XPI) {
     // The icon should come from the extension, don't bother with the precise
@@ -68,8 +63,8 @@ function checkNotification(panel, url) {
 
 const INSTALL_FUNCTIONS = [
   function installMozAM(url) {
-    ContentTask.spawn(gBrowser.selectedBrowser, url, function*(cUrl) {
-      content.wrappedJSObject.installMozAM(cUrl);
+    return ContentTask.spawn(gBrowser.selectedBrowser, url, function*(cUrl) {
+      yield content.wrappedJSObject.installMozAM(cUrl);
     });
   },
 
@@ -77,6 +72,7 @@ const INSTALL_FUNCTIONS = [
     ContentTask.spawn(gBrowser.selectedBrowser, url, function*(cUrl) {
       content.wrappedJSObject.installTrigger(cUrl);
     });
+    return Promise.resolve();
   },
 ];
 
@@ -122,16 +118,28 @@ add_task(function* () {
       AddonManager.addInstallListener(listener);
     });
 
-    installFn(url);
+    let installMethodPromise = installFn(url);
 
     let panel = yield promisePopupNotificationShown("addon-webext-permissions");
     checkNotification(panel, url);
 
     if (cancel) {
       panel.secondaryButton.click();
+      try {
+        yield installMethodPromise;
+      } catch (err) {}
     } else {
+      // Look for post-install notification
+      let postInstallPromise = promisePopupNotificationShown("addon-installed");
       panel.button.click();
+
+      // Press OK on the post-install notification
+      panel = yield postInstallPromise;
+      panel.button.click();
+
+      yield installMethodPromise;
     }
+
 
     let result = yield installPromise;
     let addon = yield promiseGetAddonByID(ID);

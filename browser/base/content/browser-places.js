@@ -7,6 +7,7 @@ var StarUI = {
   uri: null,
   _batching: false,
   _isNewBookmark: false,
+  _isComposing: false,
   _autoCloseTimer: 0,
 
   _element(aID) {
@@ -23,6 +24,9 @@ var StarUI = {
     element.addEventListener("keypress", this);
     element.addEventListener("mouseout", this);
     element.addEventListener("mousemove", this);
+    element.addEventListener("compositionstart", this);
+    element.addEventListener("compositionend", this);
+    element.addEventListener("input", this);
     element.addEventListener("popuphidden", this);
     element.addEventListener("popupshown", this);
     return this.panel = element;
@@ -135,6 +139,25 @@ var StarUI = {
             break;
         }
         break;
+      case "compositionstart":
+        if (aEvent.defaultPrevented) {
+          // If the composition was canceled, nothing to do here.
+          break;
+        }
+        // During composition, panel shouldn't be hidden automatically.
+        clearTimeout(this._autoCloseTimer);
+        this._isComposing = true;
+        break;
+      case "compositionend":
+        // After composition is committed, "mouseout" or something can set
+        // auto close timer.
+        this._isComposing = false;
+        break;
+      case "input":
+        // Might be edited some text without keyboard events nor composition
+        // events. Let's cancel auto close in such case.
+        clearTimeout(this._autoCloseTimer);
+        break;
       case "mouseout":
         // Explicit fall-through
       case "popupshown":
@@ -143,13 +166,14 @@ var StarUI = {
           break;
         }
         // auto-close if new and not interacted with
-        if (this._isNewBookmark) {
+        if (this._isNewBookmark && !this._isComposing) {
           // 3500ms matches the timeout that Pocket uses in
           // browser/extensions/pocket/content/panels/js/saved.js
           let delay = 3500;
           if (this._closePanelQuickForTesting) {
             delay /= 10;
           }
+          clearTimeout(this._autoCloseTimer);
           this._autoCloseTimer = setTimeout(() => {
             this.panel.hidePopup();
           }, delay);
@@ -1318,6 +1342,7 @@ var BookmarkingUI = {
       return;
     }
 
+    this._initMobileBookmarks(document.getElementById("BMB_mobileBookmarks"));
     this._initRecentBookmarks(document.getElementById("BMB_recentBookmarks"),
                               "subviewbutton");
 
@@ -1355,6 +1380,28 @@ var BookmarkingUI = {
   },
 
   RECENTLY_BOOKMARKED_PREF: "browser.bookmarks.showRecentlyBookmarked",
+
+  // Set by sync after syncing bookmarks successfully once.
+  MOBILE_BOOKMARKS_PREF: "browser.bookmarks.showMobileBookmarks",
+
+  _shouldShowMobileBookmarks() {
+    try {
+      return Services.prefs.getBoolPref(this.MOBILE_BOOKMARKS_PREF);
+    } catch (e) {}
+    // No pref set (or invalid pref set), look for a mobile bookmarks left pane query.
+    const organizerQueryAnno = "PlacesOrganizer/OrganizerQuery";
+    const mobileBookmarksAnno = "MobileBookmarks";
+    let shouldShow = PlacesUtils.annotations.getItemsWithAnnotation(organizerQueryAnno, {}).filter(
+      id => PlacesUtils.annotations.getItemAnnotation(id, organizerQueryAnno) == mobileBookmarksAnno
+    ).length > 0;
+    // Sync will change this pref if/when it adds a mobile bookmarks query.
+    Services.prefs.setBoolPref(this.MOBILE_BOOKMARKS_PREF, shouldShow);
+    return shouldShow;
+  },
+
+  _initMobileBookmarks(mobileMenuItem) {
+    mobileMenuItem.hidden = !this._shouldShowMobileBookmarks();
+  },
 
   _initRecentBookmarks(aHeaderItem, aExtraCSSClass) {
     this._populateRecentBookmarks(aHeaderItem, aExtraCSSClass);
@@ -1457,6 +1504,10 @@ var BookmarkingUI = {
     options.maxResults = kMaxResults;
     let query = PlacesUtils.history.getNewQuery();
 
+    let sh = Cc["@mozilla.org/network/serialization-helper;1"]
+               .getService(Ci.nsISerializationHelper);
+    let loadingPrincipal = sh.serializeToString(document.nodePrincipal);
+
     let fragment = document.createDocumentFragment();
     let root = PlacesUtils.history.executeQuery(query, options).root;
     root.containerOpen = true;
@@ -1476,6 +1527,7 @@ var BookmarkingUI = {
                                  aExtraCSSClass);
       if (icon) {
         item.setAttribute("image", icon);
+        item.setAttribute("loadingprincipal", loadingPrincipal);
       }
       item._placesNode = node;
       fragment.appendChild(item);
@@ -1681,6 +1733,7 @@ var BookmarkingUI = {
 
     this._updateBookmarkPageMenuItem();
     PlacesCommandHook.updateBookmarkAllTabsCommand();
+    this._initMobileBookmarks(document.getElementById("menu_mobileBookmarks"));
     this._initRecentBookmarks(document.getElementById("menu_recentBookmarks"));
   },
 

@@ -127,7 +127,6 @@
 #include "MainThreadUtils.h"
 
 #include "nsIConsoleService.h"
-#include "nsIScriptError.h"
 #include "nsIException.h"
 
 #include "nsVariant.h"
@@ -1382,26 +1381,6 @@ class XPCNativeSet final
     XPCNativeInterface*     mInterfaces[1];
 };
 
-/***************************************************************************/
-// XPCNativeScriptableCreateInfo is used in creating new wrapper and protos.
-// It abstracts out the scriptable interface pointer and the flags.
-
-class MOZ_STACK_CLASS XPCNativeScriptableCreateInfo final
-{
-public:
-    XPCNativeScriptableCreateInfo() {}
-
-    nsIXPCScriptable*
-    GetCallback() const {return mCallback;}
-
-    void
-    SetCallback(already_AddRefed<nsIXPCScriptable>&& callback)
-        {mCallback = callback;}
-
-private:
-    nsCOMPtr<nsIXPCScriptable>  mCallback;
-};
-
 /***********************************************/
 // XPCWrappedNativeProto hold the additional shared wrapper data
 // for XPCWrappedNative whose native objects expose nsIClassInfo.
@@ -1412,7 +1391,7 @@ public:
     static XPCWrappedNativeProto*
     GetNewOrUsed(XPCWrappedNativeScope* scope,
                  nsIClassInfo* classInfo,
-                 const XPCNativeScriptableCreateInfo* scriptableCreateInfo,
+                 nsIXPCScriptable* scriptable,
                  bool callPostCreatePrototype = true);
 
     XPCWrappedNativeScope*
@@ -1477,8 +1456,7 @@ protected:
                           nsIClassInfo* ClassInfo,
                           already_AddRefed<XPCNativeSet>&& Set);
 
-    bool Init(const XPCNativeScriptableCreateInfo* scriptableCreateInfo,
-              bool callPostCreatePrototype);
+    bool Init(nsIXPCScriptable* scriptable, bool callPostCreatePrototype);
 
 private:
 #ifdef DEBUG
@@ -1747,8 +1725,7 @@ public:
     // Returns a string that shuld be free'd using JS_smprintf_free (or null).
     char* ToString(XPCWrappedNativeTearOff* to = nullptr) const;
 
-    static void GatherProtoScriptableCreateInfo(nsIClassInfo* classInfo,
-                                                XPCNativeScriptableCreateInfo& sciProto);
+    static nsIXPCScriptable* GatherProtoScriptable(nsIClassInfo* classInfo);
 
     bool HasExternalReference() const {return mRefCnt > 1;}
 
@@ -1777,7 +1754,7 @@ private:
         FLAT_JS_OBJECT_VALID = JS_BIT(0)
     };
 
-    bool Init(const XPCNativeScriptableCreateInfo* sci);
+    bool Init(nsIXPCScriptable* scriptable);
     bool FinishInit();
 
     bool ExtendSet(XPCNativeInterface* aInterface);
@@ -1789,10 +1766,10 @@ private:
     bool InitTearOffJSObject(XPCWrappedNativeTearOff* to);
 
 public:
-    static const XPCNativeScriptableCreateInfo& GatherScriptableCreateInfo(nsISupports* obj,
-                                                                           nsIClassInfo* classInfo,
-                                                                           XPCNativeScriptableCreateInfo& sciProto,
-                                                                           XPCNativeScriptableCreateInfo& sciWrapper);
+    static void GatherScriptable(nsISupports* obj,
+                                 nsIClassInfo* classInfo,
+                                 nsIXPCScriptable** scrProto,
+                                 nsIXPCScriptable** scrWrapper);
 
 private:
     union
@@ -2429,77 +2406,6 @@ xpc_DumpJSStack(bool showArgs, bool showLocals, bool showThisProps);
 extern char*
 xpc_PrintJSStack(JSContext* cx, bool showArgs, bool showLocals,
                  bool showThisProps);
-
-/***************************************************************************/
-
-// Definition of nsScriptError, defined here because we lack a place to put
-// XPCOM objects associated with the JavaScript engine.
-class nsScriptErrorBase : public nsIScriptError {
-public:
-    nsScriptErrorBase();
-
-  // TODO - do something reasonable on getting null from these babies.
-
-    NS_DECL_NSICONSOLEMESSAGE
-    NS_DECL_NSISCRIPTERROR
-
-protected:
-    virtual ~nsScriptErrorBase();
-
-    void
-    InitializeOnMainThread();
-
-    nsString mMessage;
-    nsString mMessageName;
-    nsString mSourceName;
-    uint32_t mLineNumber;
-    nsString mSourceLine;
-    uint32_t mColumnNumber;
-    uint32_t mFlags;
-    nsCString mCategory;
-    // mOuterWindowID is set on the main thread from InitializeOnMainThread().
-    uint64_t mOuterWindowID;
-    uint64_t mInnerWindowID;
-    int64_t mTimeStamp;
-    // mInitializedOnMainThread and mIsFromPrivateWindow are set on the main
-    // thread from InitializeOnMainThread().
-    mozilla::Atomic<bool> mInitializedOnMainThread;
-    bool mIsFromPrivateWindow;
-};
-
-class nsScriptError final : public nsScriptErrorBase {
-public:
-    nsScriptError() {}
-    NS_DECL_THREADSAFE_ISUPPORTS
-
-private:
-    virtual ~nsScriptError() {}
-};
-
-class nsScriptErrorWithStack : public nsScriptErrorBase {
-public:
-    explicit nsScriptErrorWithStack(JS::HandleObject);
-
-    NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-    NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(nsScriptErrorWithStack)
-
-    NS_IMETHOD Init(const nsAString& message,
-                    const nsAString& sourceName,
-                    const nsAString& sourceLine,
-                    uint32_t lineNumber,
-                    uint32_t columnNumber,
-                    uint32_t flags,
-                    const char* category) override;
-
-    NS_IMETHOD GetStack(JS::MutableHandleValue) override;
-    NS_IMETHOD ToString(nsACString& aResult) override;
-
-private:
-    virtual ~nsScriptErrorWithStack();
-    // Complete stackframe where the error happened.
-    // Must be SavedFrame object.
-    JS::Heap<JSObject*>  mStack;
-};
 
 /******************************************************************************
  * Handles pre/post script processing.
@@ -3182,6 +3088,10 @@ public:
     //
     // Using it in production is inherently unsafe.
     bool forcePermissiveCOWs;
+
+    // True if this compartment has been nuked. If true, any wrappers into or
+    // out of it should be considered invalid.
+    bool wasNuked;
 
     // Whether we've emitted a warning about a property that was filtered out
     // by a security wrapper. See XrayWrapper.cpp.

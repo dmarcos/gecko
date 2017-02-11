@@ -660,8 +660,7 @@ nsSimpleURI::GetAsciiSpec(nsACString &result)
     nsAutoCString buf;
     nsresult rv = GetSpec(buf);
     if (NS_FAILED(rv)) return rv;
-    NS_EscapeURL(buf, esc_OnlyNonASCII|esc_AlwaysCopy, result);
-    return NS_OK;
+    return NS_EscapeURL(buf, esc_OnlyNonASCII|esc_AlwaysCopy, result, fallible);
 }
 
 NS_IMETHODIMP
@@ -813,13 +812,13 @@ nsSimpleURI::SetQuery(const nsACString& aQuery)
     NS_ENSURE_STATE(mMutable);
 
     nsAutoCString query;
-    nsresult rv = NS_EscapeURL(aQuery, esc_Query, query, fallible);
+    nsresult rv = NS_EscapeURL(aQuery, esc_OnlyNonASCII, query, fallible);
     if (NS_FAILED(rv)) {
         return rv;
     }
 
     if (query.IsEmpty()) {
-        // Empty string means to remove ref completely.
+        // Empty string means to remove query completely.
         mIsQueryValid = false;
         mQuery.Truncate(); // invariant: mQuery should be empty when it's not valid
         return NS_OK;
@@ -827,7 +826,7 @@ nsSimpleURI::SetQuery(const nsACString& aQuery)
 
     mIsQueryValid = true;
 
-    // Gracefully skip initial hash
+    // Gracefully skip initial question mark
     if (query[0] == '?') {
         mQuery = Substring(query, 1);
     } else {

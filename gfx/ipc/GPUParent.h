@@ -36,6 +36,7 @@ public:
   mozilla::ipc::IPCResult RecvInitVsyncBridge(Endpoint<PVsyncBridgeParent>&& aVsyncEndpoint) override;
   mozilla::ipc::IPCResult RecvInitImageBridge(Endpoint<PImageBridgeParent>&& aEndpoint) override;
   mozilla::ipc::IPCResult RecvInitVRManager(Endpoint<PVRManagerParent>&& aEndpoint) override;
+  mozilla::ipc::IPCResult RecvInitUiCompositorController(Endpoint<PUiCompositorControllerParent>&& aEndpoint) override;
   mozilla::ipc::IPCResult RecvUpdatePref(const GfxPrefSetting& pref) override;
   mozilla::ipc::IPCResult RecvUpdateVar(const GfxVarUpdate& pref) override;
   mozilla::ipc::IPCResult RecvNewWidgetCompositor(
@@ -53,6 +54,11 @@ public:
   mozilla::ipc::IPCResult RecvAddLayerTreeIdMapping(nsTArray<LayerTreeIdMapping>&& aMappings) override;
   mozilla::ipc::IPCResult RecvRemoveLayerTreeIdMapping(const LayerTreeIdMapping& aMapping) override;
   mozilla::ipc::IPCResult RecvNotifyGpuObservers(const nsCString& aTopic) override;
+  mozilla::ipc::IPCResult RecvRequestMemoryReport(
+    const uint32_t& generation,
+    const bool& anonymize,
+    const bool& minimizeMemoryUsage,
+    const MaybeFileDesc& DMDFile) override;
 
   void ActorDestroy(ActorDestroyReason aWhy) override;
 

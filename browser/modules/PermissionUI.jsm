@@ -279,6 +279,11 @@ this.PermissionPromptPrototype = {
         this.allow();
         return;
       }
+
+      // Tell the browser to refresh the identity block display in case there
+      // are expired permission states.
+      this.browser.dispatchEvent(new this.browser.ownerGlobal
+                                         .CustomEvent("PermissionStateChange"));
     }
 
     // Transform the PermissionPrompt actions into PopupNotification actions.
@@ -341,9 +346,9 @@ this.PermissionPromptPrototype = {
     if (!options.hasOwnProperty("displayURI") || options.displayURI) {
       options.displayURI = this.principal.URI;
     }
-    // Permission prompts are always persistent and don't have a close button.
+    // Permission prompts are always persistent; the close button is controlled by a pref.
     options.persistent = true;
-    options.hideClose = true;
+    options.hideClose = !Services.prefs.getBoolPref("privacy.permissionPrompts.showCloseButton");
 
     this.onBeforeShow();
     chromeWin.PopupNotifications.show(this.browser,

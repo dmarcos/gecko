@@ -6,7 +6,7 @@
 #include "mozilla/XREAppData.h"
 #include "nsXULAppAPI.h"
 #include "application.ini.h"
-#include "nsXPCOMGlue.h"
+#include "mozilla/Bootstrap.h"
 #include "nsXPCOMPrivate.h"
 #include "nsStringGlue.h"
 #include "nsCOMPtr.h"

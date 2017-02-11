@@ -1130,6 +1130,38 @@ HTMLEditor::CreateBR(nsIDOMNode* aNode,
   return CreateBRImpl(address_of(parent), &offset, outBRNode, aSelect);
 }
 
+nsresult
+HTMLEditor::InsertBR(nsCOMPtr<nsIDOMNode>* outBRNode)
+{
+  NS_ENSURE_TRUE(outBRNode, NS_ERROR_NULL_POINTER);
+  *outBRNode = nullptr;
+
+  // calling it text insertion to trigger moz br treatment by rules
+  AutoRules beginRulesSniffing(this, EditAction::insertText, nsIEditor::eNext);
+
+  RefPtr<Selection> selection = GetSelection();
+  NS_ENSURE_STATE(selection);
+
+  if (!selection->Collapsed()) {
+    nsresult rv = DeleteSelection(nsIEditor::eNone, nsIEditor::eStrip);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  nsCOMPtr<nsIDOMNode> selNode;
+  int32_t selOffset;
+  nsresult rv =
+    GetStartNodeAndOffset(selection, getter_AddRefs(selNode), &selOffset);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = CreateBR(selNode, selOffset, outBRNode);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // position selection after br
+  selNode = GetNodeLocation(*outBRNode, &selOffset);
+  selection->SetInterlinePosition(true);
+  return selection->Collapse(selNode, selOffset+1);
+}
+
 void
 HTMLEditor::CollapseSelectionToDeepestNonTableFirstChild(Selection* aSelection,
                                                          nsINode* aNode)
@@ -2841,22 +2873,18 @@ HTMLEditor::RemoveStyleSheet(const nsAString& aURL)
   RefPtr<StyleSheet> sheet = GetStyleSheetForURL(aURL);
   NS_ENSURE_TRUE(sheet, NS_ERROR_UNEXPECTED);
 
-  RefPtr<RemoveStyleSheetTransaction> transaction;
-  nsresult rv =
-    CreateTxnForRemoveStyleSheet(sheet, getter_AddRefs(transaction));
+  RefPtr<RemoveStyleSheetTransaction> transaction =
+    CreateTxnForRemoveStyleSheet(sheet);
   if (!transaction) {
-    rv = NS_ERROR_NULL_POINTER;
-  }
-  if (NS_SUCCEEDED(rv)) {
-    rv = DoTransaction(transaction);
-    if (NS_SUCCEEDED(rv)) {
-      mLastStyleSheetURL.Truncate();        // forget it
-    }
-    // Remove it from our internal list
-    rv = RemoveStyleSheetFromList(aURL);
+    return NS_ERROR_NULL_POINTER;
   }
 
-  return rv;
+  nsresult rv = DoTransaction(transaction);
+  if (NS_SUCCEEDED(rv)) {
+    mLastStyleSheetURL.Truncate();        // forget it
+  }
+  // Remove it from our internal list
+  return RemoveStyleSheetFromList(aURL);
 }
 
 
@@ -2952,7 +2980,7 @@ HTMLEditor::EnableStyleSheet(const nsAString& aURL,
 
   // Ensure the style sheet is owned by our document.
   nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocWeak);
-  sheet->SetOwningDocument(doc);
+  sheet->SetAssociatedDocument(doc, StyleSheet::NotOwnedByDocument);
 
   if (sheet->IsServo()) {
     // XXXheycam ServoStyleSheets don't support being enabled/disabled yet.
@@ -2974,7 +3002,7 @@ HTMLEditor::EnableExistingStyleSheet(const nsAString& aURL)
 
   // Ensure the style sheet is owned by our document.
   nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocWeak);
-  sheet->SetOwningDocument(doc);
+  sheet->SetAssociatedDocument(doc, StyleSheet::NotOwnedByDocument);
 
   if (sheet->IsServo()) {
     // XXXheycam ServoStyleSheets don't support being enabled/disabled yet.
@@ -3443,31 +3471,29 @@ HTMLEditor::StyleSheetLoaded(StyleSheet* aSheet,
                              bool aWasAlternate,
                              nsresult aStatus)
 {
-  nsresult rv = NS_OK;
   AutoEditBatch batchIt(this);
 
   if (!mLastStyleSheetURL.IsEmpty())
     RemoveStyleSheet(mLastStyleSheetURL);
 
-  RefPtr<AddStyleSheetTransaction> transaction;
-  rv = CreateTxnForAddStyleSheet(aSheet, getter_AddRefs(transaction));
+  RefPtr<AddStyleSheetTransaction> transaction =
+    CreateTxnForAddStyleSheet(aSheet);
   if (!transaction) {
-    rv = NS_ERROR_NULL_POINTER;
+    return NS_OK;
   }
+
+  nsresult rv = DoTransaction(transaction);
   if (NS_SUCCEEDED(rv)) {
-    rv = DoTransaction(transaction);
+    // Get the URI, then url spec from the sheet
+    nsAutoCString spec;
+    rv = aSheet->GetSheetURI()->GetSpec(spec);
+
     if (NS_SUCCEEDED(rv)) {
-      // Get the URI, then url spec from the sheet
-      nsAutoCString spec;
-      rv = aSheet->GetSheetURI()->GetSpec(spec);
+      // Save it so we can remove before applying the next one
+      mLastStyleSheetURL.AssignWithConversion(spec.get());
 
-      if (NS_SUCCEEDED(rv)) {
-        // Save it so we can remove before applying the next one
-        mLastStyleSheetURL.AssignWithConversion(spec.get());
-
-        // Also save in our arrays of urls and sheets
-        AddNewStyleSheetToList(mLastStyleSheetURL, aSheet);
-      }
+      // Also save in our arrays of urls and sheets
+      AddNewStyleSheetToList(mLastStyleSheetURL, aSheet);
     }
   }
 

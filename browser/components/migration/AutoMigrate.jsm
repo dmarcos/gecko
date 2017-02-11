@@ -27,12 +27,14 @@ XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
                                   "resource://gre/modules/AsyncShutdown.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
                                   "resource://gre/modules/LoginHelper.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "NewTabUtils",
+                                  "resource://gre/modules/NewTabUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NewTabUtils",
-                                  "resource://gre/modules/NewTabUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch",
+                                  "resource://gre/modules/TelemetryStopwatch.jsm");
 
 Cu.importGlobalProperties(["URL"]);
 
@@ -176,9 +178,13 @@ const AutoMigrate = {
     return profiles ? profiles[0] : null;
   },
 
+  _pendingUndoTasks: false,
   canUndo: Task.async(function* () {
     if (this._savingPromise) {
       yield this._savingPromise;
+    }
+    if (this._pendingUndoTasks) {
+      return false;
     }
     let fileExists = false;
     try {
@@ -190,6 +196,8 @@ const AutoMigrate = {
   }),
 
   undo: Task.async(function* () {
+    let browserId = Preferences.get(kAutoMigrateBrowserPref, "unknown");
+    TelemetryStopwatch.startKeyed("FX_STARTUP_MIGRATION_UNDO_TOTAL_MS", browserId);
     let histogram = Services.telemetry.getHistogramById("FX_STARTUP_MIGRATION_AUTOMATED_IMPORT_UNDO");
     histogram.add(0);
     if (!(yield this.canUndo())) {
@@ -197,6 +205,8 @@ const AutoMigrate = {
       throw new Error("Can't undo!");
     }
 
+    this._pendingUndoTasks = true;
+    this._removeNotificationBars();
     histogram.add(10);
 
     let readPromise = OS.File.read(kUndoStateFullPath, {
@@ -204,13 +214,47 @@ const AutoMigrate = {
       compression: "lz4",
     });
     let stateData = this._dejsonifyUndoState(yield readPromise);
-    yield this._removeUnchangedBookmarks(stateData.get("bookmarks"));
+    histogram.add(12);
+
+    this._errorMap = {bookmarks: 0, visits: 0, logins: 0};
+    let reportErrorTelemetry = (type) => {
+      let histogramId = `FX_STARTUP_MIGRATION_UNDO_${type.toUpperCase()}_ERRORCOUNT`;
+      Services.telemetry.getKeyedHistogramById(histogramId).add(browserId, this._errorMap[type]);
+    };
+
+    let startTelemetryStopwatch = resourceType => {
+      let histogramId = `FX_STARTUP_MIGRATION_UNDO_${resourceType.toUpperCase()}_MS`;
+      TelemetryStopwatch.startKeyed(histogramId, browserId);
+    };
+    let stopTelemetryStopwatch = resourceType => {
+      let histogramId = `FX_STARTUP_MIGRATION_UNDO_${resourceType.toUpperCase()}_MS`;
+      TelemetryStopwatch.finishKeyed(histogramId, browserId);
+    };
+    startTelemetryStopwatch("bookmarks");
+    yield this._removeUnchangedBookmarks(stateData.get("bookmarks")).catch(ex => {
+      Cu.reportError("Uncaught exception when removing unchanged bookmarks!");
+      Cu.reportError(ex);
+    });
+    stopTelemetryStopwatch("bookmarks");
+    reportErrorTelemetry("bookmarks");
     histogram.add(15);
 
-    yield this._removeSomeVisits(stateData.get("visits"));
+    startTelemetryStopwatch("visits");
+    yield this._removeSomeVisits(stateData.get("visits")).catch(ex => {
+      Cu.reportError("Uncaught exception when removing history visits!");
+      Cu.reportError(ex);
+    });
+    stopTelemetryStopwatch("visits");
+    reportErrorTelemetry("visits");
     histogram.add(20);
 
-    yield this._removeUnchangedLogins(stateData.get("logins"));
+    startTelemetryStopwatch("logins");
+    yield this._removeUnchangedLogins(stateData.get("logins")).catch(ex => {
+      Cu.reportError("Uncaught exception when removing unchanged logins!");
+      Cu.reportError(ex);
+    });
+    stopTelemetryStopwatch("logins");
+    reportErrorTelemetry("logins");
     histogram.add(25);
 
     // This is async, but no need to wait for it.
@@ -218,18 +262,12 @@ const AutoMigrate = {
       NewTabUtils.allPages.update();
     }, true);
 
-    this.removeUndoOption(this.UNDO_REMOVED_REASON_UNDO_USED);
+    this._purgeUndoState(this.UNDO_REMOVED_REASON_UNDO_USED);
     histogram.add(30);
+    TelemetryStopwatch.finishKeyed("FX_STARTUP_MIGRATION_UNDO_TOTAL_MS", browserId);
   }),
 
-  removeUndoOption(reason) {
-    // We don't wait for the off-main-thread removal to complete. OS.File will
-    // ensure it happens before shutdown.
-    OS.File.remove(kUndoStateFullPath, {ignoreAbsent: true});
-
-    let migrationBrowser = Preferences.get(kAutoMigrateBrowserPref, "unknown");
-    Services.prefs.clearUserPref(kAutoMigrateBrowserPref);
-
+  _removeNotificationBars() {
     let browserWindows = Services.wm.getEnumerator("navigator:browser");
     while (browserWindows.hasMoreElements()) {
       let win = browserWindows.getNext();
@@ -243,6 +281,18 @@ const AutoMigrate = {
         }
       }
     }
+  },
+
+  _purgeUndoState(reason) {
+    // We don't wait for the off-main-thread removal to complete. OS.File will
+    // ensure it happens before shutdown.
+    OS.File.remove(kUndoStateFullPath, {ignoreAbsent: true}).then(() => {
+      this._pendingUndoTasks = false;
+    });
+
+    let migrationBrowser = Preferences.get(kAutoMigrateBrowserPref, "unknown");
+    Services.prefs.clearUserPref(kAutoMigrateBrowserPref);
+
     let histogram =
       Services.telemetry.getKeyedHistogramById("FX_STARTUP_MIGRATION_UNDO_REASON");
     histogram.add(migrationBrowser, reason);
@@ -278,7 +328,8 @@ const AutoMigrate = {
     // in which case we remove the undo prefs (which will cause canUndo() to
     // return false from now on.):
     if (!this.shouldStillShowUndoPrompt()) {
-      this.removeUndoOption(this.UNDO_REMOVED_REASON_OFFER_EXPIRED);
+      this._purgeUndoState(this.UNDO_REMOVED_REASON_OFFER_EXPIRED);
+      this._removeNotificationBars();
       return;
     }
 
@@ -296,7 +347,8 @@ const AutoMigrate = {
         label: MigrationUtils.getLocalizedString("automigration.undo.keep.label"),
         accessKey: MigrationUtils.getLocalizedString("automigration.undo.keep.accesskey"),
         callback: () => {
-          this.removeUndoOption(this.UNDO_REMOVED_REASON_OFFER_REJECTED);
+          this._purgeUndoState(this.UNDO_REMOVED_REASON_OFFER_REJECTED);
+          this._removeNotificationBars();
         },
       },
       {
@@ -406,7 +458,12 @@ const AutoMigrate = {
     let bmPromises = Array.from(guidToLMMap.keys()).map(guid => {
       // Ignore bookmarks where the promise doesn't resolve (ie that are missing)
       // Also check that the bookmark fetch returns isn't null before adding it.
-      return PlacesUtils.bookmarks.fetch(guid).then(bm => bm && bookmarksFromDB.push(bm), () => {});
+      try {
+        return PlacesUtils.bookmarks.fetch(guid).then(bm => bm && bookmarksFromDB.push(bm), () => {});
+      } catch (ex) {
+        // Ignore immediate exceptions, too.
+      }
+      return Promise.resolve();
     });
     // We can't use the result of Promise.all because that would include nulls
     // for bookmarks that no longer exist (which we're catching above).
@@ -415,7 +472,7 @@ const AutoMigrate = {
       return bm.lastModified.getTime() == guidToLMMap.get(bm.guid).getTime();
     });
 
-    // We need to remove items with no ancestors first, followed by their
+    // We need to remove items without children first, followed by their
     // parents, etc. In order to do this, find out how many ancestors each item
     // has that also appear in our list of things to remove, and sort the items
     // by those numbers. This ensures that children are always removed before
@@ -435,11 +492,16 @@ const AutoMigrate = {
     unchangedBookmarks.forEach(determineAncestorCount);
     unchangedBookmarks.sort((a, b) => b._ancestorCount - a._ancestorCount);
     for (let {guid} of unchangedBookmarks) {
-      yield PlacesUtils.bookmarks.remove(guid, {preventRemovalOfNonEmptyFolders: true}).catch(err => {
+      // Can't just use a .catch() because Bookmarks.remove() can throw (rather
+      // than returning rejected promises).
+      try {
+        yield PlacesUtils.bookmarks.remove(guid, {preventRemovalOfNonEmptyFolders: true});
+      } catch (err) {
         if (err && err.message != "Cannot remove a non-empty folder.") {
+          this._errorMap.bookmarks++;
           Cu.reportError(err);
         }
-      });
+      }
     }
   }),
 
@@ -450,7 +512,13 @@ const AutoMigrate = {
         let foundLogin = foundLogins[0];
         foundLogin.QueryInterface(Ci.nsILoginMetaInfo);
         if (foundLogin.timePasswordChanged == login.timePasswordChanged) {
-          Services.logins.removeLogin(foundLogin);
+          try {
+            Services.logins.removeLogin(foundLogin);
+          } catch (ex) {
+            Cu.reportError("Failed to remove a login for " + foundLogins.hostname);
+            Cu.reportError(ex);
+            this._errorMap.logins++;
+          }
         }
       }
     }
@@ -464,12 +532,22 @@ const AutoMigrate = {
       } catch (ex) {
         continue;
       }
-      yield PlacesUtils.history.removeVisitsByFilter({
+      let visitData = {
         url: urlObj,
         beginDate: PlacesUtils.toDate(urlVisits.first),
         endDate: PlacesUtils.toDate(urlVisits.last),
         limit: urlVisits.visitCount,
-      });
+      };
+      try {
+        yield PlacesUtils.history.removeVisitsByFilter(visitData);
+      } catch (ex) {
+        this._errorMap.visits++;
+        try {
+          visitData.url = visitData.url.href;
+        } catch (ignoredEx) {}
+        Cu.reportError("Failed to remove a visit: " + JSON.stringify(visitData));
+        Cu.reportError(ex);
+      }
     }
   }),
 

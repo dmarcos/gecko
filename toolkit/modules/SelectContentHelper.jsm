@@ -56,7 +56,7 @@ this.SelectContentHelper.prototype = {
     this.global.addMessageListener("Forms:MouseUp", this);
     this.global.addEventListener("pagehide", this);
     this.global.addEventListener("mozhidedropdown", this);
-    let MutationObserver = this.element.ownerDocument.defaultView.MutationObserver;
+    let MutationObserver = this.element.ownerGlobal.MutationObserver;
     this.mut = new MutationObserver(mutations => {
       // Something changed the <select> while it was open, so
       // we'll poke a DeferredTask to update the parent sometime
@@ -113,6 +113,15 @@ this.SelectContentHelper.prototype = {
     });
   },
 
+  dispatchMouseEvent(win, target, eventName) {
+    let mouseEvent = new win.MouseEvent(eventName, {
+      view: win,
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dispatchEvent(mouseEvent);
+  },
+
   receiveMessage(message) {
     switch (message.name) {
       case "Forms:SelectDropDownItem":
@@ -123,7 +132,7 @@ this.SelectContentHelper.prototype = {
       case "Forms:DismissedDropDown":
         let selectedOption = this.element.item(this.element.selectedIndex);
         if (this.initialSelection != selectedOption) {
-          let win = this.element.ownerDocument.defaultView;
+          let win = this.element.ownerGlobal;
           // For ordering of events, we're using non-e10s as our guide here,
           // since the spec isn't exactly clear. In non-e10s, we fire:
           // mousedown, mouseup, input, change, click if the user clicks
@@ -131,15 +140,8 @@ this.SelectContentHelper.prototype = {
           // to select an element in the dropdown, we only fire input and
           // change events.
           if (!this.closedWithEnter) {
-            const MOUSE_EVENTS = ["mousedown", "mouseup"];
-            for (let eventName of MOUSE_EVENTS) {
-              let mouseEvent = new win.MouseEvent(eventName, {
-                view: win,
-                bubbles: true,
-                cancelable: true,
-              });
-              selectedOption.dispatchEvent(mouseEvent);
-            }
+            this.dispatchMouseEvent(win, selectedOption, "mousedown");
+            this.dispatchMouseEvent(win, selectedOption, "mouseup");
             DOMUtils.removeContentState(this.element, kStateActive);
           }
 
@@ -154,12 +156,7 @@ this.SelectContentHelper.prototype = {
           this.element.dispatchEvent(changeEvent);
 
           if (!this.closedWithEnter) {
-            let mouseEvent = new win.MouseEvent("click", {
-              view: win,
-              bubbles: true,
-              cancelable: true,
-            });
-            selectedOption.dispatchEvent(mouseEvent);
+            this.dispatchMouseEvent(win, selectedOption, "click");
           }
         }
 
@@ -175,9 +172,15 @@ this.SelectContentHelper.prototype = {
         break;
 
       case "Forms:MouseUp":
+        let win = this.element.ownerGlobal;
+        if (message.data.onAnchor) {
+          this.dispatchMouseEvent(win, this.element, "mouseup");
+        }
         DOMUtils.removeContentState(this.element, kStateActive);
+        if (message.data.onAnchor) {
+          this.dispatchMouseEvent(win, this.element, "click");
+        }
         break;
-
     }
   },
 
@@ -201,7 +204,7 @@ this.SelectContentHelper.prototype = {
 }
 
 function getComputedStyles(element) {
-  return element.ownerDocument.defaultView.getComputedStyle(element);
+  return element.ownerGlobal.getComputedStyle(element);
 }
 
 function buildOptionListForChildren(node) {
@@ -222,6 +225,11 @@ function buildOptionListForChildren(node) {
         textContent = "";
       }
 
+      // Selected options have the :checked pseudo-class, which
+      // we want to disable before calculating the computed
+      // styles since the user agent styles alter the styling
+      // based on :checked.
+      DOMUtils.addPseudoClassLock(child, ":checked", false);
       let cs = getComputedStyles(child);
 
       let info = {
@@ -234,15 +242,15 @@ function buildOptionListForChildren(node) {
         // an individual style set for direction
         textDirection: cs.direction,
         tooltip: child.title,
-        // XXX this uses a highlight color when this is the selected element.
-        // We need to suppress such highlighting in the content process to get
-        // the option's correct unhighlighted color here.
-        // We also need to detect default color vs. custom so that a standard
-        // color does not override color: menutext in the parent.
-        // backgroundColor: computedStyle.backgroundColor,
-        // color: computedStyle.color,
+        backgroundColor: cs.backgroundColor,
+        color: cs.color,
         children: tagName == "OPTGROUP" ? buildOptionListForChildren(child) : []
       };
+
+      // We must wait until all computedStyles have been
+      // read before we clear the locks.
+      DOMUtils.clearPseudoClassLocks(child);
+
       result.push(info);
     }
   }

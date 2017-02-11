@@ -179,6 +179,9 @@ var tests = [
     *run() {
       this.oldSelectedTab = gBrowser.selectedTab;
       yield BrowserTestUtils.openNewForegroundTab(gBrowser, "http://example.com/");
+      let firstTab = gBrowser.selectedTab;
+
+      yield BrowserTestUtils.openNewForegroundTab(gBrowser, "http://example.com/");
 
       let shown = waitForNotificationPanel();
       let notifyObj = new BasicNotification(this.id);
@@ -186,11 +189,14 @@ var tests = [
       this.notification = showNotification(notifyObj);
       yield shown;
 
-      ok(notifyObj.shownCallbackTriggered, "Should have triggered the shown callback");
+      ok(notifyObj.shownCallbackTriggered, "Should have triggered the shown event");
+      ok(notifyObj.showingCallbackTriggered, "Should have triggered the showing event");
+      // Reset to false so that we can ensure these are not fired a second time.
+      notifyObj.shownCallbackTriggered = false;
+      notifyObj.showingCallbackTriggered = false;
 
-      yield BrowserTestUtils.openNewForegroundTab(gBrowser, "http://example.com/");
       let promiseWin = BrowserTestUtils.waitForNewWindow();
-      gBrowser.replaceTabWithWindow(gBrowser.selectedTab);
+      gBrowser.replaceTabWithWindow(firstTab);
       let win = yield promiseWin;
 
       let anchor = win.document.getElementById("default-notification-icon");
@@ -203,7 +209,15 @@ var tests = [
 
       let id = PopupNotifications.panel.firstChild.getAttribute("popupid");
       ok(id.endsWith("Test#7"), "Should have found the notification from Test7");
-      ok(PopupNotifications.isPanelOpen, "Should have shown the popup again after getting back to the window");
+      ok(PopupNotifications.isPanelOpen,
+         "Should have kept the popup on the first window");
+      ok(!notifyObj.dismissalCallbackTriggered,
+         "Should not have triggered a dismissed event");
+      ok(!notifyObj.shownCallbackTriggered,
+         "Should not have triggered a second shown event");
+      ok(!notifyObj.showingCallbackTriggered,
+         "Should not have triggered a second showing event");
+
       this.notification.remove();
       gBrowser.removeTab(gBrowser.selectedTab);
       gBrowser.selectedTab = this.oldSelectedTab;
@@ -270,5 +284,50 @@ var tests = [
       this.notification3.remove();
     },
     onHidden(popup) { }
+  },
+  // Test that on closebutton click, only the persistent notification
+  // that contained the closebutton loses its persistent status.
+  { id: "Test#10",
+    run() {
+      this.notifyObj1 = new BasicNotification(this.id);
+      this.notifyObj1.id += "_1";
+      this.notifyObj1.anchorID = "geo-notification-icon";
+      this.notifyObj1.options.persistent = true;
+      this.notifyObj1.options.hideClose = false;
+      this.notification1 = showNotification(this.notifyObj1);
+
+      this.notifyObj2 = new BasicNotification(this.id);
+      this.notifyObj2.id += "_2";
+      this.notifyObj2.anchorID = "geo-notification-icon";
+      this.notifyObj2.options.persistent = true;
+      this.notifyObj2.options.hideClose = false;
+      this.notification2 = showNotification(this.notifyObj2);
+
+      this.notifyObj3 = new BasicNotification(this.id);
+      this.notifyObj3.id += "_3";
+      this.notifyObj3.anchorID = "geo-notification-icon";
+      this.notifyObj3.options.persistent = true;
+      this.notifyObj3.options.hideClose = false;
+      this.notification3 = showNotification(this.notifyObj3);
+
+      PopupNotifications._update();
+    },
+    onShown(popup) {
+      let notifications = popup.childNodes;
+      is(notifications.length, 3, "three notifications displayed");
+      EventUtils.synthesizeMouseAtCenter(notifications[1].closebutton, {});
+    },
+    onHidden(popup) {
+      let notifications = popup.childNodes;
+      is(notifications.length, 2, "two notifications displayed");
+
+      ok(this.notification1.options.persistent, "notification 1 is persistent");
+      ok(!this.notification2.options.persistent, "notification 2 is not persistent");
+      ok(this.notification3.options.persistent, "notification 3 is persistent");
+
+      this.notification1.remove();
+      this.notification2.remove();
+      this.notification3.remove();
+    }
   },
 ];

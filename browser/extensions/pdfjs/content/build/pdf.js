@@ -23,8 +23,8 @@
  }
 }(this, function (exports) {
  'use strict';
- var pdfjsVersion = '1.6.454';
- var pdfjsBuild = 'b8cd1433';
+ var pdfjsVersion = '1.7.235';
+ var pdfjsBuild = '3f320f0b';
  var pdfjsFilePath = typeof document !== 'undefined' && document.currentScript ? document.currentScript.src : null;
  var pdfjsLibs = {};
  (function pdfjsWrapper() {
@@ -1434,6 +1434,7 @@
    var warn = sharedUtil.warn;
    var deprecated = sharedUtil.deprecated;
    var createValidAbsoluteUrl = sharedUtil.createValidAbsoluteUrl;
+   var DEFAULT_LINK_REL = 'noopener noreferrer nofollow';
    var CustomStyle = function CustomStyleClosure() {
     var prefixes = [
      'ms',
@@ -1559,7 +1560,7 @@
      globalSettings.externalLinkTarget = LinkTarget.NONE;
      return LinkTarget.NONE;
     case 'externalLinkRel':
-     return globalSettings ? globalSettings.externalLinkRel : 'noreferrer';
+     return globalSettings ? globalSettings.externalLinkRel : DEFAULT_LINK_REL;
     case 'enableStats':
      return !!(globalSettings && globalSettings.enableStats);
     default:
@@ -1591,6 +1592,7 @@
    exports.LinkTarget = LinkTarget;
    exports.hasCanvasTypedArrays = hasCanvasTypedArrays;
    exports.getDefaultSetting = getDefaultSetting;
+   exports.DEFAULT_LINK_REL = DEFAULT_LINK_REL;
   }));
   (function (root, factory) {
    factory(root.pdfjsDisplayFontLoader = {}, root.pdfjsSharedUtil);
@@ -4691,13 +4693,7 @@
        needRestore = true;
       }
       if (this.pendingEOFill) {
-       if (ctx.mozFillRule !== undefined) {
-        ctx.mozFillRule = 'evenodd';
-        ctx.fill();
-        ctx.mozFillRule = 'nonzero';
-       } else {
-        ctx.fill('evenodd');
-       }
+       ctx.fill('evenodd');
        this.pendingEOFill = false;
       } else {
        ctx.fill();
@@ -5084,15 +5080,13 @@
       }
       return pattern;
      },
-     setStrokeColorN: function CanvasGraphics_setStrokeColorN()
-      {
-       this.current.strokeColor = this.getColorN_Pattern(arguments);
-      },
-     setFillColorN: function CanvasGraphics_setFillColorN()
-      {
-       this.current.fillColor = this.getColorN_Pattern(arguments);
-       this.current.patternFill = true;
-      },
+     setStrokeColorN: function CanvasGraphics_setStrokeColorN() {
+      this.current.strokeColor = this.getColorN_Pattern(arguments);
+     },
+     setFillColorN: function CanvasGraphics_setFillColorN() {
+      this.current.fillColor = this.getColorN_Pattern(arguments);
+      this.current.patternFill = true;
+     },
      setStrokeRGBColor: function CanvasGraphics_setStrokeRGBColor(r, g, b) {
       var color = Util.makeCssRgb(r, g, b);
       this.ctx.strokeStyle = color;
@@ -5531,13 +5525,7 @@
       var ctx = this.ctx;
       if (this.pendingClip) {
        if (this.pendingClip === EO_CLIP) {
-        if (ctx.mozFillRule !== undefined) {
-         ctx.mozFillRule = 'evenodd';
-         ctx.clip();
-         ctx.mozFillRule = 'nonzero';
-        } else {
-         ctx.clip('evenodd');
-        }
+        ctx.clip('evenodd');
        } else {
         ctx.clip();
        }
@@ -6824,7 +6812,7 @@
        return;
       }
       if (this.task.onContinue) {
-       this.task.onContinue.call(this.task, this._scheduleNextBound);
+       this.task.onContinue(this._scheduleNextBound);
       } else {
        this._scheduleNext();
       }
@@ -6886,6 +6874,7 @@
    var deprecated = sharedUtil.deprecated;
    var warn = sharedUtil.warn;
    var LinkTarget = displayDOMUtils.LinkTarget;
+   var DEFAULT_LINK_REL = displayDOMUtils.DEFAULT_LINK_REL;
    var isWorker = typeof window === 'undefined';
    if (!globalScope.PDFJS) {
     globalScope.PDFJS = {};
@@ -6953,7 +6942,7 @@
    PDFJS.disableCreateObjectURL = PDFJS.disableCreateObjectURL === undefined ? false : PDFJS.disableCreateObjectURL;
    PDFJS.disableWebGL = PDFJS.disableWebGL === undefined ? true : PDFJS.disableWebGL;
    PDFJS.externalLinkTarget = PDFJS.externalLinkTarget === undefined ? LinkTarget.NONE : PDFJS.externalLinkTarget;
-   PDFJS.externalLinkRel = PDFJS.externalLinkRel === undefined ? 'noreferrer' : PDFJS.externalLinkRel;
+   PDFJS.externalLinkRel = PDFJS.externalLinkRel === undefined ? DEFAULT_LINK_REL : PDFJS.externalLinkRel;
    PDFJS.isEvalSupported = PDFJS.isEvalSupported === undefined ? true : PDFJS.isEvalSupported;
    PDFJS.getDocument = displayAPI.getDocument;
    PDFJS.PDFDataRangeTransport = displayAPI.PDFDataRangeTransport;

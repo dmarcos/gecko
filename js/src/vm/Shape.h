@@ -15,6 +15,7 @@
 #include "mozilla/TemplateLib.h"
 
 #include "jsapi.h"
+#include "jsatom.h"
 #include "jsfriendapi.h"
 #include "jspropertytree.h"
 #include "jstypes.h"
@@ -1406,6 +1407,8 @@ Shape::Shape(const StackShape& other, uint32_t nfixed)
     MOZ_ASSERT_IF(allocKind == gc::AllocKind::SHAPE, !other.isAccessorShape());
 #endif
 
+    MOZ_ASSERT_IF(!isEmptyShape(), AtomIsMarked(zone(), propid()));
+
     MOZ_ASSERT_IF(attrs & (JSPROP_GETTER | JSPROP_SETTER), attrs & JSPROP_SHARED);
     kids.setNull();
 }
@@ -1543,38 +1546,6 @@ Shape::matches(const StackShape& other) const
     return propid_.get() == other.propid &&
            matchesParamsAfterId(other.base, other.slot_, other.attrs, other.flags,
                                 other.rawGetter, other.rawSetter);
-}
-
-// Property lookup hooks on objects are required to return a non-nullptr shape
-// to signify that the property has been found. For cases where the property is
-// not actually represented by a Shape, use a dummy value. This includes all
-// properties of non-native objects, and dense elements for native objects.
-// Use separate APIs for these two cases.
-
-template <AllowGC allowGC>
-static inline void
-MarkNonNativePropertyFound(typename MaybeRooted<Shape*, allowGC>::MutableHandleType propp)
-{
-    propp.set(reinterpret_cast<Shape*>(1));
-}
-
-template <AllowGC allowGC>
-static inline void
-MarkDenseOrTypedArrayElementFound(typename MaybeRooted<Shape*, allowGC>::MutableHandleType propp)
-{
-    propp.set(reinterpret_cast<Shape*>(1));
-}
-
-static inline bool
-IsImplicitDenseOrTypedArrayElement(Shape* prop)
-{
-    return prop == reinterpret_cast<Shape*>(1);
-}
-
-static inline bool
-IsImplicitNonNativeProperty(Shape* prop)
-{
-    return prop == reinterpret_cast<Shape*>(1);
 }
 
 Shape*

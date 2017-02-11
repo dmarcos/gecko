@@ -21,6 +21,7 @@
 
 #include "builtin/Promise.h"
 #include "builtin/TestingFunctions.h"
+#include "gc/GCInternals.h"
 #include "js/Proxy.h"
 #include "proxy/DeadObjectProxy.h"
 #include "vm/ArgumentsObject.h"
@@ -246,7 +247,8 @@ JS_DefineFunctionsWithHelp(JSContext* cx, HandleObject obj, const JSFunctionSpec
             return false;
 
         Rooted<jsid> id(cx, AtomToId(atom));
-        RootedFunction fun(cx, DefineFunction(cx, obj, id, fs->call, fs->nargs, fs->flags));
+        RootedFunction fun(cx, DefineFunction(cx, obj, id, fs->call, fs->nargs,
+                                              fs->flags | JSPROP_RESOLVING));
         if (!fun)
             return false;
 
@@ -477,6 +479,7 @@ js::NewFunctionByIdWithReserved(JSContext* cx, JSNative native, unsigned nargs, 
     MOZ_ASSERT(JSID_IS_STRING(id));
     MOZ_ASSERT(!cx->runtime()->isAtomsCompartment(cx->compartment()));
     CHECK_REQUEST(cx);
+    assertSameCompartment(cx, id);
 
     RootedAtom atom(cx, JSID_TO_ATOM(id));
     return (flags & JSFUN_CONSTRUCTOR) ?
@@ -1163,8 +1166,14 @@ js::DumpHeap(JSContext* cx, FILE* fp, js::DumpHeapNurseryBehaviour nurseryBehavi
         cx->gc.evictNursery(JS::gcreason::API);
 
     DumpHeapTracer dtrc(fp, cx);
+
     fprintf(dtrc.output, "# Roots.\n");
-    TraceRuntime(&dtrc);
+    {
+        JSRuntime* rt = cx->runtime();
+        js::gc::AutoPrepareForTracing prep(cx, WithAtoms);
+        gcstats::AutoPhase ap(rt->gc.stats, gcstats::PHASE_TRACE_HEAP);
+        rt->gc.traceRuntime(&dtrc, prep.session().lock);
+    }
 
     fprintf(dtrc.output, "# Weak maps.\n");
     WeakMapBase::traceAllMappings(&dtrc);
