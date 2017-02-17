@@ -5264,6 +5264,7 @@ pref("dom.placeholder.show_on_focus", true);
 // WebVR is enabled by default in beta and release for Windows and for all
 // platforms in nightly and aurora.
 #if defined(XP_WIN) || defined(XP_MACOSX) || !defined(RELEASE_OR_BETA)
+
 pref("dom.vr.enabled", true);
 #else
 pref("dom.vr.enabled", false);
@@ -5329,6 +5330,7 @@ pref("dom.vr.poseprediction.enabled", true);
 // this requirement to be disabled for special cases such as during automated
 // tests or in a headless kiosk system.
 pref("dom.vr.require-gesture", true);
+
 // path to OSVR DLLs
 pref("gfx.vr.osvr.utilLibPath", "");
 pref("gfx.vr.osvr.commonLibPath", "");

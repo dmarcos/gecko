@@ -7,4 +7,9 @@ chrome.jar:
 
   content/shell.xul                     (content/shell.xul)
   content/shell.js                      (content/shell.js)
-  content/something.html                (content/something.html)
+  content/vrchrome/vrchrome.html        (content/vrchrome/vrchrome.html)
+  content/vrchrome/js/aframe.js         (content/vrchrome/js/aframe.js)
+  content/vrchrome/images/white-hall-sky.jpg        (content/vrchrome/images/white-hall-sky.jpg)
+  content/vrchrome/images/white-hall-floor.png        (content/vrchrome/images/white-hall-floor.png)
+  content/vrchrome/images/white-hall-mountains.png        (content/vrchrome/images/white-hall-mountains.png)
+

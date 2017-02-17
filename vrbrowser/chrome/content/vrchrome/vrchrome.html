@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="https://aframe.io/releases/0.4.0/aframe.min.js"></script>
+</head>
+<body>
+  <a-scene>
+    <a-assets>
+      <img id="skymap" src="images/white-hall-sky.jpg" crossOrigin="anonymous">
+      <img id="floormap" src="images/white-hall-floor.png" crossOrigin="anonymous">
+      <img id="mountainsmap" src="images/white-hall-mountains.png" crossOrigin="anonymous">
+    </a-assets>
+    <a-sky color="#e7e7e7"></a-sky>
+
+    <a-entity id="sky" geometry="primitive:sphere; radius:2000; phiLength:360; phiStart:0; thetaLength:90" material="shader:flat; side:back; src:#skymap;"></a-entity>
+
+    <a-entity id="mountains" geometry="primitive: sphere; radius: 1900; thetaLength: 3; thetaStart: 87; segmentsHeight: 2" material="shader:flat; transparent: true; side:back; src:#mountainsmap;"></a-entity>
+
+    <a-entity id="ground" geometry="primitive: circle; radius: 2000;" rotation="-90 0 0" material="shader: flat; src: #floormap; repeat:4000 4000">
+  </a-scene>
+</body>
+</html>
