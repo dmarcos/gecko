@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-# Make sure the standalone glue doesn't try to get libxpcom.so from graphene/app.
+# Make sure the standalone glue doesn't try to get libxpcom.so from vrbrowser/app.
 NSDISTMODE = copy
 
 include $(topsrcdir)/config/rules.mk
