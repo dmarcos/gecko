@@ -17,7 +17,7 @@ LOCAL_INCLUDES += [
 DISABLE_STL_WRAPPING = True
 
 JS_PREFERENCE_FILES += [
-    'graphene.js',
+    'prefs.js',
 ]
 
 OS_LIBS += [
