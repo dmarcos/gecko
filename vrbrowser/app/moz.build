@@ -19,3 +19,7 @@ DISABLE_STL_WRAPPING = True
 JS_PREFERENCE_FILES += [
     'graphene.js',
 ]
+
+OS_LIBS += [
+  'steam_api',
+]
