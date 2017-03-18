@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>graphene</string>
+	<string>vrbrowser</string>
 	<key>CFBundleGetInfoString</key>
 	<string>%APP_NAME% %APP_VERSION%</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.mozilla.graphene</string>
+	<string>org.mozilla.vrbrowser</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
