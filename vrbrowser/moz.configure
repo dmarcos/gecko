@@ -3,3 +3,17 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 include('../toolkit/moz.configure')
+
+option('--steam-sdk-path', nargs=1, env='STEAM_SDK_PATH',
+       help='Path to Steamworks SDK')
+
+@depends('--steam-sdk-path')
+@imports(_from='os.path', _import='isdir')
+def steam_sdk_path(value):
+    if value:
+        path = value[0]
+        if not isdir(path):
+            die("Invalid value --steam-sdk-path, %s doesn't exist", path)
+        return os.path.realpath(os.path.abspath(path))
+
+set_config('STEAM_SDK_PATH', steam_sdk_path)
