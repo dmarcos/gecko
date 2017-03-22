@@ -4,16 +4,16 @@
 
 include('../toolkit/moz.configure')
 
-option('--steam-sdk-path', nargs=1, env='STEAM_SDK_PATH',
+option('--steamworks-sdk-path', nargs=1, env='STEAMWORKS_SDK_PATH',
        help='Path to Steamworks SDK')
 
-@depends('--steam-sdk-path')
+@depends('--steamworks-sdk-path')
 @imports(_from='os.path', _import='isdir')
-def steam_sdk_path(value):
+def steamworks_sdk_path(value):
     if value:
         path = value[0]
         if not isdir(path):
-            die("Invalid value --steam-sdk-path, %s doesn't exist", path)
+            die("Invalid value --steamworks-sdk-path, %s doesn't exist", path)
         return os.path.realpath(os.path.abspath(path))
 
-set_config('STEAM_SDK_PATH', steam_sdk_path)
+set_config('STEAMWORKS_SDK_PATH', steamworks_sdk_path)
