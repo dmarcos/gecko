@@ -8,7 +8,7 @@
   <!-- The "home" browser could be type="content", and its URL could be https:…,
      - if you wanted to implement it as a remote web page. -->
   <browser id="chrome" type="chrome" src="chrome://vrbrowser/content/vrchrome/vrchrome.html" flex="1" style="display: block;"/>
-  <browser id="content" type="content" src="http://127.0.0.1:8000/examples/webgl_geometry_colors.html" flex="1" style="display: none;"/>
+  <browser id="content" type="content" src="http://threejs.org/examples/webgl_geometry_colors.html" flex="1" style="display: none;"/>
   <script type="application/javascript" src="chrome://vrbrowser/content/shell.js"/>
 </window>
 

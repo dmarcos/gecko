@@ -57,9 +57,61 @@ static void Output(const char *fmt, ... )
   va_end(ap);
 }
 
+//-----------------------------------------------------------------------------
+// Purpose: callback hook for debug text emitted from the Steam API
+//-----------------------------------------------------------------------------
+extern "C" void __cdecl SteamAPIDebugTextHook( int nSeverity, const char *pchDebugText )
+{
+  // if you're running in the debugger, only warnings (nSeverity >= 1) will be sent
+  // if you add -debug_steamapi to the command-line, a lot of extra informational messages will also be sent
+  ::OutputDebugString( pchDebugText );
+
+  if ( nSeverity >= 1 )
+  {
+    // place to set a breakpoint for catching API errors
+    int x = 3;
+    x = x;
+  }
+}
+
 int main(int argc, const char* argv[])
 {
   char exePath[MAXPATHLEN];
+
+  if ( SteamAPI_RestartAppIfNecessary( k_uAppIdInvalid ) )
+  {
+    // if Steam is not running or the game wasn't started through Steam, SteamAPI_RestartAppIfNecessary starts the
+    // local Steam client and also launches this game again.
+
+    // Once you get a public Steam AppID assigned for this game, you need to replace k_uAppIdInvalid with it and
+    // removed steam_appid.txt from the game depot.
+
+    return 255;
+  }
+
+  // Initialize SteamAPI, if this fails we bail out since we depend on Steam for lots of stuff.
+  // You don't necessarily have to though if you write your code to check whether all the Steam
+  // interfaces are NULL before using them and provide alternate paths when they are unavailable.
+  //
+  // This will also load the in-game steam overlay dll into your process.  That dll is normally
+  // injected by steam when it launches games, but by calling this you cause it to always load,
+  // even when not launched via steam.
+  if ( !SteamAPI_Init() )
+  {
+    Output( "SteamAPI_Init() failed\n" );
+    return 255;
+  }
+
+  // set our debug handler
+  SteamClient()->SetWarningMessageHook( &SteamAPIDebugTextHook );
+
+  // Ensure that the user has logged into Steam. This will always return true if the game is launched
+  // from Steam, but if Steam is at the login prompt when you run your game from the debugger, it
+  // will return false.
+  if (SteamUser()->BLoggedOn())
+  {
+    Output( "Steam user is logged in\n" );
+  }
 
   nsresult rv = mozilla::BinaryPath::Get(argv[0], exePath);
   if (NS_FAILED(rv)) {
