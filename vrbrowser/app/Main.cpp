@@ -9,7 +9,6 @@
 #include "application.ini.h"
 #include "mozilla/Bootstrap.h"
 #include "nsXPCOMPrivate.h"
-#include "nsStringGlue.h"
 #include "nsCOMPtr.h"
 #include "nsIFile.h"
 #include "BinaryPath.h"
