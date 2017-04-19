@@ -63,7 +63,14 @@ public:
   NS_IMETHOD
   Run() override
   {
-    MOZ_ASSERT(mPort);
+    NS_ASSERT_OWNINGTHREAD(Runnable);
+
+    // The port can be cycle collected while this runnable is pending in
+    // the event queue.
+    if (!mPort) {
+      return NS_OK;
+    }
+
     MOZ_ASSERT(mPort->mPostMessageRunnable == this);
 
     nsresult rv = DispatchMessage();
@@ -81,6 +88,8 @@ public:
   nsresult
   Cancel() override
   {
+    NS_ASSERT_OWNINGTHREAD(Runnable);
+
     mPort = nullptr;
     mData = nullptr;
     return NS_OK;
@@ -90,6 +99,8 @@ private:
   nsresult
   DispatchMessage() const
   {
+    NS_ASSERT_OWNINGTHREAD(Runnable);
+
     nsCOMPtr<nsIGlobalObject> globalObject = mPort->GetParentObject();
 
     AutoJSAPI jsapi;
@@ -382,49 +393,34 @@ MessagePort::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 
 void
 MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                         const Optional<Sequence<JS::Value>>& aTransferable,
+                         const Sequence<JSObject*>& aTransferable,
                          ErrorResult& aRv)
 {
   // We *must* clone the data here, or the JS::Value could be modified
   // by script
 
-  JS::Rooted<JS::Value> transferable(aCx, JS::UndefinedValue());
-  if (aTransferable.WasPassed()) {
-    const Sequence<JS::Value>& realTransferable = aTransferable.Value();
-
-    // Here we want to check if the transerable object list contains
-    // this port. No other checks are done.
-    for (const JS::Value& value : realTransferable) {
-      if (!value.isObject()) {
-        continue;
-      }
-
-      MessagePort* port = nullptr;
-      nsresult rv = UNWRAP_OBJECT(MessagePort, &value.toObject(), port);
-      if (NS_FAILED(rv)) {
-        continue;
-      }
-
-      if (port == this) {
-        aRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
-        return;
-      }
+  // Here we want to check if the transerable object list contains
+  // this port.
+  for (uint32_t i = 0; i < aTransferable.Length(); ++i) {
+    JSObject* object = aTransferable[i];
+    if (!object) {
+      continue;
     }
 
-    // The input sequence only comes from the generated bindings code, which
-    // ensures it is rooted.
-    JS::HandleValueArray elements =
-      JS::HandleValueArray::fromMarkedLocation(realTransferable.Length(),
-                                               realTransferable.Elements());
-
-    JSObject* array =
-      JS_NewArrayObject(aCx, elements);
-    if (!array) {
-      aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+    MessagePort* port = nullptr;
+    nsresult rv = UNWRAP_OBJECT(MessagePort, object, port);
+    if (NS_SUCCEEDED(rv) && port == this) {
+      aRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
       return;
     }
+  }
 
-    transferable.setObject(*array);
+  JS::Rooted<JS::Value> transferable(aCx, JS::UndefinedValue());
+
+  aRv = nsContentUtils::CreateJSValueFromSequenceOfObject(aCx, aTransferable,
+                                                          &transferable);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
   }
 
   RefPtr<SharedMessagePortMessage> data = new SharedMessagePortMessage();

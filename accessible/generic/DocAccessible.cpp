@@ -483,7 +483,17 @@ DocAccessible::Shutdown()
 
   mDependentIDsHash.Clear();
   mNodeToAccessibleMap.Clear();
-  ClearCache(mAccessibleCache);
+
+  for (auto iter = mAccessibleCache.Iter(); !iter.Done(); iter.Next()) {
+    Accessible* accessible = iter.Data();
+    MOZ_ASSERT(accessible);
+    if (accessible && !accessible->IsDefunct()) {
+      // Unlink parent to avoid its cleaning overhead in shutdown.
+      accessible->mParent = nullptr;
+      accessible->Shutdown();
+    }
+    iter.Remove();
+  }
 
   HyperTextAccessibleWrap::Shutdown();
 
@@ -1472,7 +1482,7 @@ DocAccessible::DoInitialUpdate()
     if (IPCAccessibilityActive()) {
       nsIDocShell* docShell = mDocumentNode->GetDocShell();
       if (RefPtr<dom::TabChild> tabChild = dom::TabChild::GetFrom(docShell)) {
-        DocAccessibleChild* ipcDoc = new DocAccessibleChild(this);
+        DocAccessibleChild* ipcDoc = new DocAccessibleChild(this, tabChild);
         SetIPCDoc(ipcDoc);
 
 #if defined(XP_WIN)
@@ -2087,11 +2097,13 @@ DocAccessible::DoARIAOwnsRelocation(Accessible* aOwner)
           child->SetRelocated(true);
           children->InsertElementAt(arrayIdx, child);
 
-          insertIdx = child->IndexInParent() + 1;
-          arrayIdx++;
-
+          // Create subtree before adjusting the insertion index, since subtree
+          // creation may alter children in the container.
           CreateSubtree(child);
           FireEventsOnInsertion(aOwner);
+
+          insertIdx = child->IndexInParent() + 1;
+          arrayIdx++;
         }
       }
       continue;
@@ -2176,7 +2188,14 @@ DocAccessible::PutChildrenBack(nsTArray<RefPtr<Accessible> >* aChildren,
       TreeWalker walker(origContainer);
       if (walker.Seek(child->GetContent())) {
         Accessible* prevChild = walker.Prev();
-        idxInParent = prevChild ? prevChild->IndexInParent() + 1 : 0;
+        if (prevChild) {
+          idxInParent = prevChild->IndexInParent() + 1;
+          MOZ_ASSERT(origContainer == prevChild->Parent(), "Broken tree");
+          origContainer = prevChild->Parent();
+        }
+        else {
+          idxInParent = 0;
+        }
       }
     }
     MoveChild(child, origContainer, idxInParent);
@@ -2223,13 +2242,21 @@ DocAccessible::MoveChild(Accessible* aChild, Accessible* aNewParent,
     return false;
   }
 
+  MOZ_ASSERT(aIdxInParent <= static_cast<int32_t>(aNewParent->ChildCount()),
+             "Wrong insertion point for a moving child");
+
+  // If the child cannot be re-inserted into the tree, then make sure to remove
+  // it from its present parent and then shutdown it.
+  bool hasInsertionPoint = (aIdxInParent != -1) ||
+    (aIdxInParent <= static_cast<int32_t>(aNewParent->ChildCount()));
+
   TreeMutation rmut(curParent);
-  rmut.BeforeRemoval(aChild, TreeMutation::kNoShutdown);
+  rmut.BeforeRemoval(aChild, hasInsertionPoint && TreeMutation::kNoShutdown);
   curParent->RemoveChild(aChild);
   rmut.Done();
 
   // No insertion point for the child.
-  if (aIdxInParent == -1) {
+  if (!hasInsertionPoint) {
     return true;
   }
 

@@ -20,7 +20,7 @@
 #include <set>
 #include <algorithm>
 #include "resource.h"
-#include "client/windows/sender/crash_report_sender.h"
+#include "windows/sender/crash_report_sender.h"
 #include "common/windows/string_utils-inl.h"
 
 #define CRASH_REPORTER_VALUE L"Enabled"
@@ -206,8 +206,8 @@ static void SetBoolKey(const wchar_t* key, const wchar_t* value, bool enabled)
 static bool GetStringValue(HKEY hRegKey, LPCTSTR valueName, wstring& value)
 {
   DWORD type, dataSize;
-  wchar_t buf[2048];
-  dataSize = sizeof(buf);
+  wchar_t buf[2048] = {};
+  dataSize = sizeof(buf) - 1;
   if (RegQueryValueEx(hRegKey, valueName, nullptr,
                      &type, (LPBYTE)buf, &dataSize) == ERROR_SUCCESS &&
       type == REG_SZ) {
@@ -1391,7 +1391,7 @@ bool UIGetSettingsPath(const string& vendor,
                        const string& product,
                        string& settings_path)
 {
-  wchar_t path[MAX_PATH];
+  wchar_t path[MAX_PATH] = {};
   HRESULT hRes = SHGetFolderPath(nullptr,
                                  CSIDL_APPDATA,
                                  nullptr,
@@ -1402,7 +1402,8 @@ bool UIGetSettingsPath(const string& vendor,
     // registry when the call to SHGetFolderPath is unable to provide this path
     // (Bug 513958).
     HKEY key;
-    DWORD type, size, dwRes;
+    DWORD type, dwRes;
+    DWORD size = sizeof(path) - 1;
     dwRes = ::RegOpenKeyExW(HKEY_CURRENT_USER,
                             L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
                             0,
@@ -1463,16 +1464,21 @@ bool UIDeleteFile(const string& oldfile)
   return DeleteFile(UTF8ToWide(oldfile).c_str()) == TRUE;
 }
 
-ifstream* UIOpenRead(const string& filename)
+ifstream* UIOpenRead(const string& filename, bool binary)
 {
   // adapted from breakpad's src/common/windows/http_upload.cc
+  std::ios_base::openmode mode = ios::in;
+
+  if (binary) {
+    mode = mode | ios::binary;
+  }
 
 #if defined(_MSC_VER)
   ifstream* file = new ifstream();
-  file->open(UTF8ToWide(filename).c_str(), ios::in);
+  file->open(UTF8ToWide(filename).c_str(), mode);
 #else   // GCC
   ifstream* file = new ifstream(WideToMBCP(UTF8ToWide(filename), CP_ACP).c_str(),
-                                ios::in);
+                                mode);
 #endif  // _MSC_VER
 
   return file;
@@ -1545,24 +1551,48 @@ void UIPruneSavedDumps(const std::string& directory)
   }
 }
 
-void UIRunMinidumpAnalyzer(const string& exename, const string& filename)
+bool UIRunProgram(const string& exename,
+                  const std::vector<std::string>& args,
+                  bool wait)
 {
-  wstring cmdLine;
+  wstring cmdLine = L"\"" + UTF8ToWide(exename) + L"\" ";
 
-  cmdLine += L"\"" + UTF8ToWide(exename) + L"\" ";
-  cmdLine += L"\"" + UTF8ToWide(filename) + L"\" ";
+  for (auto arg : args) {
+    cmdLine += L"\"" + UTF8ToWide(arg) + L"\" ";
+  }
 
   STARTUPINFO si = {};
+  si.cb = sizeof(si);
   PROCESS_INFORMATION pi = {};
 
-  si.cb = sizeof(si);
-  si.dwFlags = STARTF_USESHOWWINDOW;
-  si.wShowWindow = SW_SHOWNORMAL;
-
-  if (CreateProcess(nullptr, (LPWSTR)cmdLine.c_str(), nullptr, nullptr, FALSE,
-                    0, nullptr, nullptr, &si, &pi)) {
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
+  if (!CreateProcess(/* lpApplicationName */ nullptr,
+                     (LPWSTR)cmdLine.c_str(),
+                     /* lpProcessAttributes */ nullptr,
+                     /* lpThreadAttributes */ nullptr,
+                     /* bInheritHandles */ false,
+                     NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW,
+                     /* lpEnvironment */ nullptr,
+                     /* lpCurrentDirectory */ nullptr,
+                     &si, &pi)) {
+    return false;
   }
+
+  if (wait) {
+    WaitForSingleObject(pi.hProcess, INFINITE);
+  }
+
+  CloseHandle(pi.hProcess);
+  CloseHandle(pi.hThread);
+  return true;
+}
+
+string
+UIGetEnv(const string name)
+{
+  const wchar_t *var = _wgetenv(UTF8ToWide(name).c_str());
+  if (var && *var) {
+    return WideToUTF8(var);
+  }
+
+  return "";
 }

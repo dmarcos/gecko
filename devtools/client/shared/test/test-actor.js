@@ -9,7 +9,9 @@
 // A helper actor for inspector and markupview tests.
 
 const { Cc, Ci, Cu } = require("chrome");
-const {getRect, getElementFromPoint, getAdjustedQuads} = require("devtools/shared/layout/utils");
+const {
+  getRect, getElementFromPoint, getAdjustedQuads, getWindowDimensions
+} = require("devtools/shared/layout/utils");
 const defer = require("devtools/shared/defer");
 const {Task} = require("devtools/shared/task");
 const {isContentStylesheet} = require("devtools/shared/inspector/css-logic");
@@ -286,6 +288,12 @@ var testSpec = protocol.generateActorSpec({
       request: {
         selector: Arg(0, "string")
       },
+      response: {
+        value: RetVal("json")
+      }
+    },
+    getWindowDimensions: {
+      request: {},
       response: {
         value: RetVal("json")
       }
@@ -782,6 +790,16 @@ var TestActor = exports.TestActor = protocol.ActorClassWithSpec(testSpec, {
     }
 
     return sheets;
+  },
+
+  /**
+   * Returns the window's dimensions for the `window` given.
+   *
+   * @return {Object} An object with `width` and `height` properties, representing the
+   * number of pixels for the document's size.
+   */
+  getWindowDimensions: function () {
+    return getWindowDimensions(this.content);
   }
 });
 
@@ -1042,9 +1060,9 @@ var TestActorFront = exports.TestActorFront = protocol.FrontClassWithSpec(testSp
 
     return {
       p1: {x: lGuide.x1, y: tGuide.y1},
-      p2: {x: rGuide.x1, y: tGuide. y1},
-      p3: {x: rGuide.x1, y: bGuide.y1},
-      p4: {x: lGuide.x1, y: bGuide.y1}
+      p2: {x: +rGuide.x1 + 1, y: tGuide.y1},
+      p3: {x: +rGuide.x1 + 1, y: +bGuide.y1 + 1},
+      p4: {x: lGuide.x1, y: +bGuide.y1 + 1}
     };
   }),
 

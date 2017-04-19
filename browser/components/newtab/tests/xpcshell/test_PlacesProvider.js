@@ -34,11 +34,11 @@ function run_test() {
 // url prefix for test history population
 const TEST_URL = "https://mozilla.com/";
 // time when the test starts execution
-const TIME_NOW = (new Date()).getTime();
+const TIME_NOW = new Date();
 
 // utility function to compute past timestap
 function timeDaysAgo(numDays) {
-  return TIME_NOW - (numDays * 24 * 60 * 60 * 1000);
+  return new Date(TIME_NOW - (numDays * 24 * 60 * 60 * 1000));
 }
 
 // utility function to make a visit for insetion into places db
@@ -145,15 +145,14 @@ add_task(function* test_Links_onLinkChanged() {
 
   let linkChangedPromise = new Promise(resolve => {
     let handler = (_, link) => { // jshint ignore:line
-      /* There are 3 linkChanged events:
+      /* There are 2 linkChanged events:
        * 1. visit insertion (-1 frecency by default)
        * 2. frecency score update (after transition type calculation etc)
-       * 3. title change
        */
       if (link.url === url) {
         equal(link.url, url, `expected url on linkChanged event`);
         linkChangedMsgCount += 1;
-        if (linkChangedMsgCount === 3) {
+        if (linkChangedMsgCount === 2) {
           ok(true, `all linkChanged events captured`);
           provider.off("linkChanged", this);
           resolve();
@@ -165,7 +164,10 @@ add_task(function* test_Links_onLinkChanged() {
 
   // add a visit
   let testURI = NetUtil.newURI(url);
-  yield PlacesTestUtils.addVisits(testURI);
+  yield PlacesUtils.history.insert({
+    url: testURI,
+    visits: [{ transition: PlacesUtils.history.TRANSITIONS.LINK }]
+  });
   yield linkChangedPromise;
 
   yield PlacesTestUtils.clearHistory();

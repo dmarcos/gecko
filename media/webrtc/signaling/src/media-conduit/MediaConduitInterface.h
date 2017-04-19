@@ -196,7 +196,7 @@ public:
    * Obtained packets are passed to the Media-Engine for further
    * processing , say, decoding
    */
-  virtual MediaConduitErrorCode ReceivedRTPPacket(const void *data, int len) = 0;
+  virtual MediaConduitErrorCode ReceivedRTPPacket(const void *data, int len, uint32_t ssrc) = 0;
 
   /**
    * Function triggered on Incoming RTCP packet from the remote
@@ -251,11 +251,19 @@ public:
   /**
    * Functions returning stats needed by w3c stats model.
    */
+
+  virtual bool
+  GetSendPacketTypeStats(webrtc::RtcpPacketTypeCounter* aPacketCounts) = 0;
+
+  virtual bool
+  GetRecvPacketTypeStats(webrtc::RtcpPacketTypeCounter* aPacketCounts) = 0;
+
   virtual bool GetVideoEncoderStats(double* framerateMean,
                                     double* framerateStdDev,
                                     double* bitrateMean,
                                     double* bitrateStdDev,
-                                    uint32_t* droppedFrames) = 0;
+                                    uint32_t* droppedFrames,
+                                    uint32_t* framesEncoded) = 0;
   virtual bool GetVideoDecoderStats(double* framerateMean,
                                     double* framerateStdDev,
                                     double* bitrateMean,
@@ -277,6 +285,8 @@ public:
                                    uint64_t* bytesSent) = 0;
 
   virtual uint64_t CodecPluginID() = 0;
+
+  virtual void SetPCHandle(const std::string& aPCHandle) = 0;
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaSessionConduit)
 
@@ -339,13 +349,15 @@ public:
 
   /**
   * Adds negotiated RTP extensions
+  * XXX Move to MediaSessionConduit
   */
-  virtual void AddLocalRTPExtensions(const std::vector<webrtc::RtpExtension>& extensions) = 0;
+  virtual void AddLocalRTPExtensions(bool aIsSend,
+                                     const std::vector<webrtc::RtpExtension>& extensions) = 0;
 
   /**
   * Returns the negotiated RTP extensions
   */
-  virtual std::vector<webrtc::RtpExtension> GetLocalRTPExtensions() const = 0;
+  virtual std::vector<webrtc::RtpExtension> GetLocalRTPExtensions(bool aIsSend) const = 0;
 
 
   /**

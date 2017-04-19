@@ -281,7 +281,7 @@ public:
     }
 
     if (mOldMenu) {
-      nsWeakFrame weakMenuBar(menubar);
+      AutoWeakFrame weakMenuBar(menubar);
       pm->HidePopup(mOldMenu, false, false, false, false);
       // clear the flag again
       if (mNewMenu && weakMenuBar.IsAlive())
@@ -345,7 +345,9 @@ nsMenuBarFrame::ChangeMenuItem(nsMenuFrame* aMenuItem,
   // avoids flickering
   nsCOMPtr<nsIRunnable> event =
     new nsMenuBarSwitchMenu(GetContent(), aOldMenu, aNewMenu, aSelectFirstItem);
-  return NS_DispatchToCurrentThread(event);
+  return mContent->OwnerDoc()->Dispatch("nsMenuBarSwitchMenu",
+                                        TaskCategory::Other,
+                                        event.forget());
 }
 
 nsMenuFrame*

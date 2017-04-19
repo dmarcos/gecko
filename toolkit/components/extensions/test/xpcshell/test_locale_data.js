@@ -14,7 +14,7 @@ function* generateAddon(data) {
 
   let xpi = Extension.generateXPI(data);
   do_register_cleanup(() => {
-    Services.obs.notifyObservers(xpi, "flush-cache-entry", null);
+    Services.obs.notifyObservers(xpi, "flush-cache-entry");
     xpi.remove(false);
   });
 
@@ -22,7 +22,7 @@ function* generateAddon(data) {
   let jarURI = NetUtil.newURI(`jar:${fileURI.spec}!/webextension/`);
 
   let extension = new ExtensionData(jarURI);
-  yield extension.readManifest();
+  yield extension.loadManifest();
 
   return extension;
 }

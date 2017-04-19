@@ -11,9 +11,9 @@ VOLUME /home/worker/tooltool-cache
 ADD             bin /home/worker/bin
 RUN             chmod +x /home/worker/bin/*
 
-# %include taskcluster/docker/recipes/tooltool.py
-ADD topsrcdir/taskcluster/docker/recipes/tooltool.py /builds/tooltool.py
-ADD topsrcdir/taskcluster/docker/recipes/tooltool.py /setup/tooltool.py
+# %include python/mozbuild/mozbuild/action/tooltool.py
+ADD topsrcdir/python/mozbuild/mozbuild/action/tooltool.py /builds/tooltool.py
+ADD topsrcdir/python/mozbuild/mozbuild/action/tooltool.py /setup/tooltool.py
 
 # %include testing/mozharness/external_tools/robustcheckout.py
 ADD topsrcdir/testing/mozharness/external_tools/robustcheckout.py /usr/local/mercurial/robustcheckout.py
@@ -66,6 +66,9 @@ ADD           buildprops.json /home/worker/
 # Install the screen package here to use with xvfb.
 # Install bison to build binutils.
 RUN yum install -y bison screen
+
+# Install libtool.
+RUN yum install -y libtool
 
 # Set a default command useful for debugging
 CMD ["/bin/bash", "--login"]

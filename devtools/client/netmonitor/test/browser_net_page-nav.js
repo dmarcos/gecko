@@ -12,7 +12,10 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { EVENTS } = monitor.panelWin;
+  let { windowRequire } = monitor.panelWin;
+  let { NetMonitorController } =
+    windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
+  let { EVENTS } = windowRequire("devtools/client/netmonitor/src/constants");
 
   yield testNavigate();
   yield testNavigateBack();
@@ -59,11 +62,11 @@ add_task(function* () {
     removeTab(tab);
     yield onDestroyed;
 
-    ok(!monitor.panelWin.NetMonitorController.client,
+    ok(!NetMonitorController.client,
       "There shouldn't be a client available after destruction.");
-    ok(!monitor.panelWin.NetMonitorController.tabClient,
+    ok(!NetMonitorController.tabClient,
       "There shouldn't be a tabClient available after destruction.");
-    ok(!monitor.panelWin.NetMonitorController.webConsoleClient,
+    ok(!NetMonitorController.webConsoleClient,
       "There shouldn't be a webConsoleClient available after destruction.");
   }
 });

@@ -382,9 +382,17 @@ private:
   // Please note that the event may not cause any text input even if this
   // is true.  E.g., it might be dead key state or Ctrl key may be pressed.
   bool    mIsPrintableKey;
+  // mCharMessageHasGone is true if the message is a keydown message and
+  // it's followed by at least one char message but it's gone at removing
+  // from the queue.  This could occur if PeekMessage() or something is
+  // hooked by odd tool.
+  bool    mCharMessageHasGone;
   // mIsOverridingKeyboardLayout is true if the instance temporarily overriding
   // keyboard layout with specified by the constructor.
   bool    mIsOverridingKeyboardLayout;
+  // mCanIgnoreModifierStateAtKeyPress is true if it's allowed to remove
+  // Ctrl or Alt modifier state at dispatching eKeyPress.
+  bool    mCanIgnoreModifierStateAtKeyPress;
 
   nsTArray<FakeCharMsg>* mFakeCharMsgs;
 
@@ -447,7 +455,7 @@ private:
 
   UINT GetScanCodeWithExtendedFlag() const;
 
-  // The result is one of nsIDOMKeyEvent::DOM_KEY_LOCATION_*.
+  // The result is one of eKeyLocation*.
   uint32_t GetKeyLocation() const;
 
   /**
@@ -508,6 +516,8 @@ private:
     return (aMessage == WM_SYSCHAR || aMessage == WM_SYSDEADCHAR);
   }
   bool MayBeSameCharMessage(const MSG& aCharMsg1, const MSG& aCharMsg2) const;
+  bool IsSamePhysicalKeyMessage(const MSG& aKeyOrCharMsg1,
+                                const MSG& aKeyOrCharMsg2) const;
   bool IsFollowedByPrintableCharMessage() const;
   bool IsFollowedByPrintableCharOrSysCharMessage() const;
   bool IsFollowedByDeadCharMessage() const;
@@ -657,6 +667,8 @@ private:
 
   static const MSG sEmptyMSG;
 
+  static MSG sLastKeyMSG;
+
   static bool IsEmptyMSG(const MSG& aMSG)
   {
     return !memcmp(&aMSG, &sEmptyMSG, sizeof(MSG));
@@ -666,6 +678,13 @@ private:
   {
     return mLastInstance && !IsEmptyMSG(mLastInstance->mRemovingMsg);
   }
+
+public:
+  /**
+   * Returns last key MSG.  If no key MSG has been received yet, the result
+   * is empty MSG (i.e., .message is WM_NULL).
+   */
+  static const MSG& LastKeyMSG() { return sLastKeyMSG; }
 };
 
 class KeyboardLayout

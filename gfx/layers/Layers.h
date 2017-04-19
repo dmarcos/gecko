@@ -9,7 +9,7 @@
 #include <map>
 #include <stdint.h>                     // for uint32_t, uint64_t, uint8_t
 #include <stdio.h>                      // for FILE
-#include <sys/types.h>                  // for int32_t, int64_t
+#include <sys/types.h>                  // for int32_t
 #include "FrameMetrics.h"               // for FrameMetrics
 #include "Units.h"                      // for LayerMargin, LayerPoint, ParentLayerIntRect
 #include "gfxContext.h"
@@ -53,6 +53,8 @@
 #include "ImageContainer.h"
 
 class gfxContext;
+class nsDisplayListBuilder;
+class nsDisplayItem;
 
 extern uint8_t gLayerManagerLayerBuilder;
 
@@ -78,12 +80,16 @@ class AsyncCanvasRenderer;
 class AsyncPanZoomController;
 class BasicLayerManager;
 class ClientLayerManager;
+class HostLayerManager;
 class Layer;
 class LayerMetricsWrapper;
 class PaintedLayer;
 class ContainerLayer;
 class ImageLayer;
+class DisplayItemLayer;
 class ColorLayer;
+class CompositorAnimations;
+class CompositorBridgeChild;
 class TextLayer;
 class CanvasLayer;
 class BorderLayer;
@@ -91,14 +97,18 @@ class ReadbackLayer;
 class ReadbackProcessor;
 class RefLayer;
 class HostLayer;
+class KnowsCompositor;
 class ShadowableLayer;
 class ShadowLayerForwarder;
 class LayerManagerComposite;
 class SpecificLayerAttributes;
+class TransactionIdAllocator;
 class Compositor;
 class FrameUniformityData;
 class PersistentBufferProvider;
 class GlyphArray;
+class WebRenderLayerManager;
+struct AnimData;
 
 namespace layerscope {
 class LayersPacket;
@@ -110,6 +120,11 @@ class LayersPacket;
 
 // Defined in LayerUserData.h; please include that file instead.
 class LayerUserData;
+
+class DidCompositeObserver {
+  public:
+    virtual void DidComposite() = 0;
+};
 
 /*
  * Motivation: For truly smooth animation and video playback, we need to
@@ -193,6 +208,9 @@ public:
   virtual ShadowLayerForwarder* AsShadowForwarder()
   { return nullptr; }
 
+  virtual KnowsCompositor* AsKnowsCompositor()
+  { return nullptr; }
+
   virtual LayerManagerComposite* AsLayerManagerComposite()
   { return nullptr; }
 
@@ -200,6 +218,11 @@ public:
   { return nullptr; }
 
   virtual BasicLayerManager* AsBasicLayerManager()
+  { return nullptr; }
+  virtual HostLayerManager* AsHostLayerManager()
+  { return nullptr; }
+
+  virtual WebRenderLayerManager* AsWebRenderLayerManager()
   { return nullptr; }
 
   /**
@@ -304,6 +327,9 @@ public:
    * flag to EndTransaction.
    */
   virtual void Composite() {}
+
+  virtual void SetNeedsComposite(bool aNeedsComposite) {}
+  virtual bool NeedsComposite() const { return false; }
 
   virtual bool HasShadowManagerInternal() const { return false; }
   bool HasShadowManager() const { return HasShadowManagerInternal(); }
@@ -423,8 +449,11 @@ public:
    * Create a RefLayer for this manager's layer tree.
    */
   virtual already_AddRefed<RefLayer> CreateRefLayer() { return nullptr; }
-
-
+  /**
+   * CONSTRUCTION PHASE ONLY
+   * Create a DisplayItemLayer for this manager's layer tree.
+   */
+  virtual already_AddRefed<DisplayItemLayer> CreateDisplayItemLayer() { return nullptr; }
   /**
    * Can be called anytime, from any thread.
    *
@@ -435,6 +464,15 @@ public:
    */
   static already_AddRefed<ImageContainer> CreateImageContainer(ImageContainer::Mode flag
                                                                 = ImageContainer::SYNCHRONOUS);
+
+  /**
+   * Since the lifetimes of display items and display item layers are different,
+   * calling this tells the layer manager that the display item layer is valid for
+   * only one transaction. Users should call ClearDisplayItemLayers() to remove
+   * references to the dead display item at the end of a transaction.
+   */
+  virtual void TrackDisplayItemLayer(RefPtr<DisplayItemLayer> aLayer);
+  virtual void ClearDisplayItemLayers();
 
   /**
    * Type of layer manager his is. This is to be used sparsely in order to
@@ -557,6 +595,8 @@ public:
    */
   virtual void FlushRendering() { }
 
+  virtual void SendInvalidRegion(const nsIntRegion& aRegion) {}
+
   /**
    * Checks if we need to invalidate the OS widget to trigger
    * painting when updating this layer manager.
@@ -620,9 +660,6 @@ public:
                                       nsTArray<float>& aFrameIntervals);
 
   void RecordFrame();
-  void PostPresent();
-
-  void BeginTabSwitch();
 
   static bool IsLogEnabled();
   static mozilla::LogModule* GetLog();
@@ -665,6 +702,29 @@ public:
     mPaintedPixelCount = 0;
     return count;
   }
+
+  virtual void SetLayerObserverEpoch(uint64_t aLayerObserverEpoch) {}
+
+  virtual void DidComposite(uint64_t aTransactionId,
+                            const mozilla::TimeStamp& aCompositeStart,
+                            const mozilla::TimeStamp& aCompositeEnd) {}
+
+  virtual void AddDidCompositeObserver(DidCompositeObserver* aObserver) { MOZ_CRASH("GFX: LayerManager"); }
+  virtual void RemoveDidCompositeObserver(DidCompositeObserver* aObserver) { MOZ_CRASH("GFX: LayerManager"); }
+
+  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
+											  uint64_t aDeviceResetSeqNo) {}
+
+  virtual TextureFactoryIdentifier GetTextureFactoryIdentifier()
+  {
+    return TextureFactoryIdentifier();
+  }
+
+  virtual void SetTransactionIdAllocator(TransactionIdAllocator* aAllocator) {}
+
+  virtual uint64_t GetLastTransactionId() { return 0; }
+
+  virtual CompositorBridgeChild* GetCompositorBridgeChild() { return nullptr; }
 
 protected:
   RefPtr<Layer> mRoot;
@@ -712,8 +772,6 @@ private:
   };
   FramesTimingRecording mRecording;
 
-  TimeStamp mTabSwitchStart;
-
 public:
   /*
    * Methods to store/get/clear a "pending scroll info update" object on a
@@ -726,14 +784,14 @@ public:
   void ClearPendingScrollInfoUpdate();
 private:
   std::map<FrameMetrics::ViewID,ScrollUpdateInfo> mPendingScrollUpdates;
-};
 
-typedef InfallibleTArray<Animation> AnimationArray;
-
-struct AnimData {
-  InfallibleTArray<mozilla::StyleAnimationValue> mStartValues;
-  InfallibleTArray<mozilla::StyleAnimationValue> mEndValues;
-  InfallibleTArray<Maybe<mozilla::ComputedTimingFunction>> mFunctions;
+  // Display items are only valid during this transaction.
+  // At the end of the transaction, we have to go and clear out
+  // DisplayItemLayer's and null their display item. See comment
+  // above DisplayItemLayer declaration.
+  // Since layers are ref counted, we also have to stop holding
+  // a reference to the display item layer as well.
+  nsTArray<RefPtr<DisplayItemLayer>> mDisplayItemLayers;
 };
 
 /**
@@ -743,12 +801,15 @@ struct AnimData {
 class Layer {
   NS_INLINE_DECL_REFCOUNTING(Layer)
 
+  typedef InfallibleTArray<Animation> AnimationArray;
+
 public:
   // Keep these in alphabetical order
   enum LayerType {
     TYPE_CANVAS,
     TYPE_COLOR,
     TYPE_CONTAINER,
+    TYPE_DISPLAYITEM,
     TYPE_IMAGE,
     TYPE_TEXT,
     TYPE_BORDER,
@@ -1180,7 +1241,7 @@ public:
   void ClearAnimations();
   // This is only called when the layer tree is updated. Do not call this from
   // layout code.  To add an animation to this layer, use AddAnimation.
-  void SetAnimations(const AnimationArray& aAnimations);
+  void SetCompositorAnimations(const CompositorAnimations& aCompositorAnimations);
   // Go through all animations in this layer and its children and, for
   // any animations with a null start time, update their start time such
   // that at |aReadyTime| the animation's current time corresponds to its
@@ -1254,9 +1315,11 @@ public:
   }
 
   // Set during construction for the container layer of scrollbar components.
-  void SetIsScrollbarContainer()
+  // |aScrollId| holds the scroll identifier of the scrollable content that
+  // the scrollbar is for.
+  void SetIsScrollbarContainer(FrameMetrics::ViewID aScrollId)
   {
-    if (mSimpleAttrs.SetIsScrollbarContainer()) {
+    if (mSimpleAttrs.SetIsScrollbarContainer(aScrollId)) {
       MutatedSimple();
     }
   }
@@ -1370,6 +1433,7 @@ public:
   // Note that all lengths in animation data are either in CSS pixels or app
   // units and must be converted to device pixels by the compositor.
   AnimationArray& GetAnimations() { return mAnimations; }
+  uint64_t GetCompositorAnimationsId() { return mCompositorAnimationsId; }
   InfallibleTArray<AnimData>& GetAnimationData() { return mAnimationData; }
 
   uint64_t GetAnimationGeneration() { return mAnimationGeneration; }
@@ -1537,6 +1601,12 @@ public:
    * ShadowableLayer.  Can be used anytime.
    */
   virtual ShadowableLayer* AsShadowableLayer() { return nullptr; }
+
+  /**
+   * Dynamic cast as a DisplayItemLayer. Return null if not a
+   * DisplayItemLayer. Can be used anytime.
+   */
+  virtual DisplayItemLayer* AsDisplayItemLayer() { return nullptr; }
 
   // These getters can be used anytime.  They return the effective
   // values that should be used when drawing this layer to screen,
@@ -1748,6 +1818,8 @@ public:
   AsyncPanZoomController* GetAsyncPanZoomController(uint32_t aIndex) const;
   // The ScrollMetadataChanged function is used internally to ensure the APZC array length
   // matches the frame metrics array length.
+
+  virtual void ClearCachedResources() {}
 private:
   void ScrollMetadataChanged();
 public:
@@ -1758,8 +1830,6 @@ public:
   void SetDebugColorIndex(uint32_t aIndex) { mDebugColorIndex = aIndex; }
   uint32_t GetDebugColorIndex() { return mDebugColorIndex; }
 #endif
-
-  virtual LayerRenderState GetRenderState() { return LayerRenderState(); }
 
   void Mutated() {
     mManager->Mutated(this);
@@ -1870,6 +1940,7 @@ protected:
   nsAutoPtr<gfx::Matrix4x4> mPendingTransform;
   gfx::Matrix4x4 mEffectiveTransform;
   AnimationArray mAnimations;
+  uint64_t mCompositorAnimationsId;
   // See mPendingTransform above.
   nsAutoPtr<AnimationArray> mPendingAnimations;
   InfallibleTArray<AnimData> mAnimationData;
@@ -2273,6 +2344,61 @@ protected:
 };
 
 /**
+ * A generic layer that references back to its display item.
+ *
+ * In order to not throw away information early in the pipeline from layout -> webrender,
+ * we'd like a generic layer type that can represent all the nsDisplayItems instead of
+ * creating a new layer type for each nsDisplayItem for Webrender. Another option
+ * is to break down nsDisplayItems into smaller nsDisplayItems early in the pipeline.
+ * The problem with this is that the whole pipeline would have to deal with more
+ * display items, which is slower.
+ *
+ * An alternative is to create a DisplayItemLayer, but the wrinkle with this is that
+ * it has a pointer to its nsDisplayItem. Managing the lifetime is key as display items
+ * only live as long as their display list builder, which goes away at the end of a paint.
+ * Layers however, are retained between paints.
+ * It's ok to recycle a DisplayItemLayer for a different display item since its just a pointer.
+ * Instead, when a layer transaction is completed, it is up to the layer manager to tell
+ * DisplayItemLayers that the display item pointer is no longer valid.
+ */
+class DisplayItemLayer : public Layer {
+  public:
+    virtual DisplayItemLayer* AsDisplayItemLayer() override { return this; }
+    void EndTransaction();
+
+    MOZ_LAYER_DECL_NAME("DisplayItemLayer", TYPE_DISPLAYITEM)
+
+    void SetDisplayItem(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder) {
+      mItem = aItem;
+      mBuilder = aBuilder;
+    }
+
+    nsDisplayItem* GetDisplayItem() { return mItem; }
+    nsDisplayListBuilder* GetDisplayListBuilder() { return mBuilder; }
+
+    virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface) override
+    {
+      gfx::Matrix4x4 idealTransform = GetLocalTransform() * aTransformToSurface;
+      mEffectiveTransform = SnapTransformTranslation(idealTransform, nullptr);
+      ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
+    }
+
+  protected:
+    DisplayItemLayer(LayerManager* aManager, void* aImplData)
+      : Layer(aManager, aImplData)
+      , mItem(nullptr)
+  {}
+
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) override;
+
+  virtual void DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent) override;
+
+  // READ COMMENT ABOVE TO ENSURE WE DON'T HAVE A DANGLING POINTER
+  nsDisplayItem* mItem;
+  nsDisplayListBuilder* mBuilder;
+};
+
+/**
  * A Layer which just renders a solid color in its visible region. It actually
  * can fill any area that contains the visible region, so if you need to
  * restrict the area filled, set a clip region on this layer.
@@ -2433,6 +2559,13 @@ public:
     Mutated();
   }
 
+  virtual void SetStyles(const BorderStyles& aBorderStyles)
+  {
+    MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) Widths", this));
+    PodCopy(&mBorderStyles[0], &aBorderStyles[0], 4);
+    Mutated();
+  }
+
   MOZ_LAYER_DECL_NAME("BorderLayer", TYPE_BORDER)
 
   virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface) override
@@ -2460,6 +2593,7 @@ protected:
   LayerRect mRect;
   BorderCorners mCorners;
   BorderWidths mWidths;
+  BorderStyles mBorderStyles;
 };
 
 /**
@@ -2731,7 +2865,7 @@ public:
   // These getters can be used anytime.
   virtual RefLayer* AsRefLayer() override { return this; }
 
-  virtual int64_t GetReferentId() { return mId; }
+  virtual uint64_t GetReferentId() { return mId; }
 
   /**
    * DRAWING PHASE ONLY

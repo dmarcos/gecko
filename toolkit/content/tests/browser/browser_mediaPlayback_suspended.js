@@ -1,10 +1,10 @@
 const PAGE = "https://example.com/browser/toolkit/content/tests/browser/file_mediaPlayback2.html";
 
 var SuspendedType = {
-  NONE_SUSPENDED             : 0,
-  SUSPENDED_PAUSE            : 1,
-  SUSPENDED_BLOCK            : 2,
-  SUSPENDED_PAUSE_DISPOSABLE : 3
+  NONE_SUSPENDED: 0,
+  SUSPENDED_PAUSE: 1,
+  SUSPENDED_BLOCK: 2,
+  SUSPENDED_PAUSE_DISPOSABLE: 3
 };
 
 function wait_for_event(browser, event) {
@@ -23,7 +23,7 @@ function check_audio_onplay() {
   var audio = list[0];
   return new Promise((resolve, reject) => {
     audio.onplay = () => {
-      ok(needToReceiveOnPlay, "Should not receive play event!");
+      ok(false, "Should not receive play event!");
       this.onplay = null;
       reject();
     };

@@ -5,11 +5,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/PContent.h"
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/HashFunctions.h"
+#include "mozilla/ServoStyleSet.h"
 #include "mozilla/UniquePtrExtensions.h"
 
 #include "nsXULAppAPI.h"
@@ -60,11 +61,22 @@
     return NS_ERROR_NOT_AVAILABLE;                                             \
   }                                                                            \
 } while (0);
+class WatchinPrefRAII {
+public:
+  WatchinPrefRAII() {
+    pref_SetWatchingPref(true);
+  }
+  ~WatchinPrefRAII() {
+    pref_SetWatchingPref(false);
+  }
+};
+#define WATCHING_PREF_RAII() WatchinPrefRAII watchingPrefRAII
 #else
 #define ENSURE_MAIN_PROCESS(message, pref)                                     \
   if (MOZ_UNLIKELY(!XRE_IsParentProcess())) {        \
     return NS_ERROR_NOT_AVAILABLE;                                             \
   }
+#define WATCHING_PREF_RAII()
 #endif
 
 class PrefCallback;
@@ -341,7 +353,7 @@ PreferenceServiceReporter::CollectReports(
   for (auto iter = rootBranch->mObservers.Iter(); !iter.Done(); iter.Next()) {
     nsAutoPtr<PrefCallback>& callback = iter.Data();
     nsPrefBranch* prefBranch = callback->GetPrefBranch();
-    const char* pref = prefBranch->getPrefName(callback->GetDomain().get());
+    const auto& pref = prefBranch->getPrefName(callback->GetDomain().get());
 
     if (callback->IsWeak()) {
       nsCOMPtr<nsIObserver> callbackRef = do_QueryReferent(callback->mWeakRef);
@@ -354,7 +366,7 @@ PreferenceServiceReporter::CollectReports(
       numStrong++;
     }
 
-    nsDependentCString prefString(pref);
+    nsDependentCString prefString(pref.get());
     uint32_t oldCount = 0;
     prefCounter.Get(prefString, &oldCount);
     uint32_t currentCount = oldCount + 1;
@@ -467,10 +479,11 @@ bool
 Preferences::InitStaticMembers()
 {
 #ifndef MOZ_B2G
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(NS_IsMainThread() || mozilla::ServoStyleSet::IsInServoTraversal());
 #endif
 
   if (!sShutdown && !sPreferences) {
+    MOZ_ASSERT(NS_IsMainThread());
     nsCOMPtr<nsIPrefService> prefService =
       do_GetService(NS_PREFSERVICE_CONTRACTID);
   }
@@ -546,6 +559,14 @@ NS_INTERFACE_MAP_END
  * nsIPrefService Implementation
  */
 
+InfallibleTArray<Preferences::PrefSetting>* gInitPrefs;
+
+/*static*/
+void
+Preferences::SetInitPreferences(nsTArray<PrefSetting>* aPrefs) {
+  gInitPrefs = new InfallibleTArray<PrefSetting>(mozilla::Move(*aPrefs));
+}
+
 nsresult
 Preferences::Init()
 {
@@ -557,15 +578,13 @@ Preferences::Init()
   rv = pref_InitInitialObjects();
   NS_ENSURE_SUCCESS(rv, rv);
 
-  using mozilla::dom::ContentChild;
   if (XRE_IsContentProcess()) {
-    InfallibleTArray<PrefSetting> prefs;
-    ContentChild::GetSingleton()->SendReadPrefsArray(&prefs);
-
-    // Store the array
-    for (uint32_t i = 0; i < prefs.Length(); ++i) {
-      pref_SetPref(prefs[i]);
+    MOZ_ASSERT(gInitPrefs);
+    for (unsigned int i = 0; i < gInitPrefs->Length(); i++) {
+      Preferences::SetPreference(gInitPrefs->ElementAt(i));
     }
+    delete gInitPrefs;
+    gInitPrefs = nullptr;
     return NS_OK;
   }
 
@@ -779,6 +798,20 @@ Preferences::GetPreferences(InfallibleTArray<PrefSetting>* aPrefs)
     pref_GetPrefFromEntry(entry, pref);
   }
 }
+
+#ifdef DEBUG
+void
+Preferences::SetInitPhase(pref_initPhase phase)
+{
+  pref_SetInitPhase(phase);
+}
+
+pref_initPhase
+Preferences::InitPhase()
+{
+  return pref_GetInitPhase();
+}
+#endif
 
 NS_IMETHODIMP
 Preferences::GetBranch(const char *aPrefRoot, nsIPrefBranch **_retval)
@@ -1686,6 +1719,34 @@ Preferences::RemoveObservers(nsIObserver* aObserver,
   return NS_OK;
 }
 
+static void NotifyObserver(const char* aPref, void* aClosure)
+{
+  nsCOMPtr<nsIObserver> observer = static_cast<nsIObserver*>(aClosure);
+  observer->Observe(nullptr, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID,
+                    NS_ConvertASCIItoUTF16(aPref).get());
+}
+
+static void RegisterPriorityCallback(PrefChangedFunc aCallback,
+                                     const char* aPref,
+                                     void* aClosure)
+{
+  MOZ_ASSERT(Preferences::IsServiceAvailable());
+
+  ValueObserverHashKey hashKey(aPref, aCallback, Preferences::ExactMatch);
+  RefPtr<ValueObserver> observer;
+  gObserverTable->Get(&hashKey, getter_AddRefs(observer));
+  if (observer) {
+    observer->AppendClosure(aClosure);
+    return;
+  }
+
+  observer = new ValueObserver(aPref, aCallback, Preferences::ExactMatch);
+  observer->AppendClosure(aClosure);
+  PREF_RegisterPriorityCallback(aPref, NotifyObserver,
+                                static_cast<nsIObserver*>(observer));
+  gObserverTable->Put(observer, observer);
+}
+
 // static
 nsresult
 Preferences::RegisterCallback(PrefChangedFunc aCallback,
@@ -1718,6 +1779,7 @@ Preferences::RegisterCallbackAndCall(PrefChangedFunc aCallback,
                                      void* aClosure,
                                      MatchKind aMatchKind)
 {
+  WATCHING_PREF_RAII();
   nsresult rv = RegisterCallback(aCallback, aPref, aClosure, aMatchKind);
   if (NS_SUCCEEDED(rv)) {
     (*aCallback)(aPref, aClosure);
@@ -1752,6 +1814,10 @@ Preferences::UnregisterCallback(PrefChangedFunc aCallback,
   return NS_OK;
 }
 
+// We insert cache observers using RegisterPriorityCallback to ensure they
+// are called prior to ordinary pref observers.  Doing this ensures that
+// ordinary observers will never get stale values from cache variables.
+
 static void BoolVarChanged(const char* aPref, void* aClosure)
 {
   CacheData* cache = static_cast<CacheData*>(aClosure);
@@ -1765,6 +1831,7 @@ Preferences::AddBoolVarCache(bool* aCache,
                              const char* aPref,
                              bool aDefault)
 {
+  WATCHING_PREF_RAII();
   NS_ASSERTION(aCache, "aCache must not be NULL");
 #ifdef DEBUG
   AssertNotAlreadyCached("bool", aPref, aCache);
@@ -1774,7 +1841,8 @@ Preferences::AddBoolVarCache(bool* aCache,
   data->cacheLocation = aCache;
   data->defaultValueBool = aDefault;
   gCacheData->AppendElement(data);
-  return RegisterCallback(BoolVarChanged, aPref, data, ExactMatch);
+  RegisterPriorityCallback(BoolVarChanged, aPref, data);
+  return NS_OK;
 }
 
 static void IntVarChanged(const char* aPref, void* aClosure)
@@ -1790,6 +1858,7 @@ Preferences::AddIntVarCache(int32_t* aCache,
                             const char* aPref,
                             int32_t aDefault)
 {
+  WATCHING_PREF_RAII();
   NS_ASSERTION(aCache, "aCache must not be NULL");
 #ifdef DEBUG
   AssertNotAlreadyCached("int", aPref, aCache);
@@ -1799,7 +1868,8 @@ Preferences::AddIntVarCache(int32_t* aCache,
   data->cacheLocation = aCache;
   data->defaultValueInt = aDefault;
   gCacheData->AppendElement(data);
-  return RegisterCallback(IntVarChanged, aPref, data, ExactMatch);
+  RegisterPriorityCallback(IntVarChanged, aPref, data);
+  return NS_OK;
 }
 
 static void UintVarChanged(const char* aPref, void* aClosure)
@@ -1815,6 +1885,7 @@ Preferences::AddUintVarCache(uint32_t* aCache,
                              const char* aPref,
                              uint32_t aDefault)
 {
+  WATCHING_PREF_RAII();
   NS_ASSERTION(aCache, "aCache must not be NULL");
 #ifdef DEBUG
   AssertNotAlreadyCached("uint", aPref, aCache);
@@ -1824,7 +1895,8 @@ Preferences::AddUintVarCache(uint32_t* aCache,
   data->cacheLocation = aCache;
   data->defaultValueUint = aDefault;
   gCacheData->AppendElement(data);
-  return RegisterCallback(UintVarChanged, aPref, data, ExactMatch);
+  RegisterPriorityCallback(UintVarChanged, aPref, data);
+  return NS_OK;
 }
 
 template <MemoryOrdering Order>
@@ -1842,6 +1914,7 @@ Preferences::AddAtomicUintVarCache(Atomic<uint32_t, Order>* aCache,
                                    const char* aPref,
                                    uint32_t aDefault)
 {
+  WATCHING_PREF_RAII();
   NS_ASSERTION(aCache, "aCache must not be NULL");
 #ifdef DEBUG
   AssertNotAlreadyCached("uint", aPref, aCache);
@@ -1851,7 +1924,8 @@ Preferences::AddAtomicUintVarCache(Atomic<uint32_t, Order>* aCache,
   data->cacheLocation = aCache;
   data->defaultValueUint = aDefault;
   gCacheData->AppendElement(data);
-  return RegisterCallback(AtomicUintVarChanged<Order>, aPref, data, ExactMatch);
+  RegisterPriorityCallback(AtomicUintVarChanged<Order>, aPref, data);
+  return NS_OK;
 }
 
 // Since the definition of this template function is not in a header file,
@@ -1874,6 +1948,7 @@ Preferences::AddFloatVarCache(float* aCache,
                              const char* aPref,
                              float aDefault)
 {
+  WATCHING_PREF_RAII();
   NS_ASSERTION(aCache, "aCache must not be NULL");
 #ifdef DEBUG
   AssertNotAlreadyCached("float", aPref, aCache);
@@ -1883,7 +1958,8 @@ Preferences::AddFloatVarCache(float* aCache,
   data->cacheLocation = aCache;
   data->defaultValueFloat = aDefault;
   gCacheData->AppendElement(data);
-  return RegisterCallback(FloatVarChanged, aPref, data, ExactMatch);
+  RegisterPriorityCallback(FloatVarChanged, aPref, data);
+  return NS_OK;
 }
 
 // static

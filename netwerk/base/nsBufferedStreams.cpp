@@ -282,7 +282,7 @@ NS_INTERFACE_MAP_BEGIN(nsBufferedInputStream)
     NS_INTERFACE_MAP_ENTRY(nsIInputStream)
     NS_INTERFACE_MAP_ENTRY(nsIBufferedInputStream)
     NS_INTERFACE_MAP_ENTRY(nsIStreamBufferAccess)
-    NS_INTERFACE_MAP_ENTRY(nsIIPCSerializableInputStream)
+    NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIIPCSerializableInputStream, IsIPCSerializable())
     NS_IMPL_QUERY_CLASSINFO(nsBufferedInputStream)
 NS_INTERFACE_MAP_END_INHERITING(nsBufferedStream)
 
@@ -554,7 +554,8 @@ nsBufferedInputStream::Serialize(InputStreamParams& aParams,
         MOZ_ASSERT(stream);
 
         InputStreamParams wrappedParams;
-        SerializeInputStream(stream, wrappedParams, aFileDescriptors);
+        InputStreamHelper::SerializeInputStream(stream, wrappedParams,
+                                                aFileDescriptors);
 
         params.optionalStream() = wrappedParams;
     }
@@ -582,8 +583,9 @@ nsBufferedInputStream::Deserialize(const InputStreamParams& aParams,
 
     nsCOMPtr<nsIInputStream> stream;
     if (wrappedParams.type() == OptionalInputStreamParams::TInputStreamParams) {
-        stream = DeserializeInputStream(wrappedParams.get_InputStreamParams(),
-                                        aFileDescriptors);
+        stream =
+          InputStreamHelper::DeserializeInputStream(wrappedParams.get_InputStreamParams(),
+                                                    aFileDescriptors);
         if (!stream) {
             NS_WARNING("Failed to deserialize wrapped stream!");
             return false;
@@ -608,6 +610,17 @@ nsBufferedInputStream::ExpectedSerializedLength()
         return stream->ExpectedSerializedLength();
     }
     return Nothing();
+}
+
+bool
+nsBufferedInputStream::IsIPCSerializable() const
+{
+    if (!mStream) {
+      return true;
+    }
+
+    nsCOMPtr<nsIIPCSerializableInputStream> stream = do_QueryInterface(mStream);
+    return !!stream;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

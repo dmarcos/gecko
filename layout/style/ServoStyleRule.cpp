@@ -73,9 +73,11 @@ ServoStyleRuleDeclaration::SetCSSDeclaration(DeclarationBlock* aDecl)
     nsCOMPtr<nsIDocument> doc = sheet->GetAssociatedDocument();
     mozAutoDocUpdate updateBatch(doc, UPDATE_STYLE, true);
     if (aDecl != mDecls) {
+      mDecls->SetOwningRule(nullptr);
       RefPtr<ServoDeclarationBlock> decls = aDecl->AsServo();
       Servo_StyleRule_SetStyle(rule->Raw(), decls->Raw());
       mDecls = decls.forget();
+      mDecls->SetOwningRule(rule);
     }
     if (doc) {
       doc->StyleRuleChanged(sheet, rule);
@@ -94,7 +96,15 @@ void
 ServoStyleRuleDeclaration::GetCSSParsingEnvironment(
   CSSParsingEnvironment& aCSSParseEnv)
 {
+  MOZ_ASSERT_UNREACHABLE("GetCSSParsingEnvironment "
+                         "shouldn't be calling for a Servo rule");
   GetCSSParsingEnvironmentForRule(Rule(), aCSSParseEnv);
+}
+
+URLExtraData*
+ServoStyleRuleDeclaration::GetURLData() const
+{
+  return GetURLDataForRule(Rule());
 }
 
 // -- ServoStyleRule --------------------------------------------------
@@ -161,8 +171,14 @@ ServoStyleRule::Clone() const
 size_t
 ServoStyleRule::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
-  // TODO Implement this!
-  return aMallocSizeOf(this);
+  size_t n = aMallocSizeOf(this);
+
+  // Measurement of the following members may be added later if DMD finds it is
+  // worthwhile:
+  // - mRawRule
+  // - mDecls
+
+  return n;
 }
 
 #ifdef DEBUG

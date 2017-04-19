@@ -9,7 +9,9 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/Monitor.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/AbstractThread.h"
 #include "nsTArray.h"
 #include "MediaCache.h"
 #include "nsDeque.h"
@@ -62,14 +64,14 @@ protected:
   ~FileBlockCache();
 
 public:
-  // Assumes ownership of aFD.
-  nsresult Open(PRFileDesc* aFD);
+  nsresult Init();
 
   // Closes writer, shuts down thread.
   void Close();
 
   // Can be called on any thread. This defers to a non-main thread.
-  nsresult WriteBlock(uint32_t aBlockIndex, const uint8_t* aData);
+  nsresult WriteBlock(uint32_t aBlockIndex,
+    Span<const uint8_t> aData1, Span<const uint8_t> aData2);
 
   // Performs block writes and block moves on its own thread.
   NS_IMETHOD Run() override;
@@ -102,6 +104,15 @@ public:
       memcpy(mData.get(), aData, BLOCK_SIZE);
     }
 
+    BlockChange(Span<const uint8_t> aData1, Span<const uint8_t> aData2)
+      : mSourceBlockIndex(-1)
+    {
+      MOZ_ASSERT(aData1.Length() + aData2.Length() == BLOCK_SIZE);
+      mData = MakeUnique<uint8_t[]>(BLOCK_SIZE);
+      memcpy(mData.get(), aData1.Elements(), aData1.Length());
+      memcpy(mData.get() + aData1.Length(), aData2.Elements(), aData2.Length());
+    }
+
     // This block's contents are located in another file
     // block, i.e. this block has been moved.
     explicit BlockChange(int32_t aSourceBlockIndex)
@@ -129,6 +140,8 @@ private:
   int64_t BlockIndexToOffset(int32_t aBlockIndex) {
     return static_cast<int64_t>(aBlockIndex) * BLOCK_SIZE;
   }
+
+  void SetCacheFile(PRFileDesc* aFD);
 
   // Monitor which controls access to mFD and mFDCurrentPos. Don't hold
   // mDataMonitor while holding mFileMonitor! mFileMonitor must be owned
@@ -160,6 +173,7 @@ private:
   // has been dispatched to preform the IO.
   // mDataMonitor must be owned while calling this.
   void EnsureWriteScheduled();
+
   // Array of block changes to made. If mBlockChanges[offset/BLOCK_SIZE] == nullptr,
   // then the block has no pending changes to be written, but if
   // mBlockChanges[offset/BLOCK_SIZE] != nullptr, then either there's a block
@@ -175,8 +189,12 @@ private:
   // True if we've dispatched an event to commit all pending block changes
   // to file on mThread.
   bool mIsWriteScheduled;
-  // True if the writer is ready to write data to file.
+  // True if the writer is ready to enqueue writes.
   bool mIsOpen;
+  // True if we've got a temporary file descriptor. Note: we don't use mFD
+  // directly as that's synchronized via mFileMonitor and we need to make
+  // decisions about whether we can write while holding mDataMonitor.
+  bool mInitialized = false;
 };
 
 } // End namespace mozilla.

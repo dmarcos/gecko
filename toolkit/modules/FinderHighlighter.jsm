@@ -131,7 +131,7 @@ function mockAnonymousContentNode(domNode) {
   };
 }
 
-let gWindows = new Map();
+let gWindows = new WeakMap();
 
 /**
  * FinderHighlighter class that is used by Finder.jsm to take care of the
@@ -337,9 +337,9 @@ FinderHighlighter.prototype = {
    * @param {nsIDOMEvent}  event     When called from an event handler, this will
    *                                 be the triggering event.
    */
-  hide(window = null, skipRange = null, event = null) {
+  hide(window, skipRange = null, event = null) {
     try {
-      window = (window || this.finder._getWindow()).top;
+      window = window.top;
     } catch (ex) {
       Cu.reportError(ex);
       return;
@@ -412,7 +412,7 @@ FinderHighlighter.prototype = {
     let foundRange = this.finder._fastFind.getFoundRange();
 
     if (data.result == Ci.nsITypeAheadFind.FIND_NOTFOUND || !data.searchString || !foundRange) {
-      this.hide();
+      this.hide(window);
       return;
     }
 
@@ -454,14 +454,8 @@ FinderHighlighter.prototype = {
    * keep to build the mask for.
    */
   clear(window = null) {
-    if (!window) {
-      // Since we're clearing _all the things_, make sure we hide 'em all as well.
-      for (let win of gWindows.keys())
-        this.hide(win);
-      // Reset the Map, because no range references a node anymore.
-      gWindows.clear();
+    if (!window || !window.top)
       return;
-    }
 
     let dict = this.getForWindow(window.top);
     this._finishOutlineAnimations(dict);
@@ -479,13 +473,13 @@ FinderHighlighter.prototype = {
    */
   onLocationChange() {
     let window = this.finder._getWindow();
+    if (!window || !window.top)
+      return;
     this.hide(window);
-    let dict = this.getForWindow(window);
     this.clear(window);
-    dict.currentFoundRange = dict.lastIteratorParams = dict.previousFoundRange =
-      dict.previousUpdatedRange = null;
-
     this._removeRangeOutline(window);
+
+    gWindows.delete(window.top);
   },
 
   /**
@@ -496,9 +490,10 @@ FinderHighlighter.prototype = {
    * @param {Boolean} useModalHighlight
    */
   onModalHighlightChange(useModalHighlight) {
-    if (this._modal && !useModalHighlight) {
-      this.hide();
-      this.clear();
+    let window = this.finder._getWindow();
+    if (window && this._modal && !useModalHighlight) {
+      this.hide(window);
+      this.clear(window);
     }
     this._modal = useModalHighlight;
   },
@@ -885,7 +880,7 @@ FinderHighlighter.prototype = {
     // Text color in the outline is determined by kModalStyles.
     delete fontStyle.color;
 
-    let rectsAndTexts = this._getRangeRectsAndTexts(range);
+    let rectsAndTexts = this._updateRangeRects(range, true, dict);
     let outlineAnonNode = dict.modalHighlightOutline;
     let rectCount = rectsAndTexts.rectList.length;
     let previousRectCount = dict.previousRangeRectsAndTexts.rectList.length;
@@ -1279,7 +1274,7 @@ FinderHighlighter.prototype = {
     let target = this.iterator._getDocShell(window).chromeEventHandler;
     target.addEventListener("MozAfterPaint", dict.highlightListeners[0]);
     target.addEventListener("resize", dict.highlightListeners[1]);
-    target.addEventListener("scroll", dict.highlightListeners[2]);
+    target.addEventListener("scroll", dict.highlightListeners[2], { capture: true, passive: true });
     target.addEventListener("click", dict.highlightListeners[3]);
     target.addEventListener("selectstart", dict.highlightListeners[4]);
   },
@@ -1298,7 +1293,7 @@ FinderHighlighter.prototype = {
     let target = this.iterator._getDocShell(window).chromeEventHandler;
     target.removeEventListener("MozAfterPaint", dict.highlightListeners[0]);
     target.removeEventListener("resize", dict.highlightListeners[1]);
-    target.removeEventListener("scroll", dict.highlightListeners[2]);
+    target.removeEventListener("scroll", dict.highlightListeners[2], { capture: true, passive: true });
     target.removeEventListener("click", dict.highlightListeners[3]);
     target.removeEventListener("selectstart", dict.highlightListeners[4]);
 

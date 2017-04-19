@@ -457,8 +457,7 @@ nsHttpServer.prototype =
             self._notifyStopped();
           }
         };
-      gThreadManager.currentThread
-                    .dispatch(stopEvent, Ci.nsIThread.DISPATCH_NORMAL);
+      gThreadManager.dispatchToMainThread(stopEvent);
     }
   },
 
@@ -2696,8 +2695,7 @@ ServerHandler.prototype =
 
       let writeMore = function writeMore()
       {
-        gThreadManager.currentThread
-                      .dispatch(writeData, Ci.nsIThread.DISPATCH_NORMAL);
+        gThreadManager.dispatchToMainThread(writeData);
       }
 
       var input = new BinaryInputStream(fis);
@@ -3768,13 +3766,13 @@ Response.prototype =
       // way to handle both cases without removing bodyOutputStream access and
       // moving its effective write(data, length) method onto Response, which
       // would be slower and require more code than this anyway.
-      gThreadManager.currentThread.dispatch({
+      gThreadManager.dispatchToMainThread({
         run: function()
         {
           dumpn("*** canceling copy asynchronously...");
           copier.cancel(Cr.NS_ERROR_UNEXPECTED);
         }
-      }, Ci.nsIThread.DISPATCH_NORMAL);
+      });
     }
     else
     {
@@ -4523,7 +4521,7 @@ WriteThroughCopier.prototype =
         }
       };
 
-    gThreadManager.currentThread.dispatch(event, Ci.nsIThread.DISPATCH_NORMAL);
+    gThreadManager.dispatchToMainThread(event);
   },
 
   /**
@@ -4798,7 +4796,7 @@ nsHttpHeaders.prototype =
 
     // The following three headers are stored as arrays because their real-world
     // syntax prevents joining individual headers into a single header using
-    // ",". See also <http://hg.mozilla.org/mozilla-central/diff/9b2a99adc05e/netwerk/protocol/http/src/nsHttpHeaderArray.cpp#l77>
+    // ",". See also <https://hg.mozilla.org/mozilla-central/diff/9b2a99adc05e/netwerk/protocol/http/src/nsHttpHeaderArray.cpp#l77>
     if (merge && name in this._headers)
     {
       if (name === "www-authenticate" ||

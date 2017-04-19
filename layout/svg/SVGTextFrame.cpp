@@ -2929,7 +2929,7 @@ SVGTextDrawPathCallbacks::MakeFillPattern(GeneralPattern* aOutPattern)
 {
   if (mColor == NS_SAME_AS_FOREGROUND_COLOR ||
       mColor == NS_40PERCENT_FOREGROUND_COLOR) {
-    nsSVGUtils::MakeFillPatternFor(mFrame, gfx, aOutPattern);
+    Unused << nsSVGUtils::MakeFillPatternFor(mFrame, gfx, aOutPattern);
     return;
   }
 
@@ -3000,7 +3000,8 @@ SVGTextDrawPathCallbacks::StrokeGeometry()
       mColor == NS_40PERCENT_FOREGROUND_COLOR) {
     if (nsSVGUtils::HasStroke(mFrame, /*aContextPaint*/ nullptr)) {
       GeneralPattern strokePattern;
-      nsSVGUtils::MakeStrokePatternFor(mFrame, gfx, &strokePattern, /*aContextPaint*/ nullptr);
+      Unused << nsSVGUtils::MakeStrokePatternFor(mFrame, gfx, &strokePattern,
+                                                 /*aContextPaint*/ nullptr);
       if (strokePattern.GetPattern()) {
         if (!mFrame->GetParent()->GetContent()->IsSVGElement()) {
           // The cast that follows would be unsafe
@@ -3115,7 +3116,7 @@ nsDisplaySVGText::Paint(nsDisplayListBuilder* aBuilder,
   gfxPoint devPixelOffset =
     nsLayoutUtils::PointToGfxPoint(offset, appUnitsPerDevPixel);
 
-  gfxMatrix tm = nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(mFrame) *
+  gfxMatrix tm = nsSVGUtils::GetCSSPxToDevPxMatrix(mFrame) *
                    gfxMatrix::Translation(devPixelOffset);
 
   gfxContext* ctx = aCtx->ThebesContext();
@@ -3446,7 +3447,7 @@ SVGTextFrame::FindCloserFrameForSelection(
 }
 
 //----------------------------------------------------------------------
-// nsISVGChildFrame methods
+// nsSVGDisplayableFrame methods
 
 void
 SVGTextFrame::NotifySVGChanged(uint32_t aFlags)
@@ -3561,7 +3562,8 @@ ShouldPaintCaret(const TextRenderedRun& aThisRun, nsCaret* aCaret)
 DrawResult
 SVGTextFrame::PaintSVG(gfxContext& aContext,
                        const gfxMatrix& aTransform,
-                       const nsIntRect *aDirtyRect)
+                       const nsIntRect *aDirtyRect,
+                       uint32_t aFlags)
 {
   DrawTarget& aDrawTarget = *aContext.GetDrawTarget();
 
@@ -3594,7 +3596,7 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
 
   if (aTransform.IsSingular()) {
     NS_WARNING("Can't render text element!");
-    return DrawResult::BAD_ARGS;
+    return DrawResult::SUCCESS;
   }
 
   gfxMatrix matrixForPaintServers = aTransform * initialMatrix;
@@ -3645,7 +3647,7 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
     SVGContextPaint::GetContextPaint(mContent);
 
   nsRenderingContext rendCtx(&aContext);
-
+  DrawResult finalResult = DrawResult::SUCCESS;
   while (run.mFrame) {
     nsTextFrame* frame = run.mFrame;
 
@@ -3657,11 +3659,13 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
     // when they use context-fill etc.
     aContext.SetMatrix(initialMatrix);
 
-    SVGContextPaintImpl contextPaint;
-    DrawMode drawMode = contextPaint.Init(&aDrawTarget,
-                                          aContext.CurrentMatrix(),
-                                          frame, outerContextPaint);
-
+    RefPtr<SVGContextPaintImpl> contextPaint = new SVGContextPaintImpl();
+    DrawMode drawMode;
+    DrawResult result = DrawResult::SUCCESS;
+    Tie(result, drawMode) = contextPaint->Init(&aDrawTarget,
+                                               aContext.CurrentMatrix(),
+                                               frame, outerContextPaint);
+    finalResult &= result;
     if (drawMode & DrawMode::GLYPH_STROKE) {
       // This may change the gfxContext's transform (for non-scaling stroke),
       // in which case this needs to happen before we call SetMatrix() below.
@@ -3681,7 +3685,7 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
       params.framePt = gfxPoint();
       params.dirtyRect = LayoutDevicePixel::
         FromAppUnits(frame->GetVisualOverflowRect(), auPerDevPx);
-      params.contextPaint = &contextPaint;
+      params.contextPaint = contextPaint;
       if (ShouldRenderAsPath(frame, paintSVGGlyphs)) {
         SVGTextDrawPathCallbacks callbacks(&rendCtx, frame,
                                            matrixForPaintServers,
@@ -3703,7 +3707,7 @@ SVGTextFrame::PaintSVG(gfxContext& aContext,
     run = it.Next();
   }
 
-  return DrawResult::SUCCESS;
+  return finalResult;
 }
 
 nsIFrame*
@@ -3758,13 +3762,6 @@ SVGTextFrame::GetFrameForPoint(const gfxPoint& aPoint)
     }
   }
   return hit;
-}
-
-nsRect
-SVGTextFrame::GetCoveredRegion()
-{
-  return nsSVGUtils::TransformFrameRectToOuterSVG(
-           mRect, GetCanvasTM(), PresContext());
 }
 
 void
@@ -3846,7 +3843,7 @@ SVGTextFrame::ReflowSVG()
   nsOverflowAreas overflowAreas(overflow, overflow);
   FinishAndStoreOverflow(overflowAreas, mRect.Size());
 
-  // XXX nsSVGContainerFrame::ReflowSVG only looks at its nsISVGChildFrame
+  // XXX nsSVGContainerFrame::ReflowSVG only looks at its nsSVGDisplayableFrame
   // children, and calls ConsiderChildOverflow on them.  Does it matter
   // that ConsiderChildOverflow won't be called on our children?
   nsSVGDisplayContainerFrame::ReflowSVG();
@@ -3880,6 +3877,15 @@ SVGTextFrame::GetBBoxContribution(const gfx::Matrix &aToBBoxUserspace,
 {
   NS_ASSERTION(PrincipalChildList().FirstChild(), "must have a child frame");
   SVGBBox bbox;
+
+  if (aFlags & nsSVGUtils::eForGetClientRects) {
+    Rect rect = NSRectToRect(mRect, PresContext()->AppUnitsPerCSSPixel());
+    if (!rect.IsEmpty()) {
+      bbox = aToBBoxUserspace.TransformBounds(rect);
+    }
+    return bbox;
+  }
+
   nsIFrame* kid = PrincipalChildList().FirstChild();
   if (kid && NS_SUBTREE_DIRTY(kid)) {
     // Return an empty bbox if our kid's subtree is dirty. This may be called
@@ -5263,7 +5269,7 @@ SVGTextFrame::MaybeReflowAnonymousBlockChild()
   if (NS_SUBTREE_DIRTY(this)) {
     if (mState & NS_FRAME_IS_DIRTY) {
       // If we require a full reflow, ensure our kid is marked fully dirty.
-      // (Note that our anonymous nsBlockFrame is not an nsISVGChildFrame, so
+      // (Note that our anonymous nsBlockFrame is not an nsSVGDisplayableFrame, so
       // even when we are called via our ReflowSVG this will not be done for us
       // by nsSVGDisplayContainerFrame::ReflowSVG.)
       kid->AddStateBits(NS_FRAME_IS_DIRTY);
@@ -5651,4 +5657,14 @@ SVGTextFrame::TransformFrameRectFromTextChild(const nsRect& aRect,
                          NSAppUnitsToFloatPixels(mRect.y, factor));
 
   return result - framePosition;
+}
+
+void
+SVGTextFrame::DoUpdateStyleOfOwnedAnonBoxes(ServoStyleSet& aStyleSet,
+                                            nsStyleChangeList& aChangeList,
+                                            nsChangeHint aHintForThisFrame)
+{
+  MOZ_ASSERT(PrincipalChildList().FirstChild(), "Must have our anon box");
+  UpdateStyleOfChildAnonBox(PrincipalChildList().FirstChild(),
+                            aStyleSet, aChangeList, aHintForThisFrame);
 }

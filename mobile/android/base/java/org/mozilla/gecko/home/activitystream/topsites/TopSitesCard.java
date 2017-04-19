@@ -5,6 +5,8 @@
 package org.mozilla.gecko.home.activitystream.topsites;
 
 import android.graphics.Color;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
 import android.support.v4.widget.TextViewCompat;
 import android.support.v7.widget.RecyclerView;
 import android.view.View;
@@ -86,13 +88,6 @@ import java.util.concurrent.Future;
         this.topSite = topSite;
         this.absolutePosition = absolutePosition;
 
-        ActivityStream.extractLabel(itemView.getContext(), topSite.getUrl(), true, new ActivityStream.LabelCallback() {
-            @Override
-            public void onLabelExtracted(String label) {
-                title.setText(label);
-            }
-        });
-
         if (ongoingIconLoad != null) {
             ongoingIconLoad.cancel(true);
         }
@@ -103,8 +98,24 @@ import java.util.concurrent.Future;
                 .build()
                 .execute(this);
 
-        final int pinResourceId = (topSite.isPinned() ? R.drawable.pin : 0);
-        TextViewCompat.setCompoundDrawablesRelativeWithIntrinsicBounds(title, pinResourceId, 0, 0, 0);
+        final Drawable pinDrawable;
+        if (topSite.isPinned()) {
+            pinDrawable = DrawableUtil.tintDrawable(itemView.getContext(), R.drawable.as_pin, itemView.getResources().getColor(R.color.placeholder_grey));
+        } else {
+            pinDrawable = null;
+        }
+        TextViewCompat.setCompoundDrawablesRelativeWithIntrinsicBounds(title, pinDrawable, null, null, null);
+
+        // setCenteredText() needs to have all drawable's in place to correctly layout the text,
+        // so we need to wait with requesting the title until we've set our pin icon.
+        ActivityStream.extractLabel(itemView.getContext(), topSite.getUrl(), true, new ActivityStream.LabelCallback() {
+            @Override
+            public void onLabelExtracted(String label) {
+                // We use consistent padding all around the title, and the top padding is never modified,
+                // so we can pass that in as the default padding:
+                ViewUtil.setCenteredText(title, label, title.getPaddingTop());
+            }
+        });
     }
 
     @Override

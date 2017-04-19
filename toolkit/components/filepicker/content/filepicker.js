@@ -583,7 +583,7 @@ function populateAncestorList(directory) {
   var menu = document.getElementById("lookInMenu");
 
   while (menu.hasChildNodes()) {
-    menu.removeChild(menu.firstChild);
+    menu.firstChild.remove();
   }
 
   var menuItem = document.createElement("menuitem");
@@ -628,7 +628,7 @@ function newDir() {
     gFilePickerBundle.getString("promptNewDirTitle");
   var dialogMsg =
     gFilePickerBundle.getString("promptNewDirMessage");
-  var ret = promptService.prompt(window, dialogTitle, dialogMsg, gNewDirName, null, {value:0});
+  var ret = promptService.prompt(window, dialogTitle, dialogMsg, gNewDirName, null, {value: 0});
 
   if (ret) {
     file = processPath(gNewDirName.value);

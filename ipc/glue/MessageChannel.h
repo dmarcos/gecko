@@ -72,7 +72,7 @@ enum ChannelState {
 
 class AutoEnterTransaction;
 
-class MessageChannel : HasResultCodes
+class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
 {
     friend class ProcessLink;
     friend class ThreadLink;
@@ -89,7 +89,8 @@ class MessageChannel : HasResultCodes
     typedef IPC::MessageInfo MessageInfo;
     typedef mozilla::ipc::Transport Transport;
 
-    explicit MessageChannel(IToplevelProtocol *aListener);
+    explicit MessageChannel(const char *aName,
+                            IToplevelProtocol *aListener);
     ~MessageChannel();
 
     IToplevelProtocol *Listener() const {
@@ -152,6 +153,8 @@ class MessageChannel : HasResultCodes
 
     // Asynchronously send a message to the other side of the channel
     bool Send(Message* aMsg);
+
+    void SendBuildID();
 
     // Asynchronously deliver a message back to this side of the
     // channel
@@ -435,6 +438,7 @@ class MessageChannel : HasResultCodes
     // Can be run on either thread
     void AssertWorkerThread() const
     {
+        MOZ_ASSERT(mWorkerLoopID != -1, "Channel hasn't been opened yet");
         MOZ_RELEASE_ASSERT(mWorkerLoopID == MessageLoop::current()->id(),
                            "not on worker thread!");
     }
@@ -444,6 +448,7 @@ class MessageChannel : HasResultCodes
     // NOT our worker thread.
     void AssertLinkThread() const
     {
+        MOZ_ASSERT(mWorkerLoopID != -1, "Channel hasn't been opened yet");
         MOZ_RELEASE_ASSERT(mWorkerLoopID != MessageLoop::current()->id(),
                            "on worker thread but should not be!");
     }
@@ -487,7 +492,12 @@ class MessageChannel : HasResultCodes
     typedef std::map<size_t, Message> MessageMap;
     typedef IPC::Message::msgid_t msgid_t;
 
+    void WillDestroyCurrentMessageLoop() override;
+
   private:
+    // This will be a string literal, so lifetime is not an issue.
+    const char* mName;
+
     // Based on presumption the listener owns and overlives the channel,
     // this is never nullified.
     IToplevelProtocol* mListener;

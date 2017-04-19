@@ -43,7 +43,6 @@
 #include "mozilla/dom/SimpleGestureEvent.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StorageEvent.h"
-#include "mozilla/dom/SVGZoomEvent.h"
 #include "mozilla/dom/TimeEvent.h"
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/dom/TransitionEvent.h"
@@ -64,6 +63,7 @@
 #ifdef MOZ_TASK_TRACER
 #include "GeckoTaskTracer.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/Likely.h"
 using namespace mozilla::tasktracer;
 #endif
 
@@ -606,23 +606,27 @@ EventDispatcher::Dispatch(nsISupports* aTarget,
                  NS_ERROR_DOM_INVALID_STATE_ERR);
 
 #ifdef MOZ_TASK_TRACER
-  {
+  if (MOZ_UNLIKELY(mozilla::tasktracer::IsStartLogging())) {
+    nsAutoCString eventType;
+    nsAutoString eventTypeU16;
     if (aDOMEvent) {
-      nsAutoString eventType;
-      aDOMEvent->GetType(eventType);
-
-      nsCOMPtr<Element> element = do_QueryInterface(aTarget);
-      nsAutoString elementId;
-      nsAutoString elementTagName;
-      if (element) {
-        element->GetId(elementId);
-        element->GetTagName(elementTagName);
-      }
-      AddLabel("Event [%s] dispatched at target [id:%s tag:%s]",
-               NS_ConvertUTF16toUTF8(eventType).get(),
-               NS_ConvertUTF16toUTF8(elementId).get(),
-               NS_ConvertUTF16toUTF8(elementTagName).get());
+      aDOMEvent->GetType(eventTypeU16);
+    } else {
+      Event::GetWidgetEventType(aEvent, eventTypeU16);
     }
+    eventType = NS_ConvertUTF16toUTF8(eventTypeU16);
+
+    nsCOMPtr<Element> element = do_QueryInterface(aTarget);
+    nsAutoString elementId;
+    nsAutoString elementTagName;
+    if (element) {
+      element->GetId(elementId);
+      element->GetTagName(elementTagName);
+    }
+    AddLabel("Event [%s] dispatched at target [id:%s tag:%s]",
+             eventType.get(),
+             NS_ConvertUTF16toUTF8(elementId).get(),
+             NS_ConvertUTF16toUTF8(elementTagName).get());
   }
 #endif
 
@@ -935,9 +939,6 @@ EventDispatcher::CreateEvent(EventTarget* aOwner,
     case eClipboardEventClass:
       return NS_NewDOMClipboardEvent(aOwner, aPresContext,
                                      aEvent->AsClipboardEvent());
-    case eSVGZoomEventClass:
-      return NS_NewDOMSVGZoomEvent(aOwner, aPresContext,
-                                   aEvent->AsSVGZoomEvent());
     case eSMILTimeEventClass:
       return NS_NewDOMTimeEvent(aOwner, aPresContext,
                                 aEvent->AsSMILTimeEvent());
@@ -1060,14 +1061,6 @@ EventDispatcher::CreateEvent(EventTarget* aOwner,
   if (aEventType.LowerCaseEqualsLiteral("svgevents")) {
     LOG_EVENT_CREATION(SVGEVENTS);
     return NS_NewDOMEvent(aOwner, aPresContext, nullptr);
-  }
-  if (aEventType.LowerCaseEqualsLiteral("svgzoomevent")) {
-    LOG_EVENT_CREATION(SVGZOOMEVENT);
-    return NS_NewDOMSVGZoomEvent(aOwner, aPresContext, nullptr);
-  }
-  if (aEventType.LowerCaseEqualsLiteral("svgzoomevents")) {
-    LOG_EVENT_CREATION(SVGZOOMEVENTS);
-    return NS_NewDOMSVGZoomEvent(aOwner, aPresContext, nullptr);
   }
   if (aEventType.LowerCaseEqualsLiteral("timeevent")) {
     LOG_EVENT_CREATION(TIMEEVENT);

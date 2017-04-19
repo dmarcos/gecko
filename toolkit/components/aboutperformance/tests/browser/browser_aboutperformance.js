@@ -1,6 +1,8 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
+/* eslint-env mozilla/frame-script */
+
 "use strict";
 
 Cu.import("resource://testing-common/ContentTask.jsm", this);
@@ -59,7 +61,7 @@ function frameScript() {
         }
       }
     }
-    Services.obs.addObserver(observer, "about:performance-update-complete", false);
+    Services.obs.addObserver(observer, "about:performance-update-complete");
     Services.obs.notifyObservers(null, "test-about:performance-test-driver", JSON.stringify(options));
   });
 
@@ -163,29 +165,25 @@ function frameScript() {
     let observer = function(subject, topic, mode) {
       Services.obs.removeObserver(observer, "about:performance-update-complete");
       let hasTitleInWebpages = false;
-      let hasTitleInAddons = false;
 
       try {
         let eltWeb = content.document.getElementById("webpages");
-        let eltAddons = content.document.getElementById("addons");
-        if (!eltWeb || !eltAddons) {
-          dump(`aboutperformance-test:hasItems: the page is not ready yet webpages:${eltWeb}, addons:${eltAddons}\n`);
+        if (!eltWeb) {
+          dump(`aboutperformance-test:hasItems: the page is not ready yet webpages:${eltWeb}\n`);
           return;
         }
 
-        let addonTitles = Array.from(eltAddons.querySelectorAll("span.title"), elt => elt.textContent);
         let webTitles = Array.from(eltWeb.querySelectorAll("span.title"), elt => elt.textContent);
 
-        hasTitleInAddons = addonTitles.includes(title);
         hasTitleInWebpages = webTitles.includes(title);
       } catch (ex) {
         Cu.reportError("Error in content: " + ex);
         Cu.reportError(ex.stack);
       } finally {
-        sendAsyncMessage("aboutperformance-test:hasItems", {hasTitleInAddons, hasTitleInWebpages, mode});
+        sendAsyncMessage("aboutperformance-test:hasItems", {hasTitleInWebpages, mode});
       }
     }
-    Services.obs.addObserver(observer, "about:performance-update-complete", false);
+    Services.obs.addObserver(observer, "about:performance-update-complete");
     Services.obs.notifyObservers(null, "test-about:performance-test-driver", JSON.stringify(options));
   });
 }
@@ -208,9 +206,9 @@ var promiseExpectContent = Task.async(function*(options) {
   for (let i = 0; i < 30; ++i) {
     yield new Promise(resolve => setTimeout(resolve, 100));
     yield promiseContentResponse(gTabContent.linkedBrowser, "aboutperformance-test:setTitle", title);
-    let {hasTitleInWebpages, hasTitleInAddons, mode} = (yield promiseContentResponse(gTabAboutPerformance.linkedBrowser, "aboutperformance-test:hasItems", {title, options}));
+    let {hasTitleInWebpages, mode} = (yield promiseContentResponse(gTabAboutPerformance.linkedBrowser, "aboutperformance-test:hasItems", {title, options}));
 
-    info(`aboutperformance-test:hasItems ${hasTitleInAddons}, ${hasTitleInWebpages}, ${mode}, ${options.displayRecent}`);
+    info(`aboutperformance-test:hasItems ${hasTitleInWebpages}, ${mode}, ${options.displayRecent}`);
     if (!hasTitleInWebpages) {
       info(`Title not found in webpages`);
       continue;
@@ -219,7 +217,6 @@ var promiseExpectContent = Task.async(function*(options) {
       info(`Wrong mode`);
       continue;
     }
-    Assert.ok(!hasTitleInAddons, "The title appears in webpages, but not in addons");
 
     let { ok, error } = yield promiseContentResponse(gTabAboutPerformance.linkedBrowser, "aboutperformance-test:checkSanity", {options});
     if (ok) {

@@ -34,12 +34,12 @@
 
 using mozilla::media::TimeUnit;
 
+#undef LOG
+
 mozilla::LazyLogModule gMediaResourceLog("MediaResource");
-#define RESOURCE_LOG(msg, ...) MOZ_LOG(gMediaResourceLog, mozilla::LogLevel::Debug, \
-                                      (msg, ##__VA_ARGS__))
 // Debug logging macro with object pointer and class name.
-#define CMLOG(msg, ...) \
-        RESOURCE_LOG("%p [ChannelMediaResource]: " msg, this, ##__VA_ARGS__)
+#define LOG(msg, ...) MOZ_LOG(gMediaResourceLog, mozilla::LogLevel::Debug, \
+  ("%p " msg, this, ##__VA_ARGS__))
 
 static const uint32_t HTTP_OK_CODE = 200;
 static const uint32_t HTTP_PARTIAL_RESPONSE_CODE = 206;
@@ -54,8 +54,11 @@ MediaResource::Destroy()
     delete this;
     return;
   }
-  MOZ_ALWAYS_SUCCEEDS(
-    NS_DispatchToMainThread(NewNonOwningRunnableMethod(this, &MediaResource::Destroy)));
+  nsresult rv =
+    SystemGroup::Dispatch("MediaResource::Destroy",
+                          TaskCategory::Other,
+                          NewNonOwningRunnableMethod(this, &MediaResource::Destroy));
+  MOZ_ALWAYS_SUCCEEDS(rv);
 }
 
 NS_IMPL_ADDREF(MediaResource)
@@ -65,12 +68,13 @@ NS_IMPL_QUERY_INTERFACE0(MediaResource)
 ChannelMediaResource::ChannelMediaResource(MediaResourceCallback* aCallback,
                                            nsIChannel* aChannel,
                                            nsIURI* aURI,
-                                           const MediaContainerType& aContainerType)
+                                           const MediaContainerType& aContainerType,
+                                           bool aIsPrivateBrowsing)
   : BaseMediaResource(aCallback, aChannel, aURI, aContainerType),
     mOffset(0),
     mReopenOnError(false),
     mIgnoreClose(false),
-    mCacheStream(this),
+    mCacheStream(this, aIsPrivateBrowsing),
     mLock("ChannelMediaResource.mLock"),
     mIgnoreResume(false),
     mSuspendAgent(mChannel)
@@ -185,9 +189,9 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
   bool seekable = false;
   if (hc) {
     uint32_t responseStatus = 0;
-    hc->GetResponseStatus(&responseStatus);
+    Unused << hc->GetResponseStatus(&responseStatus);
     bool succeeded = false;
-    hc->GetRequestSucceeded(&succeeded);
+    Unused << hc->GetRequestSucceeded(&succeeded);
 
     if (!succeeded && NS_SUCCEEDED(status)) {
       // HTTP-level error (e.g. 4xx); treat this as a fatal network-level error.
@@ -214,8 +218,8 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
     }
 
     nsAutoCString ranges;
-    hc->GetResponseHeader(NS_LITERAL_CSTRING("Accept-Ranges"),
-                          ranges);
+    Unused << hc->GetResponseHeader(NS_LITERAL_CSTRING("Accept-Ranges"),
+                                    ranges);
     bool acceptsRanges = ranges.EqualsLiteral("bytes");
     // True if this channel will not return an unbounded amount of data
     bool dataIsBounded = false;
@@ -358,8 +362,8 @@ ChannelMediaResource::ParseContentRangeHeader(nsIHttpChannel * aHttpChan,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  CMLOG("Received bytes [%lld] to [%lld] of [%lld] for decoder[%p]",
-        aRangeStart, aRangeEnd, aRangeTotal, mCallback.get());
+  LOG("Received bytes [%" PRId64 "] to [%" PRId64 "] of [%" PRId64 "] for decoder[%p]",
+      aRangeStart, aRangeEnd, aRangeTotal, mCallback.get());
 
   return NS_OK;
 }
@@ -422,34 +426,41 @@ ChannelMediaResource::OnChannelRedirect(nsIChannel* aOld, nsIChannel* aNew,
   return SetupChannelHeaders();
 }
 
+nsresult
+ChannelMediaResource::CopySegmentToCache(nsIPrincipal* aPrincipal,
+                                         const char* aFromSegment,
+                                         uint32_t aCount,
+                                         uint32_t* aWriteCount)
+{
+  mCallback->NotifyDataArrived();
+
+  // Keep track of where we're up to.
+  LOG("CopySegmentToCache at mOffset [%" PRId64 "] add "
+      "[%d] bytes for decoder[%p]",
+      mOffset, aCount, mCallback.get());
+  mOffset += aCount;
+  mCacheStream.NotifyDataReceived(aCount, aFromSegment, aPrincipal);
+  *aWriteCount = aCount;
+  return NS_OK;
+}
+
+
 struct CopySegmentClosure {
   nsCOMPtr<nsIPrincipal> mPrincipal;
   ChannelMediaResource*  mResource;
 };
 
 nsresult
-ChannelMediaResource::CopySegmentToCache(nsIInputStream *aInStream,
-                                         void *aClosure,
-                                         const char *aFromSegment,
+ChannelMediaResource::CopySegmentToCache(nsIInputStream* aInStream,
+                                         void* aClosure,
+                                         const char* aFromSegment,
                                          uint32_t aToOffset,
                                          uint32_t aCount,
-                                         uint32_t *aWriteCount)
+                                         uint32_t* aWriteCount)
 {
   CopySegmentClosure* closure = static_cast<CopySegmentClosure*>(aClosure);
-
-  closure->mResource->mCallback->NotifyDataArrived();
-
-  // Keep track of where we're up to.
-  RESOURCE_LOG("%p [ChannelMediaResource]: CopySegmentToCache at mOffset [%lld] add "
-               "[%d] bytes for decoder[%p]",
-               closure->mResource, closure->mResource->mOffset, aCount,
-               closure->mResource->mCallback.get());
-  closure->mResource->mOffset += aCount;
-
-  closure->mResource->mCacheStream.NotifyDataReceived(aCount, aFromSegment,
-                                                      closure->mPrincipal);
-  *aWriteCount = aCount;
-  return NS_OK;
+  return closure->mResource->CopySegmentToCache(
+    closure->mPrincipal, aFromSegment, aCount, aWriteCount);
 }
 
 nsresult
@@ -864,8 +875,12 @@ ChannelMediaResource::CacheClientNotifyDataReceived()
     return;
 
   mDataReceivedEvent =
-    NewNonOwningRunnableMethod(this, &ChannelMediaResource::DoNotifyDataReceived);
-  NS_DispatchToMainThread(mDataReceivedEvent.get());
+    NewNonOwningRunnableMethod("ChannelMediaResource::DoNotifyDataReceived",
+                               this, &ChannelMediaResource::DoNotifyDataReceived);
+
+  nsCOMPtr<nsIRunnable> event = mDataReceivedEvent.get();
+
+  SystemGroup::AbstractMainThreadFor(TaskCategory::Other)->Dispatch(event.forget());
 }
 
 void
@@ -895,8 +910,8 @@ ChannelMediaResource::CacheClientSeek(int64_t aOffset, bool aResume)
 {
   NS_ASSERTION(NS_IsMainThread(), "Don't call on non-main thread");
 
-  CMLOG("CacheClientSeek requested for aOffset [%lld] for decoder [%p]",
-        aOffset, mCallback.get());
+  LOG("CacheClientSeek requested for aOffset [%" PRId64 "] for decoder [%p]",
+      aOffset, mCallback.get());
 
   CloseChannel();
 
@@ -1483,7 +1498,8 @@ int64_t FileMediaResource::Tell()
 }
 
 already_AddRefed<MediaResource>
-MediaResource::Create(MediaResourceCallback* aCallback, nsIChannel* aChannel)
+MediaResource::Create(MediaResourceCallback* aCallback,
+                      nsIChannel* aChannel, bool aIsPrivateBrowsing)
 {
   NS_ASSERTION(NS_IsMainThread(),
                "MediaResource::Open called on non-main thread");
@@ -1507,7 +1523,8 @@ MediaResource::Create(MediaResourceCallback* aCallback, nsIChannel* aChannel)
   if (fc || IsBlobURI(uri)) {
     resource = new FileMediaResource(aCallback, aChannel, uri, *containerType);
   } else {
-    resource = new ChannelMediaResource(aCallback, aChannel, uri, *containerType);
+    resource = new ChannelMediaResource(
+      aCallback, aChannel, uri, *containerType, aIsPrivateBrowsing);
   }
   return resource.forget();
 }
@@ -1648,3 +1665,5 @@ MediaResourceIndex::Seek(int32_t aWhence, int64_t aOffset)
 
 } // namespace mozilla
 
+// avoid redefined macro in unified build
+#undef LOG

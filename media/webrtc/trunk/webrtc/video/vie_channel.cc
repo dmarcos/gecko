@@ -44,8 +44,6 @@ const int kMinSendSidePacketHistorySize = 600;
 const int kMaxPacketAgeToNack = 450;
 const int kMaxNackListSize = 250;
 
-const int kInvalidRtpExtensionId = 0; //MOZ addition for RtpSenderId (RID)
-
 // Helper class receiving statistics callbacks.
 class ChannelStatsObserver : public CallStatsObserver {
  public:
@@ -122,7 +120,6 @@ ViEChannel::ViEChannel(uint32_t number_of_cores,
       rtt_sum_ms_(0),
       last_rtt_ms_(0),
       num_rtts_(0),
-			rid_extension_id_(kInvalidRtpExtensionId),
       rtp_rtcp_modules_(
           CreateRtpRtcpModules(!sender,
                                vie_receiver_.GetReceiveStatistics(),
@@ -658,25 +655,24 @@ int ViEChannel::SetReceiveTransportSequenceNumber(bool enable, int id) {
   return vie_receiver_.SetReceiveTransportSequenceNumber(enable, id) ? 0 : -1;
 }
 
-int ViEChannel::SetSendRtpStreamId(bool enable, int id) { //}, const char *rid)
-  CriticalSectionScoped cs(crit_.get());
+int ViEChannel::SetSendRtpStreamId(bool enable, int id,
+                                   std::vector<std::string> rids) {
+  for (RtpRtcp* rtp_rtcp : rtp_rtcp_modules_) {
+    rtp_rtcp->DeregisterSendRtpHeaderExtension(
+      kRtpExtensionRtpStreamId);
+  }
+  if (!enable) {
+    return 0;
+  }
   int error = 0;
-  if (enable) {
-    // Enable the extension, but disable possible old id to avoid errors.
-    rid_extension_id_ = id;
-    for (RtpRtcp* rtp_rtcp : rtp_rtcp_modules_) {
-      rtp_rtcp->DeregisterSendRtpHeaderExtension(
-        kRtpExtensionRtpStreamId);
-      error = rtp_rtcp->RegisterSendRtpHeaderExtension(
-        kRtpExtensionRtpStreamId, id);
-    }
-    // NOTE: simulcast streams must be set via the SetSendCodec() API
-  } else {
-    // Disable the extension.
-    rid_extension_id_ = kInvalidRtpExtensionId;
-    for (RtpRtcp* rtp_rtcp : rtp_rtcp_modules_) {
-    	rtp_rtcp->DeregisterSendRtpHeaderExtension(
-        kRtpExtensionRtpStreamId);
+  unsigned long i = 0;
+  // Enable the extension
+  // NOTE: simulcast streams must be set via the SetSendCodec() API
+  for (RtpRtcp* rtp_rtcp : rtp_rtcp_modules_) {
+    error |= rtp_rtcp->RegisterSendRtpHeaderExtension(
+      kRtpExtensionRtpStreamId, id);
+    if (rids.size() > i) {
+      rtp_rtcp->SetRID(rids[i++].c_str());
     }
   }
   return error;
@@ -895,21 +891,15 @@ int32_t ViEChannel::GetRemoteRTCPReceiverInfo(uint32_t& NTPHigh,
   return 0;
 }
 
-//->@@NG // int32_t ViEChannel::GetRemoteRTCPSenderInfo(RTCPSenderInfo* sender_info) const {
-//->@@NG //   // Get the sender info from the latest received RTCP Sender Report.
-//->@@NG //   RTCPSenderInfo rtcp_sender_info;
-//->@@NG //   if (rtp_rtcp_->RemoteRTCPStat(&rtcp_sender_info) != 0) {
-//->@@NG //     LOG_F(LS_ERROR) << "failed to read RTCP SR sender info";
-//->@@NG //     return -1;
-//->@@NG //   }
-//->@@NG //
-//->@@NG //   sender_info->NTP_timestamp_high = rtcp_sender_info.NTPseconds;
-//->@@NG //   sender_info->NTP_timestamp_low = rtcp_sender_info.NTPfraction;
-//->@@NG //   sender_info->RTP_timestamp = rtcp_sender_info.RTPtimeStamp;
-//->@@NG //   sender_info->sender_packet_count = rtcp_sender_info.sendPacketCount;
-//->@@NG //   sender_info->sender_octet_count = rtcp_sender_info.sendOctetCount;
-//->@@NG //   return 0;
-//->@@NG // }
+int32_t ViEChannel::GetRemoteRTCPSenderInfo(RTCPSenderInfo* sender_info) const {
+  // Get the sender info from the latest received RTCP Sender Report.
+  if (rtp_rtcp_modules_[0] &&
+    rtp_rtcp_modules_[0]->RemoteRTCPStat(sender_info) != 0) {
+    LOG_F(LS_ERROR) << "failed to read RTCP SR sender info";
+    return -1;
+  }
+  return 0;
+}
 
 void ViEChannel::RegisterSendChannelRtcpStatisticsCallback(
     RtcpStatisticsCallback* callback) {

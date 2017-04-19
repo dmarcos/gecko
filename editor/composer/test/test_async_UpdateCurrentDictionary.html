@@ -15,7 +15,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=856270
 <textarea id="editor" spellcheck="true"></textarea>
 </div>
 <pre id="test">
-<script class="testbody" type="text/javascript;version=1.8">
+<script class="testbody" type="text/javascript">
 
 SimpleTest.waitForExplicitFinish();
 addLoadEvent(start);
@@ -24,7 +24,8 @@ function start() {
   var textarea = document.getElementById("editor");
   textarea.focus();
 
-  SpecialPowers.Cu.import("resource://gre/modules/AsyncSpellCheckTestHelper.jsm")
+  SpecialPowers.Cu.import(
+    "resource://testing-common/AsyncSpellCheckTestHelper.jsm")
   .onSpellCheck(textarea, function () {
     var isc = SpecialPowers.wrap(textarea).editor.getInlineSpellChecker(false);
     ok(isc, "Inline spell checker should exist after focus and spell check");

@@ -7,7 +7,7 @@
 #ifndef mozilla_EffectSet_h
 #define mozilla_EffectSet_h
 
-#include "mozilla/AnimationRule.h" // For AnimationRule
+#include "mozilla/AnimValuesStyleRule.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/EnumeratedArray.h"
@@ -163,22 +163,19 @@ public:
 
   size_t Count() const { return mEffects.Count(); }
 
-  struct AnimationRule&
+  RefPtr<AnimValuesStyleRule>&
   AnimationRule(EffectCompositor::CascadeLevel aCascadeLevel)
   {
     return mAnimationRule[aCascadeLevel];
   }
 
-  const TimeStamp& AnimationRuleRefreshTime(EffectCompositor::CascadeLevel
-                                              aCascadeLevel) const
+  const TimeStamp& LastTransformSyncTime() const
   {
-    return mAnimationRuleRefreshTime[aCascadeLevel];
+    return mLastTransformSyncTime;
   }
-  void UpdateAnimationRuleRefreshTime(EffectCompositor::CascadeLevel
-                                        aCascadeLevel,
-                                      const TimeStamp& aRefreshTime)
+  void UpdateLastTransformSyncTime(const TimeStamp& aRefreshTime)
   {
-    mAnimationRuleRefreshTime[aCascadeLevel] = aRefreshTime;
+    mLastTransformSyncTime = aRefreshTime;
   }
 
   bool CascadeNeedsUpdate() const { return mCascadeNeedsUpdate; }
@@ -198,25 +195,9 @@ public:
   {
     return mPropertiesForAnimationsLevel;
   }
-
-  // This function is intended to be called by EffectCompositor::GetBaseStyle
-  // and should not be called directly.
-  StyleAnimationValue GetBaseStyle(nsCSSPropertyID aProperty) const
+  nsCSSPropertyIDSet PropertiesForAnimationsLevel() const
   {
-    StyleAnimationValue result;
-    DebugOnly<bool> hasProperty = mBaseStyleValues.Get(aProperty, &result);
-    MOZ_ASSERT(hasProperty || result.IsNull());
-    return result;
-  }
-
-  void PutBaseStyle(nsCSSPropertyID aProperty,
-                    const StyleAnimationValue& aValue)
-  {
-    return mBaseStyleValues.Put(aProperty, aValue);
-  }
-  void ClearBaseStyles()
-  {
-    return mBaseStyleValues.Clear();
+    return mPropertiesForAnimationsLevel;
   }
 
 private:
@@ -232,16 +213,13 @@ private:
   EnumeratedArray<EffectCompositor::CascadeLevel,
                   EffectCompositor::CascadeLevel(
                     EffectCompositor::kCascadeLevelCount),
-                  mozilla::AnimationRule> mAnimationRule;
+                  RefPtr<AnimValuesStyleRule>> mAnimationRule;
 
-  // A parallel array to mAnimationRule that records the refresh driver
-  // timestamp when the rule was last updated. This is used for certain
-  // animations which are updated only periodically (e.g. transform animations
-  // running on the compositor that affect the scrollable overflow region).
-  EnumeratedArray<EffectCompositor::CascadeLevel,
-                  EffectCompositor::CascadeLevel(
-                    EffectCompositor::kCascadeLevelCount),
-                  TimeStamp> mAnimationRuleRefreshTime;
+  // Refresh driver timestamp from the moment when transform animations in this
+  // effect set were last updated and sent to the compositor. This is used for
+  // transform animations that run on the compositor but need to be updated on
+  // the main thread periodically (e.g. so scrollbars can be updated).
+  TimeStamp mLastTransformSyncTime;
 
   // Dirty flag to represent when the mPropertiesWithImportantRules and
   // mPropertiesForAnimationsLevel on effects in this set might need to be
@@ -266,11 +244,6 @@ private:
   // animations level of the cascade and hence should be skipped when we are
   // composing the animation style for the transitions level of the cascede.
   nsCSSPropertyIDSet mPropertiesForAnimationsLevel;
-
-  // The non-animated values for properties animated by effects in this set that
-  // contain at least one animation value that is composited with the underlying
-  // value (i.e. it uses the additive or accumulate composite mode).
-  nsDataHashtable<nsUint32HashKey, StyleAnimationValue> mBaseStyleValues;
 
 #ifdef DEBUG
   // Track how many iterators are referencing this effect set when we are

@@ -6,7 +6,7 @@
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
 </head>
 <body>
-<script type="application/javascript;version=1.7">
+<script type="application/javascript">
 
 SimpleTest.waitForExplicitFinish();
 
@@ -42,7 +42,7 @@ function playOscillatorNode() {
 }
 
 function audioPlayingStart() {
-  observerService.addObserver(observer, "audio-playback", false);
+  observerService.addObserver(observer, "audio-playback");
   ok(true, "Observer set");
 
   expectedPlaybackActive = 'active';

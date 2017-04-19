@@ -6,7 +6,7 @@
 
 UNIFIED_SOURCES += [
     'Helpers.cpp',
-    'TestArray.cpp',
+    'TestArenaAllocator.cpp',
     'TestAtoms.cpp',
     'TestAutoPtr.cpp',
     'TestAutoRef.cpp',
@@ -38,6 +38,7 @@ UNIFIED_SOURCES += [
     'TestSynchronization.cpp',
     'TestTArray.cpp',
     'TestTArray2.cpp',
+    'TestTaskQueue.cpp',
     'TestTextFormatter.cpp',
     'TestThreadPool.cpp',
     'TestThreadPoolListener.cpp',

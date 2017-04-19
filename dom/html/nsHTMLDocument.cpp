@@ -96,7 +96,6 @@
 #include "mozAutoDocUpdate.h"
 #include "nsCCUncollectableMarker.h"
 #include "nsHtml5Module.h"
-#include "prprf.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/Preferences.h"
 #include "nsMimeTypes.h"
@@ -656,7 +655,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
   nsAutoCString parserCharset;
 
   nsCOMPtr<nsIWyciwygChannel> wyciwygChannel;
-  
+
   // For error reporting and referrer policy setting
   nsHtml5TreeOpExecutor* executor = nullptr;
   if (loadAsHtml5) {
@@ -723,7 +722,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
       parserCharset = "UTF-16";
       parserCharsetSource = charsetSource < kCharsetFromChannel ?
         kCharsetFromChannel : charsetSource;
-        
+
       nsAutoCString cachedCharset;
       int32_t cachedSource;
       rv = wyciwygChannel->GetCharsetAndSource(&cachedSource, cachedCharset);
@@ -736,7 +735,7 @@ nsHTMLDocument::StartDocumentLoad(const char* aCommand,
         // Don't propagate this error.
         rv = NS_OK;
       }
-      
+
     } else {
       parserCharset = charset;
       parserCharsetSource = charsetSource;
@@ -907,6 +906,117 @@ nsHTMLDocument::GetDomain(nsAString& aDomain)
   return NS_OK;
 }
 
+already_AddRefed<nsIURI>
+nsHTMLDocument::CreateInheritingURIForHost(const nsACString& aHostString)
+{
+  if (aHostString.IsEmpty()) {
+    return nullptr;
+  }
+
+  // Create new URI
+  nsCOMPtr<nsIURI> uri = GetDomainURI();
+  if (!uri) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsIURI> newURI;
+  nsresult rv = uri->Clone(getter_AddRefs(newURI));
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
+  rv = newURI->SetUserPass(EmptyCString());
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
+  // We use SetHostAndPort because we want to reset the port number if needed.
+  rv = newURI->SetHostAndPort(aHostString);
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
+  return newURI.forget();
+}
+
+already_AddRefed<nsIURI>
+nsHTMLDocument::RegistrableDomainSuffixOfInternal(const nsAString& aNewDomain,
+                                                  nsIURI* aOrigHost)
+{
+  if (NS_WARN_IF(!aOrigHost)) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsIURI> newURI = CreateInheritingURIForHost(NS_ConvertUTF16toUTF8(aNewDomain));
+  if (!newURI) {
+    // Error: failed to parse input domain
+    return nullptr;
+  }
+
+  // Check new domain - must be a superdomain of the current host
+  // For example, a page from foo.bar.com may set domain to bar.com,
+  // but not to ar.com, baz.com, or fi.foo.bar.com.
+  nsAutoCString current;
+  nsAutoCString domain;
+  if (NS_FAILED(aOrigHost->GetAsciiHost(current))) {
+    current.Truncate();
+  }
+  if (NS_FAILED(newURI->GetAsciiHost(domain))) {
+    domain.Truncate();
+  }
+
+  bool ok = current.Equals(domain);
+  if (current.Length() > domain.Length() &&
+      StringEndsWith(current, domain) &&
+      current.CharAt(current.Length() - domain.Length() - 1) == '.') {
+    // We're golden if the new domain is the current page's base domain or a
+    // subdomain of it.
+    nsCOMPtr<nsIEffectiveTLDService> tldService =
+      do_GetService(NS_EFFECTIVETLDSERVICE_CONTRACTID);
+    if (!tldService) {
+      return nullptr;
+    }
+
+    nsAutoCString currentBaseDomain;
+    ok = NS_SUCCEEDED(tldService->GetBaseDomain(aOrigHost, 0, currentBaseDomain));
+    NS_ASSERTION(StringEndsWith(domain, currentBaseDomain) ==
+                 (domain.Length() >= currentBaseDomain.Length()),
+                 "uh-oh!  slight optimization wasn't valid somehow!");
+    ok = ok && domain.Length() >= currentBaseDomain.Length();
+  }
+
+  if (!ok) {
+    // Error: illegal domain
+    return nullptr;
+  }
+
+  return CreateInheritingURIForHost(domain);
+}
+
+bool
+nsHTMLDocument::IsRegistrableDomainSuffixOfOrEqualTo(const nsAString& aHostSuffixString,
+                                                     const nsACString& aOrigHost)
+{
+  // https://html.spec.whatwg.org/multipage/browsers.html#is-a-registrable-domain-suffix-of-or-is-equal-to
+  if (aHostSuffixString.IsEmpty()) {
+    return false;
+  }
+
+  nsCOMPtr<nsIURI> origURI = CreateInheritingURIForHost(aOrigHost);
+  if (!origURI) {
+    // Error: failed to parse input domain
+    return false;
+  }
+
+  nsCOMPtr<nsIURI> newURI = RegistrableDomainSuffixOfInternal(aHostSuffixString, origURI);
+  if (!newURI) {
+    // Error: illegal domain
+    return false;
+  }
+  return true;
+}
+
+
 NS_IMETHODIMP
 nsHTMLDocument::SetDomain(const nsAString& aDomain)
 {
@@ -929,64 +1039,18 @@ nsHTMLDocument::SetDomain(const nsAString& aDomain, ErrorResult& rv)
     return;
   }
 
-  // Create new URI
   nsCOMPtr<nsIURI> uri = GetDomainURI();
-
   if (!uri) {
     rv.Throw(NS_ERROR_FAILURE);
-    return;
-  }
-
-  nsCOMPtr<nsIURI> newURI;
-  nsresult rv2 = uri->Clone(getter_AddRefs(newURI));
-  if (NS_FAILED(rv2)) {
-    rv.Throw(rv2);
-    return;
-  }
-
-  rv2 = newURI->SetUserPass(EmptyCString());
-  if (NS_FAILED(rv2)) {
-    rv.Throw(rv2);
-    return;
-  }
-
-  // We use SetHostAndPort because we want to reset the port number if needed.
-  rv2 = newURI->SetHostAndPort(NS_ConvertUTF16toUTF8(aDomain));
-  if (NS_FAILED(rv2)) {
-    rv.Throw(rv2);
     return;
   }
 
   // Check new domain - must be a superdomain of the current host
   // For example, a page from foo.bar.com may set domain to bar.com,
   // but not to ar.com, baz.com, or fi.foo.bar.com.
-  nsAutoCString current, domain;
-  if (NS_FAILED(uri->GetAsciiHost(current)))
-    current.Truncate();
-  if (NS_FAILED(newURI->GetAsciiHost(domain)))
-    domain.Truncate();
 
-  bool ok = current.Equals(domain);
-  if (current.Length() > domain.Length() &&
-      StringEndsWith(current, domain) &&
-      current.CharAt(current.Length() - domain.Length() - 1) == '.') {
-    // We're golden if the new domain is the current page's base domain or a
-    // subdomain of it.
-    nsCOMPtr<nsIEffectiveTLDService> tldService =
-      do_GetService(NS_EFFECTIVETLDSERVICE_CONTRACTID);
-    if (!tldService) {
-      rv.Throw(NS_ERROR_NOT_AVAILABLE);
-      return;
-    }
-
-    nsAutoCString currentBaseDomain;
-    ok = NS_SUCCEEDED(tldService->GetBaseDomain(uri, 0, currentBaseDomain));
-    NS_ASSERTION(StringEndsWith(domain, currentBaseDomain) ==
-                 (domain.Length() >= currentBaseDomain.Length()),
-                 "uh-oh!  slight optimization wasn't valid somehow!");
-    ok = ok && domain.Length() >= currentBaseDomain.Length();
-  }
-  if (!ok) {
+  nsCOMPtr<nsIURI> newURI = RegistrableDomainSuffixOfInternal(aDomain, uri);
+  if (!newURI) {
     // Error: illegal domain
     rv.Throw(NS_ERROR_DOM_BAD_DOCUMENT_DOMAIN);
     return;
@@ -1105,31 +1169,31 @@ nsHTMLDocument::Applets()
 }
 
 bool
-nsHTMLDocument::MatchLinks(nsIContent *aContent, int32_t aNamespaceID,
+nsHTMLDocument::MatchLinks(Element* aElement, int32_t aNamespaceID,
                            nsIAtom* aAtom, void* aData)
 {
-  nsIDocument* doc = aContent->GetUncomposedDoc();
+  nsIDocument* doc = aElement->GetUncomposedDoc();
 
   if (doc) {
-    NS_ASSERTION(aContent->IsInUncomposedDoc(),
+    NS_ASSERTION(aElement->IsInUncomposedDoc(),
                  "This method should never be called on content nodes that "
                  "are not in a document!");
 #ifdef DEBUG
     {
       nsCOMPtr<nsIHTMLDocument> htmldoc =
-        do_QueryInterface(aContent->GetUncomposedDoc());
+        do_QueryInterface(aElement->GetUncomposedDoc());
       NS_ASSERTION(htmldoc,
                    "Huh, how did this happen? This should only be used with "
                    "HTML documents!");
     }
 #endif
 
-    mozilla::dom::NodeInfo *ni = aContent->NodeInfo();
+    mozilla::dom::NodeInfo *ni = aElement->NodeInfo();
 
     nsIAtom *localName = ni->NameAtom();
     if (ni->NamespaceID() == kNameSpaceID_XHTML &&
         (localName == nsGkAtoms::a || localName == nsGkAtoms::area)) {
-      return aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::href);
+      return aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::href);
     }
   }
 
@@ -1153,24 +1217,24 @@ nsHTMLDocument::Links()
 }
 
 bool
-nsHTMLDocument::MatchAnchors(nsIContent *aContent, int32_t aNamespaceID,
+nsHTMLDocument::MatchAnchors(Element* aElement, int32_t aNamespaceID,
                              nsIAtom* aAtom, void* aData)
 {
-  NS_ASSERTION(aContent->IsInUncomposedDoc(),
+  NS_ASSERTION(aElement->IsInUncomposedDoc(),
                "This method should never be called on content nodes that "
                "are not in a document!");
 #ifdef DEBUG
   {
     nsCOMPtr<nsIHTMLDocument> htmldoc =
-      do_QueryInterface(aContent->GetUncomposedDoc());
+      do_QueryInterface(aElement->GetUncomposedDoc());
     NS_ASSERTION(htmldoc,
                  "Huh, how did this happen? This should only be used with "
                  "HTML documents!");
   }
 #endif
 
-  if (aContent->NodeInfo()->Equals(nsGkAtoms::a, kNameSpaceID_XHTML)) {
-    return aContent->HasAttr(kNameSpaceID_None, nsGkAtoms::name);
+  if (aElement->IsHTMLElement(nsGkAtoms::a)) {
+    return aElement->HasAttr(kNameSpaceID_None, nsGkAtoms::name);
   }
 
   return false;
@@ -1260,7 +1324,7 @@ nsHTMLDocument::GetCookie(nsAString& aCookie, ErrorResult& rv)
     rv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return;
   }
-  
+
   // not having a cookie service isn't an error
   nsCOMPtr<nsICookieService> service = do_GetService(NS_COOKIESERVICE_CONTRACTID);
   if (service) {
@@ -1947,14 +2011,14 @@ nsHTMLDocument::Writeln(JSContext* cx, const Sequence<nsString>& aText,
 }
 
 bool
-nsHTMLDocument::MatchNameAttribute(nsIContent* aContent, int32_t aNamespaceID,
+nsHTMLDocument::MatchNameAttribute(Element* aElement, int32_t aNamespaceID,
                                    nsIAtom* aAtom, void* aData)
 {
-  NS_PRECONDITION(aContent, "Must have content node to work with!");
+  NS_PRECONDITION(aElement, "Must have element to work with!");
   nsString* elementName = static_cast<nsString*>(aData);
   return
-    aContent->GetNameSpaceID() == kNameSpaceID_XHTML &&
-    aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::name,
+    aElement->GetNameSpaceID() == kNameSpaceID_XHTML &&
+    aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::name,
                           *elementName, eCaseMatters);
 }
 
@@ -2248,7 +2312,7 @@ nsHTMLDocument::GetSupportedNames(nsTArray<nsString>& aNames)
     nsIdentifierMapEntry* entry = iter.Get();
     if (entry->HasNameElement() ||
         entry->HasIdElementExposedAsHTMLDocumentProperty()) {
-      aNames.AppendElement(entry->GetKey());
+      aNames.AppendElement(entry->GetKeyAsString());
     }
   }
 }
@@ -2274,10 +2338,10 @@ nsHTMLDocument::GetForms()
   return mForms;
 }
 
-static bool MatchFormControls(nsIContent* aContent, int32_t aNamespaceID,
-                                nsIAtom* aAtom, void* aData)
+static bool MatchFormControls(Element* aElement, int32_t aNamespaceID,
+                              nsIAtom* aAtom, void* aData)
 {
-  return aContent->IsNodeOfType(nsIContent::eHTML_FORM_CONTROL);
+  return aElement->IsNodeOfType(nsIContent::eHTML_FORM_CONTROL);
 }
 
 nsContentList*
@@ -2318,7 +2382,9 @@ nsHTMLDocument::CreateAndAddWyciwygChannel(void)
                      nsIContentPolicy::TYPE_OTHER);
   NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsILoadInfo> loadInfo = channel->GetLoadInfo();
+  NS_ENSURE_STATE(loadInfo);
   loadInfo->SetPrincipalToInherit(NodePrincipal());
+
 
   mWyciwygChannel = do_QueryInterface(channel);
 
@@ -2410,7 +2476,7 @@ nsHTMLDocument::GetDesignMode(nsAString& aDesignMode)
 void
 nsHTMLDocument::MaybeEditingStateChanged()
 {
-  if (!mPendingMaybeEditingStateChanged &&
+  if (!mPendingMaybeEditingStateChanged && mMayStartLayout &&
       mUpdateNestLevel == 0 && (mContentEditableCount > 0) != IsEditingOn()) {
     if (nsContentUtils::IsSafeToRunScript()) {
       EditingStateChanged();
@@ -2432,6 +2498,15 @@ nsHTMLDocument::EndUpdate(nsUpdateType aUpdateType)
   }
   MaybeEditingStateChanged();
 }
+
+void
+nsHTMLDocument::SetMayStartLayout(bool aMayStartLayout)
+{
+  nsIDocument::SetMayStartLayout(aMayStartLayout);
+
+  MaybeEditingStateChanged();
+}
+
 
 
 // Helper class, used below in ChangeContentEditableCount().
@@ -2805,7 +2880,12 @@ nsHTMLDocument::EditingStateChanged()
     // restricted one.
     ErrorResult errorResult;
     Unused << ExecCommand(NS_LITERAL_STRING("insertBrOnReturn"), false,
-                          NS_LITERAL_STRING("false"), CallerType::NonSystem,
+                          NS_LITERAL_STRING("false"),
+                          // Principal doesn't matter here, because the
+                          // insertBrOnReturn command doesn't use it.   Still
+                          // it's too bad we can't easily grab a nullprincipal
+                          // from somewhere without allocating one..
+                          *NodePrincipal(),
                           errorResult);
 
     if (errorResult.Failed()) {
@@ -2827,7 +2907,7 @@ nsHTMLDocument::EditingStateChanged()
   if (spellRecheckAll) {
     nsCOMPtr<nsISelectionController> selcon;
     nsresult rv = editor->GetSelectionController(getter_AddRefs(selcon));
-    NS_ENSURE_SUCCESS(rv, rv); 
+    NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsISelection> spellCheckSelection;
     rv = selcon->GetSelection(nsISelectionController::SELECTION_SPELLCHECK,
@@ -2962,6 +3042,7 @@ static const struct MidasCommand gMidasCommandTable[] = {
   { "styleWithCSS",  "cmd_setDocumentUseCSS", "", false, true },
   { "contentReadOnly", "cmd_setDocumentReadOnly", "", false, true },
   { "insertBrOnReturn", "cmd_insertBrOnReturn", "", false, true },
+  { "defaultParagraphSeparator", "cmd_defaultParagraphSeparator", "", false, false },
   { "enableObjectResizing", "cmd_enableObjectResizing", "", false, true },
   { "enableInlineTableEditing", "cmd_enableInlineTableEditing", "", false, true },
 #if 0
@@ -3134,7 +3215,7 @@ bool
 nsHTMLDocument::ExecCommand(const nsAString& commandID,
                             bool doShowUI,
                             const nsAString& value,
-                            CallerType aCallerType,
+                            nsIPrincipal& aSubjectPrincipal,
                             ErrorResult& rv)
 {
   //  for optional parameters see dom/src/base/nsHistory.cpp: HistoryImpl::Go()
@@ -3164,7 +3245,7 @@ nsHTMLDocument::ExecCommand(const nsAString& commandID,
   // special case for cut & copy
   // cut & copy are allowed in non editable documents
   if (isCutCopy) {
-    if (!nsContentUtils::IsCutCopyAllowed()) {
+    if (!nsContentUtils::IsCutCopyAllowed(&aSubjectPrincipal)) {
       // We have rejected the event due to it not being performed in an
       // input-driven context therefore, we report the error to the console.
       nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
@@ -3194,7 +3275,8 @@ nsHTMLDocument::ExecCommand(const nsAString& commandID,
   }
 
   bool restricted = commandID.LowerCaseEqualsLiteral("paste");
-  if (restricted && aCallerType != CallerType::System) {
+  if (restricted && !nsContentUtils::PrincipalHasPermission(&aSubjectPrincipal,
+                                                            NS_LITERAL_STRING("clipboardRead"))) {
     return false;
   }
 
@@ -3218,6 +3300,14 @@ nsHTMLDocument::ExecCommand(const nsAString& commandID,
        cmdToDispatch.EqualsLiteral("cmd_paragraphState")) &&
       paramStr.IsEmpty()) {
     // Invalid value, return false
+    return false;
+  }
+
+  if (cmdToDispatch.EqualsLiteral("cmd_defaultParagraphSeparator") &&
+      !paramStr.LowerCaseEqualsLiteral("div") &&
+      !paramStr.LowerCaseEqualsLiteral("p") &&
+      !paramStr.LowerCaseEqualsLiteral("br")) {
+    // Invalid value
     return false;
   }
 
@@ -3260,7 +3350,7 @@ nsHTMLDocument::ExecCommand(const nsAString& commandID,
 
 bool
 nsHTMLDocument::QueryCommandEnabled(const nsAString& commandID,
-                                    CallerType aCallerType,
+                                    nsIPrincipal& aSubjectPrincipal,
                                     ErrorResult& rv)
 {
   nsAutoCString cmdToDispatch;
@@ -3272,12 +3362,12 @@ nsHTMLDocument::QueryCommandEnabled(const nsAString& commandID,
   bool isCutCopy = commandID.LowerCaseEqualsLiteral("cut") ||
                    commandID.LowerCaseEqualsLiteral("copy");
   if (isCutCopy) {
-    return nsContentUtils::IsCutCopyAllowed();
+    return nsContentUtils::IsCutCopyAllowed(&aSubjectPrincipal);
   }
 
   // Report false for restricted commands
   bool restricted = commandID.LowerCaseEqualsLiteral("paste");
-  if (restricted && aCallerType != CallerType::System) {
+  if (restricted && !nsContentUtils::IsSystemPrincipal(&aSubjectPrincipal)) {
     return false;
   }
 
@@ -3460,6 +3550,9 @@ nsHTMLDocument::QueryCommandSupported(const nsAString& commandID,
       return false;
     }
     if (nsContentUtils::IsCutCopyRestricted()) {
+      // XXXbz should we worry about correctly reporting "true" in the
+      // "restricted, but we're an addon with clipboardWrite permissions" case?
+      // See also nsContentUtils::IsCutCopyAllowed.
       if (commandID.LowerCaseEqualsLiteral("cut") ||
           commandID.LowerCaseEqualsLiteral("copy")) {
         return false;

@@ -50,6 +50,10 @@ Preferences
 
   Sets whether to dump Telemetry log messages to ``stdout`` too.
 
+``toolkit.telemetry.shutdownPingSender.enabled``
+
+  Allow the ``shutdown`` ping to be sent when the browser shuts down, from the second browsing session on, instead of the next restart, using the :doc:`ping sender <pingsender>`.
+
 Data-choices notification
 -------------------------
 
@@ -100,7 +104,7 @@ The following prefs are for testing purpose only.
 
 ``toolkit.telemetry.minSubsessionLength``
 
-  Minimum length of a telemetry subsession (seconds).
+  Minimum length of a telemetry subsession and throttling time for common environment changes (seconds).
 
 ``toolkit.telemetry.collectInterval``
 
@@ -117,6 +121,10 @@ The following prefs are for testing purpose only.
 ``toolkit.telemetry.idleTimeout``
 
   Timeout until we decide whether a user is idle or not (seconds).
+
+``toolkit.telemetry.modulesPing.interval``
+
+  Interval between "modules" ping transmissions.
 
 ``toolkit.telemetry.send.overrideOfficialCheck``
 

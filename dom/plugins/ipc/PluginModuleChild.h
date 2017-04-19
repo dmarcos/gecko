@@ -46,17 +46,12 @@ typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGINUNIXINIT) (const NPNetscapeFun
 typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGINSHUTDOWN) (void);
 
 namespace mozilla {
-namespace dom {
-class PCrashReporterChild;
-} // namespace dom
-
 namespace plugins {
 
 class PluginInstanceChild;
 
 class PluginModuleChild : public PPluginModuleChild
 {
-    typedef mozilla::dom::PCrashReporterChild PCrashReporterChild;
 protected:
     virtual mozilla::ipc::RacyInterruptPolicy
     MediateInterruptRace(const MessageInfo& parent,
@@ -83,7 +78,6 @@ protected:
 
     virtual PPluginInstanceChild*
     AllocPPluginInstanceChild(const nsCString& aMimeType,
-                              const uint16_t& aMode,
                               const InfallibleTArray<nsCString>& aNames,
                               const InfallibleTArray<nsCString>& aValues)
                               override;
@@ -94,7 +88,6 @@ protected:
     virtual mozilla::ipc::IPCResult
     RecvPPluginInstanceConstructor(PPluginInstanceChild* aActor,
                                    const nsCString& aMimeType,
-                                   const uint16_t& aMode,
                                    InfallibleTArray<nsCString>&& aNames,
                                    InfallibleTArray<nsCString>&& aValues)
                                    override;
@@ -123,15 +116,8 @@ protected:
     virtual mozilla::ipc::IPCResult
     RecvSetParentHangTimeout(const uint32_t& aSeconds) override;
 
-    virtual PCrashReporterChild*
-    AllocPCrashReporterChild(mozilla::dom::NativeThreadId* id,
-                             uint32_t* processType) override;
-    virtual bool
-    DeallocPCrashReporterChild(PCrashReporterChild* actor) override;
     virtual mozilla::ipc::IPCResult
-    AnswerPCrashReporterConstructor(PCrashReporterChild* actor,
-                                    mozilla::dom::NativeThreadId* id,
-                                    uint32_t* processType) override;
+    AnswerInitCrashReporter(Shmem&& aShmem, mozilla::dom::NativeThreadId* aId) override;
 
     virtual void
     ActorDestroy(ActorDestroyReason why) override;
@@ -141,6 +127,7 @@ protected:
 
     virtual mozilla::ipc::IPCResult RecvStartProfiler(const ProfilerInitParams& params) override;
     virtual mozilla::ipc::IPCResult RecvStopProfiler() override;
+    virtual mozilla::ipc::IPCResult RecvPauseProfiler(const bool& aPause) override;
     virtual mozilla::ipc::IPCResult RecvGatherProfile() override;
 
     virtual mozilla::ipc::IPCResult

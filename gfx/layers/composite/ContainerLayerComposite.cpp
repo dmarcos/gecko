@@ -72,9 +72,12 @@ DrawLayerInfo(const RenderTargetIntRect& aClipRect,
   uint32_t maxWidth = std::min<uint32_t>(visibleRegion.GetBounds().width, 500);
 
   IntPoint topLeft = visibleRegion.ToUnknownRegion().GetBounds().TopLeft();
-  aManager->GetTextRenderer()->RenderText(ss.str().c_str(), topLeft,
-                                          aLayer->GetEffectiveTransform(), 16,
-                                          maxWidth);
+  aManager->GetTextRenderer()->RenderText(
+    aManager->GetCompositor(),
+    ss.str().c_str(),
+    topLeft,
+    aLayer->GetEffectiveTransform(), 16,
+    maxWidth);
 }
 
 static void
@@ -108,10 +111,6 @@ SelectLayerGeometry(const Maybe<gfx::Polygon>& aParentGeometry,
 {
   // Both the parent and the child layer were split.
   if (aParentGeometry && aChildGeometry) {
-    // As we use intermediate surface in these cases, this branch should never
-    // get executed.
-    MOZ_ASSERT(false,
-               "Both parent and child geometry present in nested 3D context!");
     return Some(aParentGeometry->ClipPolygon(*aChildGeometry));
   }
 
@@ -132,7 +131,7 @@ SelectLayerGeometry(const Maybe<gfx::Polygon>& aParentGeometry,
 static void
 TransformLayerGeometry(Layer* aLayer, Maybe<gfx::Polygon>& aGeometry)
 {
-  Layer* parent = aLayer->GetParent();
+  Layer* parent = aLayer;
   gfx::Matrix4x4 transform;
 
   // Collect all parent transforms.
@@ -142,7 +141,14 @@ TransformLayerGeometry(Layer* aLayer, Maybe<gfx::Polygon>& aGeometry)
   }
 
   // Transform the geometry to the parent 3D context leaf coordinate space.
-  aGeometry->TransformToScreenSpace(transform.ProjectTo2D().Inverse());
+  transform = transform.ProjectTo2D();
+
+  if (!transform.IsSingular()) {
+    aGeometry->TransformToScreenSpace(transform.Inverse());
+  } else {
+    // Discard the geometry since the result might not be correct.
+    aGeometry.reset();
+  }
 }
 
 
@@ -159,8 +165,8 @@ struct PreparedLayer
 {
   PreparedLayer(LayerComposite *aLayer,
                 RenderTargetIntRect aClipRect,
-                Maybe<gfx::Polygon> aGeometry)
-  : mLayer(aLayer), mClipRect(aClipRect), mGeometry(aGeometry) {}
+                Maybe<gfx::Polygon>&& aGeometry)
+  : mLayer(aLayer), mClipRect(aClipRect), mGeometry(Move(aGeometry)) {}
 
   LayerComposite* mLayer;
   RenderTargetIntRect mClipRect;
@@ -189,10 +195,10 @@ ContainerPrepare(ContainerT* aContainer,
     ? ContainerLayerComposite::SortMode::WITH_GEOMETRY
     : ContainerLayerComposite::SortMode::WITHOUT_GEOMETRY;
 
-  const nsTArray<LayerPolygon> polygons =
+  nsTArray<LayerPolygon> polygons =
     aContainer->SortChildrenBy3DZOrder(sortMode);
 
-  for (const LayerPolygon& layer : polygons) {
+  for (LayerPolygon& layer : polygons) {
     LayerComposite* layerToRender =
       static_cast<LayerComposite*>(layer.layer->ImplData());
 
@@ -221,7 +227,8 @@ ContainerPrepare(ContainerT* aContainer,
     CULLING_LOG("Preparing sublayer %p\n", layerToRender->GetLayer());
 
     layerToRender->Prepare(clipRect);
-    aContainer->mPrepared->mLayers.AppendElement(PreparedLayer(layerToRender, clipRect, layer.geometry));
+    aContainer->mPrepared->mLayers.AppendElement(PreparedLayer(layerToRender, clipRect,
+                                                               Move(layer.geometry)));
   }
 
   CULLING_LOG("Preparing container layer %p\n", aContainer->GetLayer());
@@ -446,12 +453,16 @@ RenderLayers(ContainerT* aContainer, LayerManagerComposite* aManager,
         layerToRender->SetClearRect(gfx::IntRect(0, 0, 0, 0));
       }
     } else {
+      // Since we force an intermediate surface for nested 3D contexts,
+      // aGeometry and childGeometry are both in the same coordinate space.
       Maybe<gfx::Polygon> geometry =
         SelectLayerGeometry(aGeometry, childGeometry);
 
       // If we are dealing with a nested 3D context, we might need to transform
-      // the geometry to the coordinate space of the parent 3D context leaf.
-      const bool isLeafLayer = layer->AsContainerLayer() == nullptr;
+      // the geometry back to the coordinate space of the current layer before
+      // rendering the layer.
+      ContainerLayer* container = layer->AsContainerLayer();
+      const bool isLeafLayer = !container || container->UseIntermediateSurface();
 
       if (geometry && isLeafLayer) {
         TransformLayerGeometry(layer, geometry);

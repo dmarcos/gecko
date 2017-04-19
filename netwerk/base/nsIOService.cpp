@@ -84,7 +84,7 @@ namespace net {
 
 nsIOService* gIOService = nullptr;
 static bool gHasWarnedUploadChannel2;
-
+static bool gCaptivePortalEnabled = false;
 static LazyLogModule gIOServiceLog("nsIOService");
 #undef LOG
 #define LOG(args)     MOZ_LOG(gIOServiceLog, LogLevel::Debug, args)
@@ -542,7 +542,7 @@ nsIOService::GetProtocolHandler(const char* scheme, nsIProtocolHandler* *result)
             return rv;
         }
 
-#ifdef MOZ_ENABLE_GIO
+#ifdef MOZ_WIDGET_GTK
         // check to see whether GVFS can handle this URI scheme.  if it can
         // create a nsIURI for the "scheme:", then we assume it has support for
         // the requested protocol.  otherwise, we failover to using the default
@@ -596,6 +596,10 @@ nsIOService::GetProtocolFlags(const char* scheme, uint32_t *flags)
     // API is used by (and only used by) extensions, which is why it's still
     // around. Calling this on a scheme with dynamic flags will throw.
     rv = handler->GetProtocolFlags(flags);
+#if !IS_ORIGIN_IS_FULL_SPEC_DEFINED
+    MOZ_RELEASE_ASSERT(!(*flags & nsIProtocolHandler::ORIGIN_IS_FULL_SPEC),
+                       "ORIGIN_IS_FULL_SPEC is unsupported but used");
+#endif
     return rv;
 }
 
@@ -787,15 +791,22 @@ nsIOService::NewChannelFromURIWithProxyFlagsInternal(nsIURI* aURI,
     }
     else {
         rv = handler->NewChannel2(aURI, aLoadInfo, getter_AddRefs(channel));
-        // if calling newChannel2() fails we try to fall back to
+        // if an implementation of NewChannel2() is missing we try to fall back to
         // creating a new channel by calling NewChannel().
-        if (NS_FAILED(rv)) {
+        if (rv == NS_ERROR_NOT_IMPLEMENTED ||
+            rv == NS_ERROR_XPC_JSOBJECT_HAS_NO_FUNCTION_NAMED) {
+            LOG(("NewChannel2 not implemented rv=%" PRIx32
+                 ". Falling back to NewChannel\n", static_cast<uint32_t>(rv)));
             rv = handler->NewChannel(aURI, getter_AddRefs(channel));
-            NS_ENSURE_SUCCESS(rv, rv);
+            if (NS_FAILED(rv)) {
+                return rv;
+            }
             // The protocol handler does not implement NewChannel2, so
             // maybe we need to wrap the channel (see comment in MaybeWrap
             // function).
             channel = nsSecCheckWrapChannel::MaybeWrap(channel, aLoadInfo);
+        } else if (NS_FAILED(rv)) {
+            return rv;
         }
     }
 
@@ -828,9 +839,10 @@ nsIOService::NewChannelFromURIWithProxyFlagsInternal(nsIURI* aURI,
             nsCOMPtr<nsIConsoleService> consoleService =
                 do_GetService(NS_CONSOLESERVICE_CONTRACTID);
             if (consoleService) {
-                consoleService->LogStringMessage(NS_LITERAL_STRING(
-                    "Http channel implementation doesn't support nsIUploadChannel2. An extension has supplied a non-functional http protocol handler. This will break behavior and in future releases not work at all."
-                                                                   ).get());
+                consoleService->LogStringMessage(u"Http channel implementation "
+                    "doesn't support nsIUploadChannel2. An extension has "
+                    "supplied a non-functional http protocol handler. This will "
+                    "break behavior and in future releases not work at all.");
             }
             gHasWarnedUploadChannel2 = true;
         }
@@ -1056,14 +1068,13 @@ nsIOService::SetOffline(bool offline)
         offline = mSetOfflineValue;
 
         if (offline && !mOffline) {
-            NS_NAMED_LITERAL_STRING(offlineString, NS_IOSERVICE_OFFLINE);
             mOffline = true; // indicate we're trying to shutdown
 
             // don't care if notifications fail
             if (observerService)
                 observerService->NotifyObservers(subject,
                                                  NS_IOSERVICE_GOING_OFFLINE_TOPIC,
-                                                 offlineString.get());
+                                                 u"" NS_IOSERVICE_OFFLINE);
 
             if (mSocketTransportService)
                 mSocketTransportService->SetOffline(true);
@@ -1072,7 +1083,7 @@ nsIOService::SetOffline(bool offline)
             if (observerService)
                 observerService->NotifyObservers(subject,
                                                  NS_IOSERVICE_OFFLINE_STATUS_TOPIC,
-                                                 offlineString.get());
+                                                 u"" NS_IOSERVICE_OFFLINE);
         }
         else if (!offline && mOffline) {
             // go online
@@ -1152,7 +1163,7 @@ nsIOService::SetConnectivityInternal(bool aConnectivity)
     mLastConnectivityChange = PR_IntervalNow();
 
     if (mCaptivePortalService) {
-        if (aConnectivity && !xpc::AreNonLocalConnectionsDisabled()) {
+        if (aConnectivity && !xpc::AreNonLocalConnectionsDisabled() && gCaptivePortalEnabled) {
             // This will also trigger a captive portal check for the new network
             static_cast<CaptivePortalService*>(mCaptivePortalService.get())->Start();
         } else {
@@ -1187,13 +1198,12 @@ nsIOService::SetConnectivityInternal(bool aConnectivity)
     } else {
         // If we were previously online and lost connectivity
         // send the OFFLINE notification
-        const nsLiteralString offlineString(u"" NS_IOSERVICE_OFFLINE);
         observerService->NotifyObservers(static_cast<nsIIOService *>(this),
                                          NS_IOSERVICE_GOING_OFFLINE_TOPIC,
-                                         offlineString.get());
+                                         u"" NS_IOSERVICE_OFFLINE);
         observerService->NotifyObservers(static_cast<nsIIOService *>(this),
                                          NS_IOSERVICE_OFFLINE_STATUS_TOPIC,
-                                         offlineString.get());
+                                         u"" NS_IOSERVICE_OFFLINE);
     }
     return NS_OK;
 }
@@ -1295,10 +1305,9 @@ nsIOService::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
     }
 
     if (!pref || strcmp(pref, NETWORK_CAPTIVE_PORTAL_PREF) == 0) {
-        bool captivePortalEnabled;
-        nsresult rv = prefs->GetBoolPref(NETWORK_CAPTIVE_PORTAL_PREF, &captivePortalEnabled);
+        nsresult rv = prefs->GetBoolPref(NETWORK_CAPTIVE_PORTAL_PREF, &gCaptivePortalEnabled);
         if (NS_SUCCEEDED(rv) && mCaptivePortalService) {
-            if (captivePortalEnabled && !xpc::AreNonLocalConnectionsDisabled()) {
+            if (gCaptivePortalEnabled && !xpc::AreNonLocalConnectionsDisabled()) {
                 static_cast<CaptivePortalService*>(mCaptivePortalService.get())->Start();
             } else {
                 static_cast<CaptivePortalService*>(mCaptivePortalService.get())->Stop();
@@ -1803,6 +1812,8 @@ nsIOService::SpeculativeConnectInternal(nsIURI *aURI,
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIPrincipal> loadingPrincipal = aPrincipal;
+
+    NS_ASSERTION(aPrincipal, "We expect passing a principal here.");
 
     // If the principal is given, we use this prinicpal directly. Otherwise,
     // we fallback to use the system principal.

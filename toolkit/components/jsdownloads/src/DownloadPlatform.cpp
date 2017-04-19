@@ -59,7 +59,7 @@ DownloadPlatform* DownloadPlatform::GetDownloadPlatform()
   return gDownloadPlatformService;
 }
 
-#ifdef MOZ_ENABLE_GIO
+#ifdef MOZ_WIDGET_GTK
 static void gio_set_metadata_done(GObject *source_obj, GAsyncResult *res, gpointer user_data)
 {
   GError *err = nullptr;
@@ -131,7 +131,7 @@ nsresult DownloadPlatform::DownloadDone(nsIURI* aSource, nsIURI* aReferrer, nsIF
 #endif
       }
 #endif
-#ifdef MOZ_ENABLE_GIO
+#ifdef MOZ_WIDGET_GTK
       // Use GIO to store the source URI for later display in the file manager.
       GFile* gio_file = g_file_new_for_path(NS_ConvertUTF16toUTF8(path).get());
       nsCString source_uri;
@@ -190,18 +190,6 @@ nsresult DownloadPlatform::DownloadDone(nsIURI* aSource, nsIURI* aReferrer, nsIF
       }
     }
 #endif
-    if (mozilla::Preferences::GetBool("device.storage.enabled", true)) {
-      // Tell DeviceStorage that a new file may have been added.
-      nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
-      nsCOMPtr<nsISupportsString> pathString
-        = do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID);
-      if (obs && pathString) {
-        if (NS_SUCCEEDED(pathString->SetData(path))) {
-          (void)obs->NotifyObservers(pathString, "download-watcher-notify",
-                                     u"modified");
-        }
-      }
-    }
   }
 
 #endif

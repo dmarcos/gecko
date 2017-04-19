@@ -18,6 +18,7 @@ PARAMETER_NAMES = set([
     'head_ref',
     'head_repository',
     'head_rev',
+    'include_nightly',
     'level',
     'message',
     'moz_build_date',
@@ -62,9 +63,7 @@ def load_parameters_file(options):
     Load parameters from the --parameters option
     """
     import urllib
-
-    url_prefix = "https://queue.taskcluster.net/v1/task/"
-    url_postfix = "/artifacts/public/parameters.yml"
+    from taskgraph.util.taskcluster import get_artifact_url
 
     filename = options['parameters']
 
@@ -78,7 +77,7 @@ def load_parameters_file(options):
         # fetching parameters.yml using task task-id or supplied url
         if filename.startswith("task-id="):
             task_id = filename.split("=")[1]
-            filename = url_prefix + task_id + url_postfix
+            filename = get_artifact_url(task_id, 'public/parameters.yml')
         f = urllib.urlopen(filename)
 
     if filename.endswith('.yml'):

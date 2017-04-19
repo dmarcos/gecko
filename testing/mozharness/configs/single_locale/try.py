@@ -5,7 +5,6 @@ config = {
     "branch": "try",
     "en_us_binary_url": "http://archive.mozilla.org/pub/firefox/nightly/latest-mozilla-central",
     "update_channel": "nightly",
-    "latest_mar_dir": '/pub/firefox/nightly/latest-mozilla-central-l10n',
     "update_gecko_source_to_enUS": False,
 
     # l10n
@@ -30,7 +29,7 @@ config = {
         "repo": "https://hg.mozilla.org/try",
         "revision": "%(revision)s",
         "dest": "try",
-        "clone_upstream_url": "https://hg.mozilla.org/mozilla-central",
+        "clone_upstream_url": "https://hg.mozilla.org/mozilla-unified",
         "clone_by_revision": True,
         "clone_with_purge": True,
     }],

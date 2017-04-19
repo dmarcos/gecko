@@ -21,7 +21,7 @@
 
 #include <stdarg.h>
 
-#ifdef XP_WIN
+#if defined(GP_OS_windows)
 #include <windows.h>
 #define getpid GetCurrentProcessId
 #endif
@@ -57,7 +57,7 @@ static mozilla::StaticMutex sMutex;
 
 // The generation of TraceInfo. It will be > 0 if the Task Tracer is started and
 // <= 0 if stopped.
-static mozilla::Atomic<bool> sStarted;
+bool gStarted(false);
 static nsTArray<UniquePtr<TraceInfo>>* sTraceInfos = nullptr;
 static PRTime sStartTime;
 
@@ -74,8 +74,8 @@ GetTimestamp()
 static TraceInfo*
 AllocTraceInfo(int aTid)
 {
-  StaticMutexAutoLock lock(sMutex);
-
+  sMutex.AssertCurrentThreadOwns();
+  MOZ_ASSERT(sTraceInfos);
   auto* info = sTraceInfos->AppendElement(MakeUnique<TraceInfo>(aTid));
 
   return info->get();
@@ -86,12 +86,14 @@ CreateSourceEvent(SourceEventType aType)
 {
   // Create a new unique task id.
   uint64_t newId = GenNewUniqueTaskId();
-  TraceInfo* info = GetOrCreateTraceInfo();
-  ENSURE_TRUE_VOID(info);
+  {
+    TraceInfoHolder info = GetOrCreateTraceInfo();
+    ENSURE_TRUE_VOID(info);
 
-  info->mCurTraceSourceId = newId;
-  info->mCurTraceSourceType = aType;
-  info->mCurTaskId = newId;
+    info->mCurTraceSourceId = newId;
+    info->mCurTraceSourceType = aType;
+    info->mCurTaskId = newId;
+  }
 
   uintptr_t* namePtr;
 #define SOURCE_EVENT_NAME(type)         \
@@ -118,40 +120,39 @@ static void
 DestroySourceEvent()
 {
   // Log a fake end for this source event.
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
-  LogEnd(info->mCurTraceSourceId, info->mCurTraceSourceId);
-}
+  uint64_t curTraceSourceId;
+  curTraceSourceId = info->mCurTraceSourceId;
+  info.Reset();
 
-inline static bool
-IsStartLogging()
-{
-  return sStarted;
-}
-
-static void
-SetLogStarted(bool aIsStartLogging)
-{
-  MOZ_ASSERT(aIsStartLogging != sStarted);
-  MOZ_ASSERT(sTraceInfos != nullptr);
-  sStarted = aIsStartLogging;
-
-  StaticMutexAutoLock lock(sMutex);
-  if (!aIsStartLogging && sTraceInfos) {
-    for (uint32_t i = 0; i < sTraceInfos->Length(); ++i) {
-      (*sTraceInfos)[i]->mObsolete = true;
-    }
-  }
+  LogEnd(curTraceSourceId, curTraceSourceId);
 }
 
 inline static void
 ObsoleteCurrentTraceInfos()
 {
-  // Note that we can't and don't need to acquire sMutex here because this
-  // function is called before the other threads are recreated.
+  MOZ_ASSERT(sTraceInfos);
   for (uint32_t i = 0; i < sTraceInfos->Length(); ++i) {
     (*sTraceInfos)[i]->mObsolete = true;
+  }
+}
+
+static void
+SetLogStarted(bool aIsStartLogging)
+{
+  MOZ_ASSERT(aIsStartLogging != gStarted);
+  StaticMutexAutoLock lock(sMutex);
+
+  gStarted = aIsStartLogging;
+
+  if (aIsStartLogging && sTraceInfos == nullptr) {
+    sTraceInfos = new nsTArray<UniquePtr<TraceInfo>>();
+  }
+
+  if (!aIsStartLogging && sTraceInfos) {
+    ObsoleteCurrentTraceInfos();
   }
 }
 
@@ -191,9 +192,6 @@ InitTaskTracer(uint32_t aFlags)
   if (!success) {
     MOZ_CRASH();
   }
-
-  // A memory barrier is necessary here.
-  sTraceInfos = new nsTArray<UniquePtr<TraceInfo>>();
 }
 
 void
@@ -201,13 +199,22 @@ ShutdownTaskTracer()
 {
   if (IsStartLogging()) {
     SetLogStarted(false);
+
+    StaticMutexAutoLock lock(sMutex);
+    // Make sure all threads are out of holding mutics.
+    // See |GetOrCreateTraceInfo()|
+    for (auto& traceinfo: *sTraceInfos) {
+      MutexAutoLock lock(traceinfo->mLogsMutex);
+    }
+    delete sTraceInfos;
+    sTraceInfos = nullptr;
   }
 }
 
 static void
 FreeTraceInfo(TraceInfo* aTraceInfo)
 {
-  StaticMutexAutoLock lock(sMutex);
+  sMutex.AssertCurrentThreadOwns();
   if (aTraceInfo) {
     UniquePtr<TraceInfo> traceinfo(aTraceInfo);
     mozilla::DebugOnly<bool> removed =
@@ -219,15 +226,19 @@ FreeTraceInfo(TraceInfo* aTraceInfo)
 
 void FreeTraceInfo()
 {
-  FreeTraceInfo(sTraceInfoTLS.get());
+  StaticMutexAutoLock lock(sMutex);
+  if (sTraceInfos) {
+    FreeTraceInfo(sTraceInfoTLS.get());
+  }
 }
 
-TraceInfo*
+TraceInfoHolder
 GetOrCreateTraceInfo()
 {
-  ENSURE_TRUE(IsStartLogging(), nullptr);
-
   TraceInfo* info = sTraceInfoTLS.get();
+  StaticMutexAutoLock lock(sMutex);
+  ENSURE_TRUE(IsStartLogging(), TraceInfoHolder{});
+
   if (info && info->mObsolete) {
     // TraceInfo is obsolete: remove it.
     FreeTraceInfo(info);
@@ -239,13 +250,15 @@ GetOrCreateTraceInfo()
     sTraceInfoTLS.set(info);
   }
 
-  return info;
+  return TraceInfoHolder{info}; // |mLogsMutex| will be held, then
+                                // ||sMutex| will be released for
+                                // efficiency reason.
 }
 
 uint64_t
 GenNewUniqueTaskId()
 {
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE(info, 0);
 
   Thread::tid_t tid = Thread::GetCurrentId();
@@ -253,12 +266,12 @@ GenNewUniqueTaskId()
   return taskid;
 }
 
-AutoSaveCurTraceInfo::AutoSaveCurTraceInfo()
+AutoSaveCurTraceInfoImpl::AutoSaveCurTraceInfoImpl()
 {
   GetCurTraceInfo(&mSavedSourceEventId, &mSavedTaskId, &mSavedSourceEventType);
 }
 
-AutoSaveCurTraceInfo::~AutoSaveCurTraceInfo()
+AutoSaveCurTraceInfoImpl::~AutoSaveCurTraceInfoImpl()
 {
   SetCurTraceInfo(mSavedSourceEventId, mSavedTaskId, mSavedSourceEventType);
 }
@@ -267,7 +280,7 @@ void
 SetCurTraceInfo(uint64_t aSourceEventId, uint64_t aParentTaskId,
                 SourceEventType aSourceEventType)
 {
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
   info->mCurTraceSourceId = aSourceEventId;
@@ -279,7 +292,7 @@ void
 GetCurTraceInfo(uint64_t* aOutSourceEventId, uint64_t* aOutParentTaskId,
                 SourceEventType* aOutSourceEventType)
 {
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
   *aOutSourceEventId = info->mCurTraceSourceId;
@@ -298,7 +311,7 @@ void
 LogDispatch(uint64_t aTaskId, uint64_t aParentTaskId, uint64_t aSourceEventId,
             SourceEventType aSourceEventType, int aDelayTimeMs)
 {
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
   // aDelayTimeMs is the expected delay time in milliseconds, thus the dispatch
@@ -306,7 +319,6 @@ LogDispatch(uint64_t aTaskId, uint64_t aParentTaskId, uint64_t aSourceEventId,
   uint64_t time = (aDelayTimeMs <= 0) ? GetTimestamp() :
                   GetTimestamp() + aDelayTimeMs;
 
-  MutexAutoLock lock(info->mLogsMutex);
   // Log format:
   // [0 taskId dispatchTime sourceEventId sourceEventType parentTaskId]
   TraceInfoLogType* log = info->AppendLog();
@@ -323,10 +335,9 @@ LogDispatch(uint64_t aTaskId, uint64_t aParentTaskId, uint64_t aSourceEventId,
 void
 LogBegin(uint64_t aTaskId, uint64_t aSourceEventId)
 {
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
-  MutexAutoLock lock(info->mLogsMutex);
   // Log format:
   // [1 taskId beginTime processId threadId]
   TraceInfoLogType* log = info->AppendLog();
@@ -342,10 +353,9 @@ LogBegin(uint64_t aTaskId, uint64_t aSourceEventId)
 void
 LogEnd(uint64_t aTaskId, uint64_t aSourceEventId)
 {
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
-  MutexAutoLock lock(info->mLogsMutex);
   // Log format:
   // [2 taskId endTime]
   TraceInfoLogType* log = info->AppendLog();
@@ -359,10 +369,9 @@ LogEnd(uint64_t aTaskId, uint64_t aSourceEventId)
 void
 LogVirtualTablePtr(uint64_t aTaskId, uint64_t aSourceEventId, uintptr_t* aVptr)
 {
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
-  MutexAutoLock lock(info->mLogsMutex);
   // Log format:
   // [4 taskId address]
   TraceInfoLogType* log = info->AppendLog();
@@ -376,55 +385,40 @@ LogVirtualTablePtr(uint64_t aTaskId, uint64_t aSourceEventId, uintptr_t* aVptr)
   }
 }
 
-AutoSourceEvent::AutoSourceEvent(SourceEventType aType)
-  : AutoSaveCurTraceInfo()
+void
+AutoSourceEvent::StartScope(SourceEventType aType)
 {
   CreateSourceEvent(aType);
 }
 
-AutoSourceEvent::~AutoSourceEvent()
+void
+AutoSourceEvent::StopScope()
 {
   DestroySourceEvent();
 }
 
-AutoScopedLabel::AutoScopedLabel(const char* aFormat, ...)
-  : mLabel(nullptr)
+void
+AutoScopedLabel::Init(const char* aFormat, va_list& aArgs)
 {
-  if (IsStartLogging()) {
-    // Optimization for when it is disabled.
-    nsCString label;
-    va_list args;
-    va_start(args, aFormat);
-    label.AppendPrintf(aFormat, args);
-    va_end(args);
-    mLabel = strdup(label.get());
-    AddLabel("Begin %s", mLabel);
-  }
+  nsCString label;
+  va_list& args = aArgs;
+  label.AppendPrintf(aFormat, args);
+  mLabel = strdup(label.get());
+  AddLabel("Begin %s", mLabel);
 }
 
-AutoScopedLabel::~AutoScopedLabel()
+void DoAddLabel(const char* aFormat, va_list& aArgs)
 {
-  if (mLabel) {
-    AddLabel("End %s", mLabel);
-    free(mLabel);
-  }
-}
-
-void AddLabel(const char* aFormat, ...)
-{
-  TraceInfo* info = GetOrCreateTraceInfo();
+  TraceInfoHolder info = GetOrCreateTraceInfo();
   ENSURE_TRUE_VOID(info);
 
-  MutexAutoLock lock(info->mLogsMutex);
   // Log format:
   // [3 taskId "label"]
   TraceInfoLogType* log = info->AppendLog();
   if (log) {
-    va_list args;
-    va_start(args, aFormat);
+    va_list& args = aArgs;
     nsCString &buffer = *info->mStrs.AppendElement();
     buffer.AppendPrintf(aFormat, args);
-    va_end(args);
 
     log->mLabel.mType = ACTION_ADD_LABEL;
     log->mLabel.mTaskId = info->mCurTaskId;
@@ -456,6 +450,10 @@ GetLoggedData(TimeStamp aTimeStamp)
   // TODO: This is called from a signal handler. Use semaphore instead.
   StaticMutexAutoLock lock(sMutex);
 
+  if (sTraceInfos == nullptr) {
+    return result;
+  }
+
   for (uint32_t i = 0; i < sTraceInfos->Length(); ++i) {
     TraceInfo* info = (*sTraceInfos)[i].get();
     MutexAutoLock lockLogs(info->mLogsMutex);
@@ -470,37 +468,44 @@ GetLoggedData(TimeStamp aTimeStamp)
 
       switch (log.mType) {
       case ACTION_DISPATCH:
-        buffer.AppendPrintf("%d %lld %lld %lld %d %lld",
+        buffer.AppendPrintf("%d %llu %llu %llu %d %llu",
                             ACTION_DISPATCH,
-                            log.mDispatch.mTaskId,
-                            log.mDispatch.mTime,
-                            log.mDispatch.mSourceEventId,
+                            (unsigned long long)log.mDispatch.mTaskId,
+                            (unsigned long long)log.mDispatch.mTime,
+                            (unsigned long long)log.mDispatch.mSourceEventId,
                             log.mDispatch.mSourceEventType,
-                            log.mDispatch.mParentTaskId);
+                            (unsigned long long)log.mDispatch.mParentTaskId);
         break;
 
       case ACTION_BEGIN:
-        buffer.AppendPrintf("%d %lld %lld %d %d",
-                            ACTION_BEGIN, log.mBegin.mTaskId,
-                            log.mBegin.mTime, log.mBegin.mPid,
+        buffer.AppendPrintf("%d %llu %llu %d %d",
+                            ACTION_BEGIN,
+                            (unsigned long long)log.mBegin.mTaskId,
+                            (unsigned long long)log.mBegin.mTime,
+                            log.mBegin.mPid,
                             log.mBegin.mTid);
         break;
 
       case ACTION_END:
-        buffer.AppendPrintf("%d %lld %lld",
-                            ACTION_END, log.mEnd.mTaskId, log.mEnd.mTime);
+        buffer.AppendPrintf("%d %llu %llu",
+                            ACTION_END,
+                            (unsigned long long)log.mEnd.mTaskId,
+                            (unsigned long long)log.mEnd.mTime);
         break;
 
       case ACTION_GET_VTABLE:
-        buffer.AppendPrintf("%d %lld %p",
-                            ACTION_GET_VTABLE, log.mVPtr.mTaskId,
-                            log.mVPtr.mVPtr);
+        buffer.AppendPrintf("%d %llu %p",
+                            ACTION_GET_VTABLE,
+                            (unsigned long long)log.mVPtr.mTaskId,
+                            (void*)log.mVPtr.mVPtr);
         break;
 
       case ACTION_ADD_LABEL:
-        buffer.AppendPrintf("%d %lld %lld \"%s\"",
-                            ACTION_ADD_LABEL, log.mLabel.mTaskId,
-                            log.mLabel.mTime, strs[log.mLabel.mStrIdx].get());
+        buffer.AppendPrintf("%d %llu %llu2 \"%s\"",
+                            ACTION_ADD_LABEL,
+                            (unsigned long long)log.mLabel.mTaskId,
+                            (unsigned long long)log.mLabel.mTime,
+                            strs[log.mLabel.mStrIdx].get());
         break;
 
       default:

@@ -411,7 +411,8 @@ DoLink(const char* aPath, const char* aPath2,
 {
   if (aOper == SandboxBrokerCommon::Operation::SANDBOX_FILE_LINK) {
     return link(aPath, aPath2);
-  } else if (aOper == SandboxBrokerCommon::Operation::SANDBOX_FILE_SYMLINK) {
+  }
+  if (aOper == SandboxBrokerCommon::Operation::SANDBOX_FILE_SYMLINK) {
     return symlink(aPath, aPath2);
   }
   MOZ_CRASH("SandboxBroker: Unknown link operation");
@@ -673,7 +674,14 @@ SandboxBroker::ThreadMain(void)
             resp.mError = -errno;
           }
         } else {
-          AuditDenial(req.mOp, req.mFlags, perms, pathBuf);
+          struct stat sb;
+          // This doesn't need an additional policy check because
+          // MAY_ACCESS is required to even enter this switch statement.
+          if (lstat(pathBuf, &sb) == 0) {
+            resp.mError = -EEXIST;
+          } else {
+            AuditDenial(req.mOp, req.mFlags, perms, pathBuf);
+          }
         }
         break;
 

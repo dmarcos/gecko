@@ -283,6 +283,14 @@ BrowserTabList.prototype.getList = function () {
             // Set the 'selected' properties on all actors correctly.
             actor.selected = selected;
             return actor;
+          }, e => {
+            if (e.error === "tabDestroyed") {
+              // Return null if a tab was destroyed while retrieving the tab list.
+              return null;
+            }
+
+            // Forward unexpected errors.
+            throw e;
           })
     );
   }
@@ -294,7 +302,10 @@ BrowserTabList.prototype.getList = function () {
   this._mustNotify = true;
   this._checkListening();
 
-  return promise.all(actorPromises);
+  return promise.all(actorPromises).then(values => {
+    // Filter out null values if we received a tabDestroyed error.
+    return values.filter(value => value != null);
+  });
 };
 
 BrowserTabList.prototype._getActorForBrowser = function (browser) {
@@ -660,7 +671,7 @@ DevToolsUtils.makeInfallible(function (window) {
    * a nsIWindowMediatorListener's onCloseWindow hook (bug 873589), so
    * handle the close in a different tick.
    */
-  Services.tm.currentThread.dispatch(DevToolsUtils.makeInfallible(() => {
+  Services.tm.dispatchToMainThread(DevToolsUtils.makeInfallible(() => {
     /*
      * Scan the entire map for actors representing tabs that were in this
      * top-level window, and exit them.
@@ -671,7 +682,7 @@ DevToolsUtils.makeInfallible(function (window) {
         this._handleActorClose(actor, browser);
       }
     }
-  }, "BrowserTabList.prototype.onCloseWindow's delayed body"), 0);
+  }, "BrowserTabList.prototype.onCloseWindow's delayed body"));
 }, "BrowserTabList.prototype.onCloseWindow");
 
 exports.BrowserTabList = BrowserTabList;
@@ -689,12 +700,20 @@ function BrowserTabActor(connection, browser) {
   this._conn = connection;
   this._browser = browser;
   this._form = null;
+  this.exited = false;
 }
 
 BrowserTabActor.prototype = {
   connect() {
     let onDestroy = () => {
-      this._form = null;
+      if (this._deferredUpdate) {
+        // Reject the update promise if the tab was destroyed while requesting an update
+        this._deferredUpdate.reject({
+          error: "tabDestroyed",
+          message: "Tab destroyed while performing a BrowserTabActor update"
+        });
+      }
+      this.exit();
     };
     let connect = DebuggerServer.connectToChild(this._conn, this._browser, onDestroy);
     return connect.then(form => {
@@ -704,7 +723,7 @@ BrowserTabActor.prototype = {
   },
 
   get _tabbrowser() {
-    if (typeof this._browser.getTabBrowser == "function") {
+    if (this._browser && typeof this._browser.getTabBrowser == "function") {
       return this._browser.getTabBrowser();
     }
     return null;
@@ -721,8 +740,8 @@ BrowserTabActor.prototype = {
     // If the child happens to be crashed/close/detach, it won't have _form set,
     // so only request form update if some code is still listening on the other
     // side.
-    if (this._form) {
-      let deferred = promise.defer();
+    if (!this.exited) {
+      this._deferredUpdate = promise.defer();
       let onFormUpdate = msg => {
         // There may be more than just one childtab.js up and running
         if (this._form.actor != msg.json.actor) {
@@ -730,11 +749,11 @@ BrowserTabActor.prototype = {
         }
         this._mm.removeMessageListener("debug:form", onFormUpdate);
         this._form = msg.json;
-        deferred.resolve(this);
+        this._deferredUpdate.resolve(this);
       };
       this._mm.addMessageListener("debug:form", onFormUpdate);
       this._mm.sendAsyncMessage("debug:form");
-      return deferred.promise;
+      return this._deferredUpdate.promise;
     }
 
     return this.connect();
@@ -746,7 +765,7 @@ BrowserTabActor.prototype = {
    */
   get title() {
     // On Fennec, we can check the session store data for zombie tabs
-    if (this._browser.__SS_restore) {
+    if (this._browser && this._browser.__SS_restore) {
       let sessionStore = this._browser.__SS_data;
       // Get the last selected entry
       let entry = sessionStore.entries[sessionStore.index - 1];
@@ -770,7 +789,7 @@ BrowserTabActor.prototype = {
    */
   get url() {
     // On Fennec, we can check the session store data for zombie tabs
-    if (this._browser.__SS_restore) {
+    if (this._browser && this._browser.__SS_restore) {
       let sessionStore = this._browser.__SS_data;
       // Get the last selected entry
       let entry = sessionStore.entries[sessionStore.index - 1];
@@ -795,6 +814,8 @@ BrowserTabActor.prototype = {
 
   exit() {
     this._browser = null;
+    this._form = null;
+    this.exited = true;
   },
 };
 

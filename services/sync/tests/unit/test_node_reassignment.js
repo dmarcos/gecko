@@ -14,8 +14,6 @@ Cu.import("resource://testing-common/services/sync/rotaryengine.js");
 Cu.import("resource://testing-common/services/sync/utils.js");
 Cu.import("resource://gre/modules/PromiseUtils.jsm");
 
-Service.engineManager.clear();
-
 function run_test() {
   Log.repository.getLogger("Sync.AsyncResource").level = Log.Level.Trace;
   Log.repository.getLogger("Sync.ErrorHandler").level  = Log.Level.Trace;
@@ -25,8 +23,6 @@ function run_test() {
   Log.repository.getLogger("Sync.SyncScheduler").level = Log.Level.Trace;
   initTestLogging();
   validate_all_future_pings();
-
-  Service.engineManager.register(RotaryEngine);
 
   // None of the failures in this file should result in a UI error.
   function onUIError() {
@@ -70,12 +66,12 @@ function getReassigned() {
   try {
     return Services.prefs.getBoolPref("services.sync.lastSyncReassigned");
   } catch (ex) {
-    if (ex.result == Cr.NS_ERROR_UNEXPECTED) {
-      return false;
+    if (ex.result != Cr.NS_ERROR_UNEXPECTED) {
+      do_throw("Got exception retrieving lastSyncReassigned: " +
+               Log.exceptionStr(ex));
     }
-    do_throw("Got exception retrieving lastSyncReassigned: " +
-             Log.exceptionStr(ex));
   }
+  return false;
 }
 
 /**
@@ -139,13 +135,14 @@ async function syncAndExpectNodeReassignment(server, firstNotification, between,
 }
 
 add_task(async function test_momentary_401_engine() {
+  enableValidationPrefs();
+
   _("Test a failure for engine URLs that's resolved by reassignment.");
   let server = await prepareServer();
   let john   = server.user("johndoe");
 
   _("Enabling the Rotary engine.");
-  let engine = Service.engineManager.get("rotary");
-  engine.enabled = true;
+  let { engine, tracker } = registerRotaryEngine();
 
   // We need the server to be correctly set up prior to experimenting. Do this
   // through a sync.
@@ -187,10 +184,15 @@ add_task(async function test_momentary_401_engine() {
                                       between,
                                       "weave:service:sync:finish",
                                       Service.storageURL + "rotary");
+
+  tracker.clearChangedIDs();
+  Service.engineManager.unregister(engine);
 });
 
 // This test ends up being a failing fetch *after we're already logged in*.
 add_task(async function test_momentary_401_info_collections() {
+  enableValidationPrefs();
+
   _("Test a failure for info/collections that's resolved by reassignment.");
   let server = await prepareServer();
 
@@ -214,6 +216,8 @@ add_task(async function test_momentary_401_info_collections() {
 });
 
 add_task(async function test_momentary_401_storage_loggedin() {
+  enableValidationPrefs();
+
   _("Test a failure for any storage URL, not just engine parts. " +
     "Resolved by reassignment.");
   let server = await prepareServer();
@@ -239,6 +243,8 @@ add_task(async function test_momentary_401_storage_loggedin() {
 });
 
 add_task(async function test_momentary_401_storage_loggedout() {
+  enableValidationPrefs();
+
   _("Test a failure for any storage URL, not just engine parts. " +
     "Resolved by reassignment.");
   let server = await prepareServer();
@@ -261,6 +267,8 @@ add_task(async function test_momentary_401_storage_loggedout() {
 });
 
 add_task(async function test_loop_avoidance_storage() {
+  enableValidationPrefs();
+
   _("Test that a repeated failure doesn't result in a sync loop " +
     "if node reassignment cannot resolve the failure.");
 
@@ -360,14 +368,15 @@ add_task(async function test_loop_avoidance_storage() {
 });
 
 add_task(async function test_loop_avoidance_engine() {
+  enableValidationPrefs();
+
   _("Test that a repeated 401 in an engine doesn't result in a sync loop " +
     "if node reassignment cannot resolve the failure.");
   let server = await prepareServer();
   let john   = server.user("johndoe");
 
   _("Enabling the Rotary engine.");
-  let engine = Service.engineManager.get("rotary");
-  engine.enabled = true;
+  let { engine, tracker } = registerRotaryEngine();
   let deferred = PromiseUtils.defer();
 
   let getTokenCount = 0;
@@ -494,4 +503,7 @@ add_task(async function test_loop_avoidance_engine() {
   now = Date.now();
   Service.sync();
   await deferred.promise;
+
+  tracker.clearChangedIDs();
+  Service.engineManager.unregister(engine);
 });

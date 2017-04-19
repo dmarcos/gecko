@@ -147,7 +147,7 @@ protected:
   virtual ~CycleCollectedJSContext();
 
   MOZ_IS_CLASS_INIT
-  nsresult Initialize(JSContext* aParentContext,
+  nsresult Initialize(JSRuntime* aParentRuntime,
                       uint32_t aMaxBytes,
                       uint32_t aMaxNurseryBytes);
 
@@ -160,7 +160,6 @@ protected:
 
   virtual void CustomGCCallback(JSGCStatus aStatus) {}
   virtual void CustomOutOfMemoryCallback() {}
-  virtual void CustomLargeAllocationFailureCallback() {}
 
   std::queue<nsCOMPtr<nsIRunnable>> mPromiseMicroTaskQueue;
   std::queue<nsCOMPtr<nsIRunnable>> mDebuggerPromiseMicroTaskQueue;
@@ -218,7 +217,6 @@ private:
                                           JS::GCNurseryProgress aProgress,
                                           JS::gcreason::Reason aReason);
   static void OutOfMemoryCallback(JSContext* aContext, void* aData);
-  static void LargeAllocationFailureCallback(void* aData);
   /**
    * Callback for reporting external string memory.
    */
@@ -287,11 +285,12 @@ public:
     Recovered
   };
 
+  void SetLargeAllocationFailure(OOMState aNewState);
+
 private:
   void AnnotateAndSetOutOfMemory(OOMState* aStatePtr, OOMState aNewState);
   void OnGC(JSGCStatus aStatus);
   void OnOutOfMemory();
-  void OnLargeAllocationFailure();
 
 public:
   void AddJSHolder(void* aHolder, nsScriptObjectTracer* aTracer);
@@ -313,6 +312,7 @@ public:
   nsresult TraverseRoots(nsCycleCollectionNoteRootCallback& aCb);
   virtual bool UsefulToMergeZones() const;
   void FixWeakMappingGrayBits() const;
+  void CheckGrayBits() const;
   bool AreGCGrayBitsValid() const;
   void GarbageCollect(uint32_t aReason) const;
 
@@ -482,7 +482,10 @@ void TraceScriptHolder(nsISupports* aHolder, JSTracer* aTracer);
 // Returns true if the JS::TraceKind is one the cycle collector cares about.
 inline bool AddToCCKind(JS::TraceKind aKind)
 {
-  return aKind == JS::TraceKind::Object || aKind == JS::TraceKind::Script || aKind == JS::TraceKind::Scope;
+  return aKind == JS::TraceKind::Object ||
+         aKind == JS::TraceKind::Script ||
+         aKind == JS::TraceKind::Scope ||
+         aKind == JS::TraceKind::RegExpShared;
 }
 
 bool

@@ -18,6 +18,7 @@
 #include "mozilla/net/DataChannelParent.h"
 #include "mozilla/net/AltDataOutputStreamParent.h"
 #include "mozilla/Unused.h"
+#include "mozilla/net/FileChannelParent.h"
 #ifdef NECKO_PROTOCOL_rtsp
 #include "mozilla/net/RtspControllerParent.h"
 #include "mozilla/net/RtspChannelParent.h"
@@ -25,6 +26,9 @@
 #include "mozilla/net/DNSRequestParent.h"
 #include "mozilla/net/ChannelDiverterParent.h"
 #include "mozilla/net/IPCTransportProvider.h"
+#ifdef MOZ_WEBRTC
+#include "mozilla/net/StunAddrsRequestParent.h"
+#endif
 #include "mozilla/dom/ChromeUtils.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/TabContext.h"
@@ -40,10 +44,12 @@
 #include "SerializedLoadContext.h"
 #include "nsAuthInformationHolder.h"
 #include "nsIAuthPromptCallback.h"
-#include "nsPrincipal.h"
+#include "ContentPrincipal.h"
 #include "nsINetworkPredictor.h"
 #include "nsINetworkPredictorVerifier.h"
 #include "nsISpeculativeConnect.h"
+#include "nsIThrottlingService.h"
+#include "nsNetUtil.h"
 
 using mozilla::OriginAttributes;
 using mozilla::dom::ChromeUtils;
@@ -148,8 +154,7 @@ static MOZ_COLD
 void CrashWithReason(const char * reason)
 {
 #ifndef RELEASE_OR_BETA
-  MOZ_CRASH_ANNOTATE(reason);
-  MOZ_REALLY_CRASH();
+  MOZ_CRASH_UNSAFE_OOL(reason);
 #endif
 }
 
@@ -323,6 +328,28 @@ NeckoParent::RecvPHttpChannelConstructor(
     return IPC_FAIL_NO_REASON(this);
   }
   return IPC_OK();
+}
+
+PStunAddrsRequestParent*
+NeckoParent::AllocPStunAddrsRequestParent()
+{
+#ifdef MOZ_WEBRTC
+  StunAddrsRequestParent* p = new StunAddrsRequestParent();
+  p->AddRef();
+  return p;
+#else
+  return nullptr;
+#endif
+}
+
+bool
+NeckoParent::DeallocPStunAddrsRequestParent(PStunAddrsRequestParent* aActor)
+{
+#ifdef MOZ_WEBRTC
+  StunAddrsRequestParent* p = static_cast<StunAddrsRequestParent*>(aActor);
+  p->Release();
+#endif
+  return true;
 }
 
 PAltDataOutputStreamParent*
@@ -499,6 +526,30 @@ NeckoParent::RecvPDataChannelConstructor(PDataChannelParent* actor,
   return IPC_OK();
 }
 
+PFileChannelParent*
+NeckoParent::AllocPFileChannelParent(const uint32_t &channelId)
+{
+  RefPtr<FileChannelParent> p = new FileChannelParent();
+  return p.forget().take();
+}
+
+bool
+NeckoParent::DeallocPFileChannelParent(PFileChannelParent* actor)
+{
+  RefPtr<FileChannelParent> p = dont_AddRef(static_cast<FileChannelParent*>(actor));
+  return true;
+}
+
+mozilla::ipc::IPCResult
+NeckoParent::RecvPFileChannelConstructor(PFileChannelParent* actor,
+                                         const uint32_t& channelId)
+{
+  FileChannelParent* p = static_cast<FileChannelParent*>(actor);
+  DebugOnly<bool> rv = p->Init(channelId);
+  MOZ_ASSERT(rv);
+  return IPC_OK();
+}
+
 PRtspControllerParent*
 NeckoParent::AllocPRtspControllerParent()
 {
@@ -635,6 +686,7 @@ NeckoParent::DeallocPUDPSocketParent(PUDPSocketParent* actor)
 
 PDNSRequestParent*
 NeckoParent::AllocPDNSRequestParent(const nsCString& aHost,
+                                    const OriginAttributes& aOriginAttributes,
                                     const uint32_t& aFlags,
                                     const nsCString& aNetworkInterface)
 {
@@ -646,10 +698,13 @@ NeckoParent::AllocPDNSRequestParent(const nsCString& aHost,
 mozilla::ipc::IPCResult
 NeckoParent::RecvPDNSRequestConstructor(PDNSRequestParent* aActor,
                                         const nsCString& aHost,
+                                        const OriginAttributes& aOriginAttributes,
                                         const uint32_t& aFlags,
                                         const nsCString& aNetworkInterface)
 {
-  static_cast<DNSRequestParent*>(aActor)->DoAsyncResolve(aHost, aFlags,
+  static_cast<DNSRequestParent*>(aActor)->DoAsyncResolve(aHost,
+                                                         aOriginAttributes,
+                                                         aFlags,
                                                          aNetworkInterface);
   return IPC_OK();
 }
@@ -683,18 +738,20 @@ NeckoParent::RecvSpeculativeConnect(const URIParams& aURI,
 
 mozilla::ipc::IPCResult
 NeckoParent::RecvHTMLDNSPrefetch(const nsString& hostname,
+                                 const OriginAttributes& aOriginAttributes,
                                  const uint16_t& flags)
 {
-  nsHTMLDNSPrefetch::Prefetch(hostname, flags);
+  nsHTMLDNSPrefetch::Prefetch(hostname, aOriginAttributes, flags);
   return IPC_OK();
 }
 
 mozilla::ipc::IPCResult
 NeckoParent::RecvCancelHTMLDNSPrefetch(const nsString& hostname,
-                                 const uint16_t& flags,
-                                 const nsresult& reason)
+                                       const OriginAttributes& aOriginAttributes,
+                                       const uint16_t& flags,
+                                       const nsresult& reason)
 {
-  nsHTMLDNSPrefetch::CancelPrefetch(hostname, flags, reason);
+  nsHTMLDNSPrefetch::CancelPrefetch(hostname, aOriginAttributes, flags, reason);
   return IPC_OK();
 }
 
@@ -823,21 +880,11 @@ mozilla::ipc::IPCResult
 NeckoParent::RecvPredPredict(const ipc::OptionalURIParams& aTargetURI,
                              const ipc::OptionalURIParams& aSourceURI,
                              const uint32_t& aReason,
-                             const SerializedLoadContext& aLoadContext,
+                             const OriginAttributes& aOriginAttributes,
                              const bool& hasVerifier)
 {
   nsCOMPtr<nsIURI> targetURI = DeserializeURI(aTargetURI);
   nsCOMPtr<nsIURI> sourceURI = DeserializeURI(aSourceURI);
-
-  // We only actually care about the loadContext.mPrivateBrowsing, so we'll just
-  // pass dummy params for nestFrameId, and originAttributes.
-  uint64_t nestedFrameId = 0;
-  OriginAttributes attrs(NECKO_UNKNOWN_APP_ID, false);
-  nsCOMPtr<nsILoadContext> loadContext;
-  if (aLoadContext.IsNotNull()) {
-    attrs.SyncAttributesWithPrivateBrowsing(aLoadContext.mOriginAttributes.mPrivateBrowsingId > 0);
-    loadContext = new LoadContext(aLoadContext, nestedFrameId, attrs);
-  }
 
   // Get the current predictor
   nsresult rv = NS_OK;
@@ -849,7 +896,7 @@ NeckoParent::RecvPredPredict(const ipc::OptionalURIParams& aTargetURI,
   if (hasVerifier) {
     verifier = do_QueryInterface(predictor);
   }
-  predictor->Predict(targetURI, sourceURI, aReason, loadContext, verifier);
+  predictor->PredictNative(targetURI, sourceURI, aReason, aOriginAttributes, verifier);
   return IPC_OK();
 }
 
@@ -857,20 +904,10 @@ mozilla::ipc::IPCResult
 NeckoParent::RecvPredLearn(const ipc::URIParams& aTargetURI,
                            const ipc::OptionalURIParams& aSourceURI,
                            const uint32_t& aReason,
-                           const SerializedLoadContext& aLoadContext)
+                           const OriginAttributes& aOriginAttributes)
 {
   nsCOMPtr<nsIURI> targetURI = DeserializeURI(aTargetURI);
   nsCOMPtr<nsIURI> sourceURI = DeserializeURI(aSourceURI);
-
-  // We only actually care about the loadContext.mPrivateBrowsing, so we'll just
-  // pass dummy params for nestFrameId, and originAttributes;
-  uint64_t nestedFrameId = 0;
-  OriginAttributes attrs(NECKO_UNKNOWN_APP_ID, false);
-  nsCOMPtr<nsILoadContext> loadContext;
-  if (aLoadContext.IsNotNull()) {
-    attrs.SyncAttributesWithPrivateBrowsing(aLoadContext.mOriginAttributes.mPrivateBrowsingId > 0);
-    loadContext = new LoadContext(aLoadContext, nestedFrameId, attrs);
-  }
 
   // Get the current predictor
   nsresult rv = NS_OK;
@@ -878,7 +915,7 @@ NeckoParent::RecvPredLearn(const ipc::URIParams& aTargetURI,
     do_GetService("@mozilla.org/network/predictor;1", &rv);
   NS_ENSURE_SUCCESS(rv, IPC_FAIL_NO_REASON(this));
 
-  predictor->Learn(targetURI, sourceURI, aReason, loadContext);
+  predictor->LearnNative(targetURI, sourceURI, aReason, aOriginAttributes);
   return IPC_OK();
 }
 
@@ -896,7 +933,7 @@ NeckoParent::RecvPredReset()
 }
 
 mozilla::ipc::IPCResult
-NeckoParent::RecvRemoveRequestContext(const nsCString& rcid)
+NeckoParent::RecvRemoveRequestContext(const uint64_t& rcid)
 {
   nsCOMPtr<nsIRequestContextService> rcsvc =
     do_GetService("@mozilla.org/network/request-context-service;1");
@@ -904,9 +941,34 @@ NeckoParent::RecvRemoveRequestContext(const nsCString& rcid)
     return IPC_OK();
   }
 
-  nsID id;
-  id.Parse(rcid.BeginReading());
-  rcsvc->RemoveRequestContext(id);
+  rcsvc->RemoveRequestContext(rcid);
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+NeckoParent::RecvIncreaseThrottlePressure()
+{
+  mThrottlers.AppendElement(mozilla::UniquePtr<mozilla::net::Throttler>(new mozilla::net::Throttler));
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+NeckoParent::RecvDecreaseThrottlePressure()
+{
+  MOZ_ASSERT(!mThrottlers.IsEmpty());
+  // We do this because we don't actually care which throttler gets removed,
+  // just that one of them does.
+  mThrottlers.RemoveElementAt(0);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+NeckoParent::RecvNotifyCurrentTopLevelOuterContentWindowId(const uint64_t& aWindowId)
+{
+  if (NS_FAILED(NS_NotifyCurrentTopLevelOuterContentWindowId(aWindowId))) {
+    NS_WARNING("NS_NotifyCurrentTopLevelOuterContentWindowId failed!");
+  }
 
   return IPC_OK();
 }

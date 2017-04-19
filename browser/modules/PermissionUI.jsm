@@ -246,16 +246,11 @@ this.PermissionPromptPrototype = {
    * allow or cancel itself based on the user's current
    * permission settings without displaying the prompt.
    *
-   * If the <xul:browser> that the request is associated with
-   * does not belong to a browser window with the PopupNotifications
-   * global set, the prompt request is ignored.
+   * If the permission is not already set and the <xul:browser> that the request
+   * is associated with does not belong to a browser window with the
+   * PopupNotifications global set, the prompt request is ignored.
    */
   prompt() {
-    let chromeWin = this.browser.ownerGlobal;
-    if (!chromeWin.PopupNotifications) {
-      return;
-    }
-
     // We ignore requests from non-nsIStandardURLs
     let requestingURI = this.principal.URI;
     if (!(requestingURI instanceof Ci.nsIStandardURL)) {
@@ -286,6 +281,12 @@ this.PermissionPromptPrototype = {
                                          .CustomEvent("PermissionStateChange"));
     }
 
+    let chromeWin = this.browser.ownerGlobal;
+    if (!chromeWin.PopupNotifications) {
+      this.cancel();
+      return;
+    }
+
     // Transform the PermissionPrompt actions into PopupNotification actions.
     let popupNotificationActions = [];
     for (let promptAction of this.promptActions) {
@@ -300,7 +301,8 @@ this.PermissionPromptPrototype = {
           if (this.permissionKey) {
 
             // Permanently store permission.
-            if (state && state.checkboxChecked) {
+            if ((state && state.checkboxChecked) ||
+                promptAction.scope == SitePermissions.SCOPE_PERSISTENT) {
               let scope = SitePermissions.SCOPE_PERSISTENT;
               // Only remember permission for session if in PB mode.
               if (PrivateBrowsingUtils.isBrowserPrivate(this.browser)) {
@@ -349,6 +351,10 @@ this.PermissionPromptPrototype = {
     // Permission prompts are always persistent; the close button is controlled by a pref.
     options.persistent = true;
     options.hideClose = !Services.prefs.getBoolPref("privacy.permissionPrompts.showCloseButton");
+    // When the docshell of the browser is aboout to be swapped to another one,
+    // the "swapping" event is called. Returning true causes the notification
+    // to be moved to the new browser.
+    options.eventCallback = topic => topic == "swapping";
 
     this.onBeforeShow();
     chromeWin.PopupNotifications.show(this.browser,
@@ -538,22 +544,8 @@ DesktopNotificationPermissionPrompt.prototype = {
     let learnMoreURL =
       Services.urlFormatter.formatURLPref("app.support.baseURL") + "push";
 
-    let checkbox = {
-      show: true,
-      checked: true,
-      label: gBrowserBundle.GetStringFromName("webNotifications.remember")
-    };
-
-    // In PB mode, the "always remember" checkbox should only remember for the
-    // session.
-    if (PrivateBrowsingUtils.isWindowPrivate(this.browser.ownerGlobal)) {
-      checkbox.label =
-        gBrowserBundle.GetStringFromName("webNotifications.rememberForSession");
-    }
-
     return {
       learnMoreURL,
-      checkbox,
       displayURI: false
     };
   },
@@ -576,22 +568,105 @@ DesktopNotificationPermissionPrompt.prototype = {
   },
 
   get promptActions() {
-    return [
+    let actions = [
       {
         label: gBrowserBundle.GetStringFromName("webNotifications.allow"),
         accessKey:
           gBrowserBundle.GetStringFromName("webNotifications.allow.accesskey"),
         action: SitePermissions.ALLOW,
+        scope: SitePermissions.SCOPE_PERSISTENT,
       },
       {
-        label: gBrowserBundle.GetStringFromName("webNotifications.dontAllow"),
+        label: gBrowserBundle.GetStringFromName("webNotifications.notNow"),
         accessKey:
-          gBrowserBundle.GetStringFromName("webNotifications.dontAllow.accesskey"),
+          gBrowserBundle.GetStringFromName("webNotifications.notNow.accesskey"),
         action: SitePermissions.BLOCK,
       },
     ];
+    if (!PrivateBrowsingUtils.isBrowserPrivate(this.browser)) {
+      actions.push({
+        label: gBrowserBundle.GetStringFromName("webNotifications.never"),
+        accessKey:
+          gBrowserBundle.GetStringFromName("webNotifications.never.accesskey"),
+        action: SitePermissions.BLOCK,
+        scope: SitePermissions.SCOPE_PERSISTENT,
+      });
+    }
+    return actions;
   },
 };
 
 PermissionUI.DesktopNotificationPermissionPrompt =
   DesktopNotificationPermissionPrompt;
+
+/**
+ * Creates a PermissionPrompt for a nsIContentPermissionRequest for
+ * the persistent-storage API.
+ *
+ * @param request (nsIContentPermissionRequest)
+ *        The request for a permission from content.
+ */
+function PersistentStoragePermissionPrompt(request) {
+  this.request = request;
+}
+
+PersistentStoragePermissionPrompt.prototype = {
+  __proto__: PermissionPromptForRequestPrototype,
+
+  get permissionKey() {
+    return "persistent-storage";
+  },
+
+  get popupOptions() {
+    let checkbox = {
+      // In PB mode, we don't want the "always remember" checkbox
+      show: !PrivateBrowsingUtils.isWindowPrivate(this.browser.ownerGlobal)
+    };
+    if (checkbox.show) {
+      checkbox.checked = true;
+      checkbox.label = gBrowserBundle.GetStringFromName("persistentStorage.remember");
+    }
+    let learnMoreURL =
+      Services.urlFormatter.formatURLPref("app.support.baseURL") + "storage-permissions";
+    return {
+      checkbox,
+      learnMoreURL
+    };
+  },
+
+  get notificationID() {
+    return "persistent-storage";
+  },
+
+  get anchorID() {
+    return "persistent-storage-notification-icon";
+  },
+
+  get message() {
+    let hostPort = "<>";
+    try {
+      hostPort = this.principal.URI.hostPort;
+    } catch (ex) {}
+    return gBrowserBundle.formatStringFromName(
+      "persistentStorage.allowWithSite", [hostPort], 1);
+  },
+
+  get promptActions() {
+    return [
+      {
+        label: gBrowserBundle.GetStringFromName("persistentStorage.allow"),
+        accessKey:
+          gBrowserBundle.GetStringFromName("persistentStorage.allow.accesskey"),
+        action: Ci.nsIPermissionManager.ALLOW_ACTION
+      },
+      {
+        label: gBrowserBundle.GetStringFromName("persistentStorage.dontAllow"),
+        accessKey:
+          gBrowserBundle.GetStringFromName("persistentStorage.dontAllow.accesskey"),
+        action: Ci.nsIPermissionManager.DENY_ACTION
+      }
+    ];
+  }
+};
+
+PermissionUI.PersistentStoragePermissionPrompt = PersistentStoragePermissionPrompt;

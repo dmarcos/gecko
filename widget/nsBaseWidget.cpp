@@ -1,3 +1,4 @@
+
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -12,6 +13,7 @@
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/ImageBridgeChild.h"
+#include "LiveResizeListener.h"
 #include "nsBaseWidget.h"
 #include "nsDeviceContext.h"
 #include "nsCOMPtr.h"
@@ -58,9 +60,11 @@
 #include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
+#include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/gfx/GPUProcessManager.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/Move.h"
 #include "mozilla/Services.h"
 #include "mozilla/Sprintf.h"
@@ -104,7 +108,6 @@ using namespace mozilla::widget;
 using namespace mozilla;
 using base::Thread;
 
-nsIContent* nsBaseWidget::mLastRollup = nullptr;
 // Global user preference for disabling native theme. Used
 // in NativeWindowTheme.
 bool            gDisableNativeTheme               = false;
@@ -136,21 +139,6 @@ IMENotification::SelectionChangeDataBase::GetWritingMode() const
 
 } // namespace widget
 } // namespace mozilla
-
-nsAutoRollup::nsAutoRollup()
-{
-  // remember if mLastRollup was null, and only clear it upon destruction
-  // if so. This prevents recursive usage of nsAutoRollup from clearing
-  // mLastRollup when it shouldn't.
-  wasClear = !nsBaseWidget::mLastRollup;
-}
-
-nsAutoRollup::~nsAutoRollup()
-{
-  if (nsBaseWidget::mLastRollup && wasClear) {
-    NS_RELEASE(nsBaseWidget::mLastRollup);
-  }
-}
 
 NS_IMPL_ISUPPORTS(nsBaseWidget, nsIWidget, nsISupportsWeakReference)
 
@@ -249,6 +237,7 @@ WidgetShutdownObserver::Unregister()
 void
 nsBaseWidget::Shutdown()
 {
+  NotifyLiveResizeStopped();
   RevokeTransactionIdAllocator();
   DestroyCompositor();
   FreeShutdownObserver();
@@ -305,13 +294,7 @@ nsBaseWidget::RevokeTransactionIdAllocator()
   if (!mLayerManager) {
     return;
   }
-
-  ClientLayerManager* clm = mLayerManager->AsClientLayerManager();
-  if (!clm) {
-    return;
-  }
-
-  clm->SetTransactionIdAllocator(nullptr);
+  mLayerManager->SetTransactionIdAllocator(nullptr);
 }
 
 void nsBaseWidget::ReleaseContentController()
@@ -596,11 +579,13 @@ double nsIWidget::DefaultScaleOverride()
   // The number of device pixels per CSS pixel. A value <= 0 means choose
   // automatically based on the DPI. A positive value is used as-is. This effectively
   // controls the size of a CSS "px".
-  double devPixelsPerCSSPixel = -1.0;
+  static float devPixelsPerCSSPixel = -1.0f;
 
-  nsAdoptingCString prefString = Preferences::GetCString("layout.css.devPixelsPerPx");
-  if (!prefString.IsEmpty()) {
-    devPixelsPerCSSPixel = PR_strtod(prefString, nullptr);
+  static bool valueCached = false;
+  if (!valueCached) {
+    Preferences::AddFloatVarCache(&devPixelsPerCSSPixel,
+                                  "layout.css.devPixelsPerPx", -1.0f);
+    valueCached = true;
   }
 
   return devPixelsPerCSSPixel;
@@ -1210,20 +1195,22 @@ nsBaseWidget::DispatchInputEvent(WidgetInputEvent* aEvent)
       uint64_t inputBlockId = 0;
       ScrollableLayerGuid guid;
 
-      nsEventStatus result = mAPZC->ReceiveInputEvent(*aEvent, &guid, &inputBlockId);
+      nsEventStatus result =
+        mAPZC->ReceiveInputEvent(*aEvent, &guid, &inputBlockId);
       if (result == nsEventStatus_eConsumeNoDefault) {
-          return result;
+        return result;
       }
       return ProcessUntransformedAPZEvent(aEvent, guid, inputBlockId, result);
-    } else {
-      WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent();
-      if (wheelEvent) {
-        RefPtr<Runnable> r = new DispatchWheelInputOnControllerThread(*wheelEvent, mAPZC, this);
-        APZThreadUtils::RunOnControllerThread(r.forget());
-        return nsEventStatus_eConsumeDoDefault;
-      }
-      MOZ_CRASH();
     }
+    WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent();
+    if (wheelEvent) {
+      RefPtr<Runnable> r =
+        new DispatchWheelInputOnControllerThread(*wheelEvent, mAPZC, this);
+      APZThreadUtils::RunOnControllerThread(r.forget());
+      return nsEventStatus_eConsumeDoDefault;
+    }
+    // Allow dispatching keyboard events on Gecko thread.
+    MOZ_ASSERT(aEvent->AsKeyboardEvent());
   }
 
   nsEventStatus status;
@@ -1296,9 +1283,21 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
   CreateCompositorVsyncDispatcher();
 
-  RefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
+  bool enableWR = gfx::gfxVars::UseWebRender();
+  bool enableAPZ = UseAPZ();
+  if (enableWR && !gfxPrefs::APZAllowWithWebRender()) {
+    // Disable APZ on widgets using WebRender, since it doesn't work yet. Allow
+    // it on non-WR widgets or if the pref forces it on.
+    enableAPZ = false;
+  }
+  CompositorOptions options(enableAPZ, enableWR);
 
-  CompositorOptions options(UseAPZ());
+  RefPtr<LayerManager> lm;
+  if (options.UseWebRender()) {
+    lm = new WebRenderLayerManager(this);
+  } else {
+    lm = new ClientLayerManager(this);
+  }
 
   gfx::GPUProcessManager* gpu = gfx::GPUProcessManager::Get();
   mCompositorSession = gpu->CreateTopLevelCompositor(
@@ -1325,11 +1324,18 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
     mInitialZoomConstraints.reset();
   }
 
-  ShadowLayerForwarder* lf = lm->AsShadowForwarder();
-  // As long as we are creating a ClientLayerManager above lf must be non-null.
-  MOZ_ASSERT(lf);
+  if (lm->AsWebRenderLayerManager()) {
+    TextureFactoryIdentifier textureFactoryIdentifier;
+    lm->AsWebRenderLayerManager()->Initialize(mCompositorBridgeChild,
+                                              wr::AsPipelineId(mCompositorSession->RootLayerTreeId()),
+                                              &textureFactoryIdentifier);
+    ImageBridgeChild::IdentifyCompositorTextureHost(textureFactoryIdentifier);
+    gfx::VRManagerChild::IdentifyTextureHost(textureFactoryIdentifier);
+  }
 
+  ShadowLayerForwarder* lf = lm->AsShadowForwarder();
   if (lf) {
+    // lf is non-null if we are creating a ClientLayerManager above
     TextureFactoryIdentifier textureFactoryIdentifier;
     PLayerTransactionChild* shadowManager = nullptr;
 
@@ -1350,9 +1356,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
     }
 
     lf->SetShadowManager(shadowManager);
-    if (ClientLayerManager* clm = lm->AsClientLayerManager()) {
-      clm->UpdateTextureFactoryIdentifier(textureFactoryIdentifier, 0);
-    }
+    lm->UpdateTextureFactoryIdentifier(textureFactoryIdentifier, 0);
     // Some popup or transparent widgets may use a different backend than the
     // compositors used with ImageBridge and VR (and more generally web content).
     if (WidgetTypeSupportsAcceleration()) {
@@ -1719,7 +1723,7 @@ nsBaseWidget::NotifyWindowMoved(int32_t aX, int32_t aY)
     mWidgetListener->WindowMoved(this, aX, aY);
   }
 
-  if (mIMEHasFocus && GetIMEUpdatePreference().WantPositionChanged()) {
+  if (mIMEHasFocus && GetIMENotificationRequests().WantPositionChanged()) {
     NotifyIME(IMENotification(IMEMessage::NOTIFY_IME_OF_POSITION_CHANGE));
   }
 }
@@ -1793,6 +1797,18 @@ nsBaseWidget::NotifyIME(const IMENotification& aIMENotification)
       return rv2 == NS_ERROR_NOT_IMPLEMENTED ? rv : rv2;
     }
   }
+}
+
+IMENotificationRequests
+nsBaseWidget::GetIMENotificationRequests()
+{
+  RefPtr<TextEventDispatcherListener> listener =
+    GetNativeTextEventDispatcherListener();
+  if (!listener) {
+    // Default is to not send additional change notifications to NotifyIME.
+    return IMENotificationRequests();
+  }
+  return listener->GetIMENotificationRequests();
 }
 
 void
@@ -2091,6 +2107,41 @@ nsBaseWidget::UpdateSynthesizedTouchState(MultiTouchInput* aState,
   }
 
   return inputToDispatch;
+}
+
+void
+nsBaseWidget::NotifyLiveResizeStarted()
+{
+  // If we have mLiveResizeListeners already non-empty, we should notify those
+  // listeners that the resize stopped before starting anew. In theory this
+  // should never happen because we shouldn't get nested live resize actions.
+  NotifyLiveResizeStopped();
+  MOZ_ASSERT(mLiveResizeListeners.IsEmpty());
+
+  // If we can get the active tab parent for the current widget, suppress
+  // the displayport on it during the live resize.
+  if (!mWidgetListener) {
+    return;
+  }
+  nsCOMPtr<nsIXULWindow> xulWindow = mWidgetListener->GetXULWindow();
+  if (!xulWindow) {
+    return;
+  }
+  mLiveResizeListeners = xulWindow->GetLiveResizeListeners();
+  for (uint32_t i = 0; i < mLiveResizeListeners.Length(); i++) {
+    mLiveResizeListeners[i]->LiveResizeStarted();
+  }
+}
+
+void
+nsBaseWidget::NotifyLiveResizeStopped()
+{
+  if (!mLiveResizeListeners.IsEmpty()) {
+    for (uint32_t i = 0; i < mLiveResizeListeners.Length(); i++) {
+      mLiveResizeListeners[i]->LiveResizeStopped();
+    }
+    mLiveResizeListeners.Clear();
+  }
 }
 
 void

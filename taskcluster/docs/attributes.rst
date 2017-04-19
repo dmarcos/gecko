@@ -100,6 +100,12 @@ talos_try_name
 
 This is the name used to refer to a talos job via try syntax.
 
+job_try_name
+============
+
+This is the name used to refer to a "job" via try syntax (``-j``).  Note that for
+some kinds, ``-j`` also matches against ``build_platform``.
+
 test_chunk
 ==========
 
@@ -128,6 +134,11 @@ all_locales
 
 For the ``l10n`` and ``nightly-l10n`` kinds, this attribute contains the list
 of relevant locales for the platform.
+
+all_locales_with_changesets
+===========================
+
+Contains a dict of l10n changesets, mapped by locales (same as in ``all_locales``).
 
 l10n_chunk
 ==========

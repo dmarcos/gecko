@@ -27,7 +27,7 @@ nsHttpChunkedDecoder::HandleChunkedContent(char *buf,
 
     *contentRead = 0;
 
-    // from RFC2617 section 3.6.1, the chunked transfer coding is defined as:
+    // from RFC2616 section 3.6.1, the chunked transfer coding is defined as:
     //
     //   Chunked-Body    = *chunk
     //                     last-chunk
@@ -117,7 +117,7 @@ nsHttpChunkedDecoder::ParseChunkRemaining(char *buf,
                 if (!mTrailers) {
                     mTrailers = new nsHttpHeaderArray();
                 }
-                mTrailers->ParseHeaderLine(nsDependentCSubstring(buf, count));
+                Unused << mTrailers->ParseHeaderLine(nsDependentCSubstring(buf, count));
             }
             else {
                 mWaitEOF = false;

@@ -142,16 +142,18 @@ public:
     bool handleOpacity; // If true, PaintMaskAndClipPath/ PaintFilter should
                         // apply css opacity.
     IntRect maskRect;
+    uint32_t flags;     // Image flags of the imgIContainer::FLAG_* variety.
 
     explicit PaintFramesParams(gfxContext& aCtx, nsIFrame* aFrame,
                                const nsRect& aDirtyRect,
                                const nsRect& aBorderArea,
                                nsDisplayListBuilder* aBuilder,
                                mozilla::layers::LayerManager* aLayerManager,
-                               bool aHandleOpacity)
+                               bool aHandleOpacity, uint32_t aFlags)
       : ctx(aCtx), frame(aFrame), dirtyRect(aDirtyRect),
         borderArea(aBorderArea), builder(aBuilder),
-        layerManager(aLayerManager), handleOpacity(aHandleOpacity)
+        layerManager(aLayerManager), handleOpacity(aHandleOpacity),
+        flags(aFlags)
     { }
   };
 
@@ -179,15 +181,6 @@ public:
    */
   static DrawResult
   PaintFilter(const PaintFramesParams& aParams);
-
-  /**
-   * SVG frames expect to paint in SVG user units, which are equal to CSS px
-   * units. This method provides a transform matrix to multiply onto a
-   * gfxContext's current transform to convert the context's current units from
-   * its usual dev pixels to SVG user units/CSS px to keep the SVG code happy.
-   */
-  static gfxMatrix
-  GetCSSPxToDevPxMatrix(nsIFrame* aNonSVGFrame);
 
   /**
    * @param aRenderingContext the target rendering context in which the paint

@@ -50,7 +50,6 @@ class PluginWidgetChild;
 } // namespace plugins
 namespace layers {
 class AsyncDragMetrics;
-class Composer2D;
 class Compositor;
 class CompositorBridgeChild;
 class LayerManager;
@@ -334,7 +333,6 @@ class nsIWidget : public nsISupports
     typedef mozilla::dom::TabChild TabChild;
 
   public:
-    typedef mozilla::layers::Composer2D Composer2D;
     typedef mozilla::layers::CompositorBridgeChild CompositorBridgeChild;
     typedef mozilla::layers::AsyncDragMetrics AsyncDragMetrics;
     typedef mozilla::layers::FrameMetrics FrameMetrics;
@@ -345,6 +343,7 @@ class nsIWidget : public nsISupports
     typedef mozilla::layers::ZoomConstraints ZoomConstraints;
     typedef mozilla::widget::IMEMessage IMEMessage;
     typedef mozilla::widget::IMENotification IMENotification;
+    typedef mozilla::widget::IMENotificationRequests IMENotificationRequests;
     typedef mozilla::widget::IMEState IMEState;
     typedef mozilla::widget::InputContext InputContext;
     typedef mozilla::widget::InputContextAction InputContextAction;
@@ -1458,11 +1457,6 @@ class nsIWidget : public nsISupports
     virtual bool ShowsResizeIndicator(LayoutDeviceIntRect* aResizerRect) = 0;
 
     /**
-     * Return the popup that was last rolled up, or null if there isn't one.
-     */
-    virtual nsIContent* GetLastRollup() = 0;
-
-    /**
      * Begin a window resizing drag, based on the event passed in.
      */
     virtual MOZ_MUST_USE nsresult
@@ -1826,7 +1820,7 @@ public:
     /*
      * Retrieves preference for IME updates
      */
-    virtual nsIMEUpdatePreference GetIMEUpdatePreference() = 0;
+    virtual IMENotificationRequests GetIMENotificationRequests() = 0;
 
     /*
      * Call this method when a dialog is opened which has a default button.
@@ -1859,6 +1853,9 @@ public:
      */
     static already_AddRefed<nsIWidget>
     CreatePuppetWidget(TabChild* aTabChild);
+
+    static already_AddRefed<nsIWidget>
+    CreateHeadlessWidget();
 
     /**
      * Allocate and return a "plugin proxy widget", a subclass of PuppetWidget

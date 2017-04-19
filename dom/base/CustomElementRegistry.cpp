@@ -9,6 +9,7 @@
 #include "mozilla/dom/CustomElementRegistryBinding.h"
 #include "mozilla/dom/HTMLElementBinding.h"
 #include "mozilla/dom/WebComponentsBinding.h"
+#include "mozilla/dom/DocGroup.h"
 #include "nsIParserService.h"
 #include "jsapi.h"
 
@@ -172,31 +173,7 @@ NS_INTERFACE_MAP_END
 CustomElementRegistry::IsCustomElementEnabled(JSContext* aCx, JSObject* aObject)
 {
   return Preferences::GetBool("dom.webcomponents.customelements.enabled") ||
-         Preferences::GetBool("dom.webcomponents.enabled");
-}
-
-/* static */ already_AddRefed<CustomElementRegistry>
-CustomElementRegistry::Create(nsPIDOMWindowInner* aWindow)
-{
-  MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsInnerWindow());
-
-  if (!aWindow->GetDocShell()) {
-    return nullptr;
-  }
-
-  if (!IsCustomElementEnabled()) {
-    return nullptr;
-  }
-
-  RefPtr<CustomElementRegistry> customElementRegistry =
-    new CustomElementRegistry(aWindow);
-
-  if (!customElementRegistry->Init()) {
-    return nullptr;
-  }
-
-  return customElementRegistry.forget();
+         nsContentUtils::IsWebComponentsEnabled();
 }
 
 /* static */ void
@@ -239,8 +216,11 @@ CustomElementRegistry::sProcessingStack;
 CustomElementRegistry::CustomElementRegistry(nsPIDOMWindowInner* aWindow)
  : mWindow(aWindow)
  , mIsCustomDefinitionRunning(false)
- , mIsBackupQueueProcessing(false)
 {
+  MOZ_ASSERT(aWindow);
+  MOZ_ASSERT(aWindow->IsInnerWindow());
+  MOZ_ALWAYS_TRUE(mConstructors.init());
+
   mozilla::HoldJSObjects(this);
 
   if (!sProcessingStack) {
@@ -253,12 +233,6 @@ CustomElementRegistry::CustomElementRegistry(nsPIDOMWindowInner* aWindow)
 CustomElementRegistry::~CustomElementRegistry()
 {
   mozilla::DropJSObjects(this);
-}
-
-bool
-CustomElementRegistry::Init()
-{
-  return mConstructors.init();
 }
 
 CustomElementDefinition*
@@ -494,18 +468,29 @@ CustomElementRegistry::GetCustomPrototype(nsIAtom* aAtom,
 void
 CustomElementRegistry::UpgradeCandidates(JSContext* aCx,
                                          nsIAtom* aKey,
-                                         CustomElementDefinition* aDefinition)
+                                         CustomElementDefinition* aDefinition,
+                                         ErrorResult& aRv)
 {
+  DocGroup* docGroup = mWindow->GetDocGroup();
+  if (!docGroup) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return;
+  }
+
   nsAutoPtr<nsTArray<nsWeakPtr>> candidates;
   mCandidatesMap.RemoveAndForget(aKey, candidates);
   if (candidates) {
+
+
+    CustomElementReactionsStack* reactionsStack =
+      docGroup->CustomElementReactionsStack();
     for (size_t i = 0; i < candidates->Length(); ++i) {
       nsCOMPtr<Element> elem = do_QueryReferent(candidates->ElementAt(i));
       if (!elem) {
         continue;
       }
 
-      EnqueueUpgradeReaction(elem, aDefinition);
+      reactionsStack->EnqueueUpgradeReaction(this, elem, aDefinition);
     }
   }
 }
@@ -565,9 +550,6 @@ CustomElementRegistry::Define(const nsAString& aName,
                               const ElementDefinitionOptions& aOptions,
                               ErrorResult& aRv)
 {
-  // We do this for [CEReaction] temporarily and it will be removed
-  // after webidl supports [CEReaction] annotation in bug 1309147.
-  AutoCEReaction ceReaction(this);
   aRv.MightThrowJSException();
 
   AutoJSAPI jsapi;
@@ -757,7 +739,7 @@ CustomElementRegistry::Define(const nsAString& aName,
       //       here.
       JS::RootedValue rootedv(cx, JS::ObjectValue(*constructorProtoUnwrapped));
       if (!JS_WrapValue(cx, &rootedv) || !callbacksHolder->Init(cx, rootedv)) {
-        aRv.Throw(NS_ERROR_FAILURE);
+        aRv.StealExceptionFromJSContext(cx);
         return;
       }
     } // Leave constructorProtoUnwrapped's compartment.
@@ -798,7 +780,7 @@ CustomElementRegistry::Define(const nsAString& aName,
    * 13. 14. 15. Upgrade candidates
    */
   // TODO: Bug 1299363 - Implement custom element v1 upgrade algorithm
-  UpgradeCandidates(cx, nameAtom, definition);
+  UpgradeCandidates(cx, nameAtom, definition, aRv);
 
   /**
    * 16. If this CustomElementRegistry's when-defined promise map contains an
@@ -863,13 +845,6 @@ CustomElementRegistry::WhenDefined(const nsAString& aName, ErrorResult& aRv)
 }
 
 void
-CustomElementRegistry::EnqueueUpgradeReaction(Element* aElement,
-                                              CustomElementDefinition* aDefinition)
-{
-  Enqueue(aElement, new CustomElementUpgradeReaction(this, aDefinition));
-}
-
-void
 CustomElementRegistry::Upgrade(Element* aElement,
                                CustomElementDefinition* aDefinition)
 {
@@ -915,16 +890,18 @@ CustomElementRegistry::Upgrade(Element* aElement,
   EnqueueLifecycleCallback(nsIDocument::eCreated, aElement, nullptr, aDefinition);
 }
 
+//-----------------------------------------------------
+// CustomElementReactionsStack
 
 void
-CustomElementRegistry::CreateAndPushElementQueue()
+CustomElementReactionsStack::CreateAndPushElementQueue()
 {
   // Push a new element queue onto the custom element reactions stack.
   mReactionsStack.AppendElement();
 }
 
 void
-CustomElementRegistry::PopAndInvokeElementQueue()
+CustomElementReactionsStack::PopAndInvokeElementQueue()
 {
   // Pop the element queue from the custom element reactions stack,
   // and invoke custom element reactions in that queue.
@@ -932,15 +909,27 @@ CustomElementRegistry::PopAndInvokeElementQueue()
              "Reaction stack shouldn't be empty");
 
   ElementQueue& elementQueue = mReactionsStack.LastElement();
-  CustomElementRegistry::InvokeReactions(elementQueue);
+  // Check element queue size in order to reduce function call overhead.
+  if (!elementQueue.IsEmpty()) {
+    InvokeReactions(elementQueue);
+  }
+
   DebugOnly<bool> isRemovedElement = mReactionsStack.RemoveElement(elementQueue);
   MOZ_ASSERT(isRemovedElement,
              "Reaction stack should have an element queue to remove");
 }
 
 void
-CustomElementRegistry::Enqueue(Element* aElement,
-                               CustomElementReaction* aReaction)
+CustomElementReactionsStack::EnqueueUpgradeReaction(CustomElementRegistry* aRegistry,
+                                                    Element* aElement,
+                                                    CustomElementDefinition* aDefinition)
+{
+  Enqueue(aElement, new CustomElementUpgradeReaction(aRegistry, aDefinition));
+}
+
+void
+CustomElementReactionsStack::Enqueue(Element* aElement,
+                                     CustomElementReaction* aReaction)
 {
   // Add element to the current element queue.
   if (!mReactionsStack.IsEmpty()) {
@@ -971,13 +960,16 @@ CustomElementRegistry::Enqueue(Element* aElement,
 }
 
 void
-CustomElementRegistry::InvokeBackupQueue()
+CustomElementReactionsStack::InvokeBackupQueue()
 {
-  CustomElementRegistry::InvokeReactions(mBackupQueue);
+  // Check backup queue size in order to reduce function call overhead.
+  if (!mBackupQueue.IsEmpty()) {
+    InvokeReactions(mBackupQueue);
+  }
 }
 
 void
-CustomElementRegistry::InvokeReactions(ElementQueue& aElementQueue)
+CustomElementReactionsStack::InvokeReactions(ElementQueue& aElementQueue)
 {
   for (uint32_t i = 0; i < aElementQueue.Length(); ++i) {
     nsCOMPtr<Element> element = do_QueryReferent(aElementQueue[i]);

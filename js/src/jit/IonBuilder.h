@@ -335,9 +335,9 @@ class IonBuilder
     AbortReasonOr<Ok> newObjectTryTemplateObject(bool* emitted, JSObject* templateObject);
     AbortReasonOr<Ok> newObjectTryVM(bool* emitted, JSObject* templateObject);
 
-    // jsop_in helpers.
+    // jsop_in/jsop_hasown helpers.
     AbortReasonOr<Ok> inTryDense(bool* emitted, MDefinition* obj, MDefinition* id);
-    AbortReasonOr<Ok> inTryFold(bool* emitted, MDefinition* obj, MDefinition* id);
+    AbortReasonOr<Ok> hasTryNotDefined(bool* emitted, MDefinition* obj, MDefinition* id, bool ownProperty);
 
     // binary data lookup helpers.
     TypedObjectPrediction typedObjectPrediction(MDefinition* typedObj);
@@ -395,12 +395,13 @@ class IonBuilder
                                             MDefinition* index, MDefinition* value);
     AbortReasonOr<Ok> setElemTryTypedStatic(bool* emitted, MDefinition* object,
                                             MDefinition* index, MDefinition* value);
-    AbortReasonOr<Ok> setElemTryDense(bool* emitted, MDefinition* object,
-                                      MDefinition* index, MDefinition* value, bool writeHole);
+    AbortReasonOr<Ok> initOrSetElemTryDense(bool* emitted, MDefinition* object,
+                                            MDefinition* index, MDefinition* value,
+                                            bool writeHole);
     AbortReasonOr<Ok> setElemTryArguments(bool* emitted, MDefinition* object,
                                           MDefinition* index, MDefinition* value);
-    AbortReasonOr<Ok> setElemTryCache(bool* emitted, MDefinition* object,
-                                      MDefinition* index, MDefinition* value);
+    AbortReasonOr<Ok> initOrSetElemTryCache(bool* emitted, MDefinition* object,
+                                            MDefinition* index, MDefinition* value);
     AbortReasonOr<Ok> setElemTryReferenceElemOfTypedObject(bool* emitted,
                                                            MDefinition* obj,
                                                            MDefinition* index,
@@ -428,7 +429,7 @@ class IonBuilder
     AbortReasonOr<Ok> getElemTryArguments(bool* emitted, MDefinition* obj, MDefinition* index);
     AbortReasonOr<Ok> getElemTryArgumentsInlined(bool* emitted, MDefinition* obj,
                                                  MDefinition* index);
-    AbortReasonOr<Ok> getElemTryCache(bool* emitted, MDefinition* obj, MDefinition* index);
+    AbortReasonOr<Ok> getElemAddCache(MDefinition* obj, MDefinition* index);
     AbortReasonOr<Ok> getElemTryScalarElemOfTypedObject(bool* emitted,
                                                         MDefinition* obj,
                                                         MDefinition* index,
@@ -503,7 +504,8 @@ class IonBuilder
     AbortReasonOr<Ok> jsop_funapply(uint32_t argc);
     AbortReasonOr<Ok> jsop_funapplyarguments(uint32_t argc);
     AbortReasonOr<Ok> jsop_funapplyarray(uint32_t argc);
-    AbortReasonOr<Ok> jsop_call(uint32_t argc, bool constructing);
+    AbortReasonOr<Ok> jsop_spreadcall();
+    AbortReasonOr<Ok> jsop_call(uint32_t argc, bool constructing, bool ignoresReturnValue);
     AbortReasonOr<Ok> jsop_eval(uint32_t argc);
     AbortReasonOr<Ok> jsop_label();
     AbortReasonOr<Ok> jsop_andor(JSOp op);
@@ -528,7 +530,7 @@ class IonBuilder
     AbortReasonOr<Ok> jsop_getelem_typed(MDefinition* obj, MDefinition* index,
                                          ScalarTypeDescr::Type arrayType);
     AbortReasonOr<Ok> jsop_setelem();
-    AbortReasonOr<Ok> jsop_setelem_dense(TemporaryTypeSet::DoubleConversion conversion,
+    AbortReasonOr<Ok> initOrSetElemDense(TemporaryTypeSet::DoubleConversion conversion,
                                          MDefinition* object, MDefinition* index,
                                          MDefinition* value, JSValueType unboxedType,
                                          bool writeHole, bool* emitted);
@@ -551,6 +553,7 @@ class IonBuilder
     AbortReasonOr<Ok> jsop_newarray_copyonwrite();
     AbortReasonOr<Ok> jsop_newobject();
     AbortReasonOr<Ok> jsop_initelem();
+    AbortReasonOr<Ok> jsop_initelem_inc();
     AbortReasonOr<Ok> jsop_initelem_array();
     AbortReasonOr<Ok> jsop_initelem_getter_setter();
     AbortReasonOr<Ok> jsop_mutateproto();
@@ -561,22 +564,28 @@ class IonBuilder
     AbortReasonOr<Ok> jsop_lambda(JSFunction* fun);
     AbortReasonOr<Ok> jsop_lambda_arrow(JSFunction* fun);
     AbortReasonOr<Ok> jsop_setfunname(uint8_t prefixKind);
+    AbortReasonOr<Ok> jsop_pushlexicalenv(uint32_t index);
+    AbortReasonOr<Ok> jsop_copylexicalenv(bool copySlots);
     AbortReasonOr<Ok> jsop_functionthis();
     AbortReasonOr<Ok> jsop_globalthis();
     AbortReasonOr<Ok> jsop_typeof();
     AbortReasonOr<Ok> jsop_toasync();
+    AbortReasonOr<Ok> jsop_toasyncgen();
+    AbortReasonOr<Ok> jsop_toasynciter();
     AbortReasonOr<Ok> jsop_toid();
     AbortReasonOr<Ok> jsop_iter(uint8_t flags);
     AbortReasonOr<Ok> jsop_itermore();
     AbortReasonOr<Ok> jsop_isnoiter();
     AbortReasonOr<Ok> jsop_iterend();
     AbortReasonOr<Ok> jsop_in();
+    AbortReasonOr<Ok> jsop_hasown();
     AbortReasonOr<Ok> jsop_instanceof();
     AbortReasonOr<Ok> jsop_getaliasedvar(EnvironmentCoordinate ec);
     AbortReasonOr<Ok> jsop_setaliasedvar(EnvironmentCoordinate ec);
     AbortReasonOr<Ok> jsop_debugger();
     AbortReasonOr<Ok> jsop_newtarget();
     AbortReasonOr<Ok> jsop_checkisobj(uint8_t kind);
+    AbortReasonOr<Ok> jsop_checkiscallable(uint8_t kind);
     AbortReasonOr<Ok> jsop_checkobjcoercible();
     AbortReasonOr<Ok> jsop_pushcallobj();
 
@@ -623,7 +632,9 @@ class IonBuilder
     InliningResult inlineArrayPush(CallInfo& callInfo);
     InliningResult inlineArraySlice(CallInfo& callInfo);
     InliningResult inlineArrayJoin(CallInfo& callInfo);
-    InliningResult inlineArraySplice(CallInfo& callInfo);
+
+    // Array intrinsics.
+    InliningResult inlineNewArrayIterator(CallInfo& callInfo);
 
     // Math natives.
     InliningResult inlineMathAbs(CallInfo& callInfo);
@@ -813,17 +824,16 @@ class IonBuilder
                                      MBasicBlock* bottom);
     MDefinition* specializeInlinedReturn(MDefinition* rdef, MBasicBlock* exit);
 
-    bool objectsHaveCommonPrototype(TemporaryTypeSet* types, PropertyName* name,
-                                    bool isGetter, JSObject* foundProto,
-                                    bool* guardGlobal);
+    NativeObject* commonPrototypeWithGetterSetter(TemporaryTypeSet* types, PropertyName* name,
+                                                  bool isGetter, JSFunction* getterOrSetter,
+                                                  bool* guardGlobal);
     void freezePropertiesForCommonPrototype(TemporaryTypeSet* types, PropertyName* name,
                                             JSObject* foundProto, bool allowEmptyTypesForGlobal = false);
     /*
      * Callers must pass a non-null globalGuard if they pass a non-null globalShape.
      */
     bool testCommonGetterSetter(TemporaryTypeSet* types, PropertyName* name,
-                                bool isGetter, JSObject* foundProto,
-                                Shape* lastProperty, JSFunction* getterOrSetter,
+                                bool isGetter, JSFunction* getterOrSetter,
                                 MDefinition** guard, Shape* globalShape = nullptr,
                                 MDefinition** globalGuard = nullptr);
     AbortReasonOr<bool> testShouldDOMCall(TypeSet* inTypes,
@@ -847,7 +857,7 @@ class IonBuilder
     JSObject* testSingletonProperty(JSObject* obj, jsid id);
     JSObject* testSingletonPropertyTypes(MDefinition* obj, jsid id);
 
-    AbortReasonOr<bool> testNotDefinedProperty(MDefinition* obj, jsid id);
+    AbortReasonOr<bool> testNotDefinedProperty(MDefinition* obj, jsid id, bool ownProperty = false);
 
     uint32_t getDefiniteSlot(TemporaryTypeSet* types, PropertyName* name, uint32_t* pnfixed);
     MDefinition* convertUnboxedObjects(MDefinition* obj);
@@ -944,8 +954,7 @@ class IonBuilder
     }
 
     TraceLoggerThread *traceLogger() {
-        // Currently ionbuilder only runs on the main thread.
-        return TraceLoggerForMainThread(compartment->runtime()->mainThread()->runtimeFromMainThread());
+        return TraceLoggerForCurrentThread();
     }
 
     void actionableAbortLocationAndMessage(JSScript** abortScript, jsbytecode** abortPc,
@@ -1069,9 +1078,10 @@ class IonBuilder
     // Has an iterator other than 'for in'.
     bool nonStringIteration_;
 
-    // If this script can use a lazy arguments object, it will be pre-created
-    // here.
-    MInstruction* lazyArguments_;
+#ifdef DEBUG
+    // If this script uses the lazy arguments object.
+    bool hasLazyArguments_;
+#endif
 
     // If this is an inline builder, the call info for the builder.
     const CallInfo* inlineCallInfo_;
@@ -1174,16 +1184,21 @@ class CallInfo
     MDefinition* newTargetArg_;
     MDefinitionVector args_;
 
-    bool constructing_;
-    bool setter_;
+    bool constructing_:1;
+
+    // True if the caller does not use the return value.
+    bool ignoresReturnValue_:1;
+
+    bool setter_:1;
 
   public:
-    CallInfo(TempAllocator& alloc, bool constructing)
+    CallInfo(TempAllocator& alloc, bool constructing, bool ignoresReturnValue)
       : fun_(nullptr),
         thisArg_(nullptr),
         newTargetArg_(nullptr),
         args_(alloc),
         constructing_(constructing),
+        ignoresReturnValue_(ignoresReturnValue),
         setter_(false)
     { }
 
@@ -1192,6 +1207,7 @@ class CallInfo
 
         fun_ = callInfo.fun();
         thisArg_ = callInfo.thisArg();
+        ignoresReturnValue_ = callInfo.ignoresReturnValue();
 
         if (constructing())
             newTargetArg_ = callInfo.getNewTarget();
@@ -1286,6 +1302,10 @@ class CallInfo
 
     bool constructing() const {
         return constructing_;
+    }
+
+    bool ignoresReturnValue() const {
+        return ignoresReturnValue_;
     }
 
     void setNewTarget(MDefinition* newTarget) {

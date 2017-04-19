@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 with Files('**'):
-    BUG_COMPONENT = ('Mozilla Services', 'Firefox Sync: Crypto')
+    BUG_COMPONENT = ('Firefox', 'Sync')
 
 DIRS += ['component']
 
@@ -13,7 +13,6 @@ XPCSHELL_TESTS_MANIFESTS += ['tests/unit/xpcshell.ini']
 
 EXTRA_JS_MODULES['services-crypto'] += [
     'modules/jwcrypto.jsm',
-    'modules/LogUtils.jsm',
     'modules/utils.js',
     'modules/WeaveCrypto.js',
 ]

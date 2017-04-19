@@ -186,7 +186,7 @@ ViewSourceBrowser.prototype = {
     }
 
     if (browser) {
-      this.browser.relatedBrowser = browser;
+      this.browser.sameProcessAsFrameLoader = browser.frameLoader;
 
       // If we're dealing with a remote browser, then the browser
       // for view source needs to be remote as well.
@@ -250,7 +250,7 @@ ViewSourceBrowser.prototype = {
         this.bundle.GetStringFromName("goToLineText"),
         input,
         null,
-        {value:0});
+        {value: 0});
 
     if (!ok)
       return;

@@ -84,7 +84,6 @@ CompositorVsyncScheduler::CompositorVsyncScheduler(CompositorVsyncSchedulerOwner
   , mSetNeedsCompositeMonitor("SetNeedsCompositeMonitor")
   , mSetNeedsCompositeTask(nullptr)
 {
-  MOZ_ASSERT(NS_IsMainThread() || XRE_GetProcessType() == GeckoProcessType_GPU);
   mVsyncObserver = new Observer(this);
 
   // mAsapScheduling is set on the main thread during init,
@@ -135,6 +134,11 @@ void
 CompositorVsyncScheduler::ScheduleComposition()
 {
   MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+  if (!mVsyncObserver) {
+    // Destroy was already called on this object.
+    return;
+  }
+
   if (mAsapScheduling) {
     // Used only for performance testing purposes
     PostCompositeTask(TimeStamp::Now());
@@ -190,6 +194,11 @@ CompositorVsyncScheduler::SetNeedsComposite()
   mNeedsComposite++;
   if (!mIsObservingVsync && mNeedsComposite) {
     ObserveVsync();
+    // Starting to observe vsync is an async operation that goes
+    // through the main thread of the UI process. It's possible that
+    // we're blocking there waiting on a composite, so schedule an initial
+    // one now to get things started.
+    PostCompositeTask(TimeStamp::Now());
   }
 }
 

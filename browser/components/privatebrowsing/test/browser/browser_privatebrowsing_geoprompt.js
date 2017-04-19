@@ -6,7 +6,7 @@
 // control inside the private browsing mode.
 
 add_task(function* test() {
-  const testPageURL = "http://mochi.test:8888/browser/" +
+  const testPageURL = "https://example.com/browser/" +
     "browser/components/privatebrowsing/test/browser/browser_privatebrowsing_geoprompt_page.html";
 
   function checkGeolocation(aPrivateMode, aWindow) {
@@ -17,9 +17,9 @@ add_task(function* test() {
       let notification = aWindow.PopupNotifications.getNotification("geolocation");
 
       // Wait until the notification is available.
-      while (!notification){
+      while (!notification) {
         yield new Promise(resolve => { executeSoon(resolve); });
-        let notification = aWindow.PopupNotifications.getNotification("geolocation");
+        notification = aWindow.PopupNotifications.getNotification("geolocation");
       }
 
       if (aPrivateMode) {
@@ -32,7 +32,7 @@ add_task(function* test() {
 
       aWindow.gBrowser.removeCurrentTab();
     });
-  };
+  }
 
   let win = yield BrowserTestUtils.openNewBrowserWindow();
   let browser = win.gBrowser.selectedBrowser;

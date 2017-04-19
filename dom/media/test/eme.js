@@ -131,7 +131,7 @@ function UpdateSessionFunc(test, token, sessionType, resolve, reject) {
           "k":HexToBase64(key)
         });
       } else {
-        bail(token + " couldn't find key for key id " + idHex);
+        bail(token + " couldn't find key for key id " + idHex)("No such key");
       }
     }
 
@@ -454,8 +454,8 @@ function SetupEME(test, token, params)
 function SetupEMEPref(callback) {
   var prefs = [
     [ "media.mediasource.enabled", true ],
-    [ "media.eme.apiVisible", true ],
     [ "media.mediasource.webm.enabled", true ],
+    [ "media.eme.vp9-in-mp4.enabled", true ],
   ];
 
   if (SpecialPowers.Services.appinfo.name == "B2G" ||

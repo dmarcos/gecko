@@ -190,16 +190,6 @@ public:
   bool IsLayoutFlushObserver(nsIPresShell* aShell) {
     return mLayoutFlushObservers.Contains(aShell);
   }
-  bool AddPresShellToInvalidateIfHidden(nsIPresShell* aShell) {
-    NS_ASSERTION(!mPresShellsToInvalidateIfHidden.Contains(aShell),
-                 "Double-adding style flush observer");
-    bool appended = mPresShellsToInvalidateIfHidden.AppendElement(aShell) != nullptr;
-    EnsureTimerStarted();
-    return appended;
-  }
-  void RemovePresShellToInvalidateIfHidden(nsIPresShell* aShell) {
-    mPresShellsToInvalidateIfHidden.RemoveElement(aShell);
-  }
 
   /**
    * Remember whether our presshell's view manager needs a flush
@@ -319,6 +309,8 @@ public:
   uint64_t LastTransactionId() const override;
   void NotifyTransactionCompleted(uint64_t aTransactionId) override;
   void RevokeTransactionId(uint64_t aTransactionId) override;
+  void ClearPendingTransactions() override;
+  void ResetInitialTransactionId(uint64_t aTransactionId) override;
   mozilla::TimeStamp GetTransactionStart() override;
 
   bool IsWaitingForPaint(mozilla::TimeStamp aTime);
@@ -407,7 +399,6 @@ private:
   static double GetThrottledTimerInterval();
 
   static mozilla::TimeDuration GetMinRecomputeVisibilityInterval();
-  static mozilla::TimeDuration GetMinNotifyIntersectionObserversInterval();
 
   bool HaveFrameRequestCallbacks() const {
     return mFrameRequestCallbackDocs.Length() != 0;
@@ -443,13 +434,10 @@ private:
   // flush since the last time we did it.
   const mozilla::TimeDuration mMinRecomputeVisibilityInterval;
 
-  const mozilla::TimeDuration mMinNotifyIntersectionObserversInterval;
-
   bool mThrottled;
   bool mNeedToRecomputeVisibility;
   bool mTestControllingRefreshes;
   bool mViewManagerFlushIsPending;
-  bool mRequestedHighPrecision;
   bool mInRefresh;
 
   // True if the refresh driver is suspended waiting for transaction
@@ -475,7 +463,6 @@ private:
   mozilla::TimeStamp mTickStart;
   mozilla::TimeStamp mNextThrottledFrameRequestTick;
   mozilla::TimeStamp mNextRecomputeVisibilityTick;
-  mozilla::TimeStamp mNextNotifyIntersectionObserversTick;
 
   // separate arrays for each flush type we support
   ObserverArray mObservers[3];
@@ -489,7 +476,6 @@ private:
 
   AutoTArray<nsIPresShell*, 16> mStyleFlushObservers;
   AutoTArray<nsIPresShell*, 16> mLayoutFlushObservers;
-  AutoTArray<nsIPresShell*, 16> mPresShellsToInvalidateIfHidden;
   // nsTArray on purpose, because we want to be able to swap.
   nsTArray<nsIDocument*> mFrameRequestCallbackDocs;
   nsTArray<nsIDocument*> mThrottledFrameRequestCallbackDocs;
@@ -500,10 +486,6 @@ private:
                              mozilla::TimeStamp aDesired);
 
   friend class mozilla::RefreshDriverTimer;
-
-  // turn on or turn off high precision based on various factors
-  void ConfigureHighPrecision();
-  void SetHighPrecisionTimersEnabled(bool aEnable);
 
   static void Shutdown();
 

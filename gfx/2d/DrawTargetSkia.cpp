@@ -24,6 +24,8 @@
 #include "Logging.h"
 #include "Tools.h"
 #include "DataSurfaceHelpers.h"
+#include "PathHelpers.h"
+#include "Swizzle.h"
 #include <algorithm>
 
 #ifdef USE_SKIA_GPU
@@ -111,12 +113,6 @@ ReleaseTemporarySurface(const void* aPixels, void* aContext)
   }
 }
 
-#ifdef IS_BIG_ENDIAN
-static const int kARGBAlphaOffset = 0;
-#else
-static const int kARGBAlphaOffset = 3;
-#endif
-
 static void
 WriteRGBXFormat(uint8_t* aData, const IntSize &aSize,
                 const int32_t aStride, SurfaceFormat aFormat)
@@ -125,17 +121,9 @@ WriteRGBXFormat(uint8_t* aData, const IntSize &aSize,
     return;
   }
 
-  int height = aSize.height;
-  int width = aSize.width * 4;
-
-  for (int row = 0; row < height; ++row) {
-    for (int column = 0; column < width; column += 4) {
-      aData[column + kARGBAlphaOffset] = 0xFF;
-    }
-    aData += aStride;
-  }
-
-  return;
+  SwizzleData(aData, aStride, SurfaceFormat::X8R8G8B8_UINT32,
+              aData, aStride, SurfaceFormat::A8R8G8B8_UINT32,
+              aSize);
 }
 
 #ifdef DEBUG
@@ -161,6 +149,8 @@ CalculateSurfaceBounds(const IntSize &aSize, const Rect* aBounds, const Matrix* 
 
   return surfaceBounds.Intersect(bounds);
 }
+
+static const int kARGBAlphaOffset = SurfaceFormat::A8R8G8B8_UINT32 == SurfaceFormat::B8G8R8A8 ? 3 : 0;
 
 static bool
 VerifyRGBXFormat(uint8_t* aData, const IntSize &aSize, const int32_t aStride, SurfaceFormat aFormat)
@@ -396,12 +386,12 @@ SkImageIsMask(const sk_sp<SkImage>& aImage)
   if (aImage->peekPixels(&pixmap)) {
     return pixmap.colorType() == kAlpha_8_SkColorType;
 #ifdef USE_SKIA_GPU
-  } else if (GrTexture* tex = aImage->getTexture()) {
+  }
+  if (GrTexture* tex = aImage->getTexture()) {
     return GrPixelConfigIsAlphaOnly(tex->config());
 #endif
-  } else {
-    return false;
   }
+  return false;
 }
 
 static bool
@@ -816,19 +806,99 @@ DrawTargetSkia::Stroke(const Path *aPath,
   mCanvas->drawPath(skiaPath->GetPath(), paint.mPaint);
 }
 
+static Float
+DashPeriodLength(const StrokeOptions& aStrokeOptions)
+{
+  Float length = 0;
+  for (size_t i = 0; i < aStrokeOptions.mDashLength; i++) {
+    length += aStrokeOptions.mDashPattern[i];
+  }
+  if (aStrokeOptions.mDashLength & 1) {
+    // "If an odd number of values is provided, then the list of values is
+    // repeated to yield an even number of values."
+    // Double the length.
+    length += length;
+  }
+  return length;
+}
+
+static inline Float
+RoundDownToMultiple(Float aValue, Float aFactor)
+{
+  return floorf(aValue / aFactor) * aFactor;
+}
+
+static Rect
+UserSpaceStrokeClip(const IntRect &aDeviceClip,
+                    const Matrix &aTransform,
+                    const StrokeOptions &aStrokeOptions)
+{
+  Matrix inverse = aTransform;
+  if (!inverse.Invert()) {
+    return Rect();
+  }
+  Rect deviceClip(aDeviceClip);
+  deviceClip.Inflate(MaxStrokeExtents(aStrokeOptions, aTransform));
+  return inverse.TransformBounds(deviceClip);
+}
+
+static Rect
+ShrinkClippedStrokedRect(const Rect &aStrokedRect, const IntRect &aDeviceClip,
+                         const Matrix &aTransform,
+                         const StrokeOptions &aStrokeOptions)
+{
+  Rect userSpaceStrokeClip =
+    UserSpaceStrokeClip(aDeviceClip, aTransform, aStrokeOptions);
+
+  Rect intersection = aStrokedRect.Intersect(userSpaceStrokeClip);
+  Float dashPeriodLength = DashPeriodLength(aStrokeOptions);
+  if (intersection.IsEmpty() || dashPeriodLength == 0.0f) {
+    return intersection;
+  }
+
+  // Reduce the rectangle side lengths in multiples of the dash period length
+  // so that the visible dashes stay in the same place.
+  Margin insetBy = aStrokedRect - intersection;
+  insetBy.top = RoundDownToMultiple(insetBy.top, dashPeriodLength);
+  insetBy.right = RoundDownToMultiple(insetBy.right, dashPeriodLength);
+  insetBy.bottom = RoundDownToMultiple(insetBy.bottom, dashPeriodLength);
+  insetBy.left = RoundDownToMultiple(insetBy.left, dashPeriodLength);
+
+  Rect shrunkRect = aStrokedRect;
+  shrunkRect.Deflate(insetBy);
+  return shrunkRect;
+}
+
 void
 DrawTargetSkia::StrokeRect(const Rect &aRect,
                            const Pattern &aPattern,
                            const StrokeOptions &aStrokeOptions,
                            const DrawOptions &aOptions)
 {
+  // Stroking large rectangles with dashes is expensive with Skia (fixed
+  // overhead based on the number of dashes, regardless of whether the dashes
+  // are visible), so we try to reduce the size of the stroked rectangle as
+  // much as possible before passing it on to Skia.
+  Rect rect = aRect;
+  if (aStrokeOptions.mDashLength > 0 && !rect.IsEmpty()) {
+    IntRect deviceClip(IntPoint(0, 0), mSize);
+    SkIRect clipBounds;
+    if (mCanvas->getClipDeviceBounds(&clipBounds)) {
+      deviceClip = SkIRectToIntRect(clipBounds);
+    }
+    rect = ShrinkClippedStrokedRect(rect, deviceClip, mTransform, aStrokeOptions);
+    if (rect.IsEmpty()) {
+      return;
+    }
+  }
+
   MarkChanged();
   AutoPaintSetup paint(mCanvas.get(), aOptions, aPattern);
   if (!StrokeOptionsToPaint(paint.mPaint, aStrokeOptions)) {
     return;
   }
 
-  mCanvas->drawRect(RectToSkRect(aRect), paint.mPaint);
+  mCanvas->drawRect(RectToSkRect(rect), paint.mPaint);
 }
 
 void
@@ -1334,11 +1404,12 @@ CanDrawFont(ScaledFont* aFont)
 }
 
 void
-DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
-                           const GlyphBuffer &aBuffer,
-                           const Pattern &aPattern,
-                           const DrawOptions &aOptions,
-                           const GlyphRenderingOptions *aRenderingOptions)
+DrawTargetSkia::DrawGlyphs(ScaledFont* aFont,
+                           const GlyphBuffer& aBuffer,
+                           const Pattern& aPattern,
+                           const StrokeOptions* aStrokeOptions,
+                           const DrawOptions& aOptions,
+                           const GlyphRenderingOptions* aRenderingOptions)
 {
   if (!CanDrawFont(aFont)) {
     return;
@@ -1347,7 +1418,8 @@ DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
   MarkChanged();
 
 #ifdef MOZ_WIDGET_COCOA
-  if (ShouldUseCGToFillGlyphs(aRenderingOptions, aPattern)) {
+  if (!aStrokeOptions &&
+      ShouldUseCGToFillGlyphs(aRenderingOptions, aPattern)) {
     if (FillGlyphsWithCG(aFont, aBuffer, aPattern, aOptions, aRenderingOptions)) {
       return;
     }
@@ -1361,6 +1433,11 @@ DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
   }
 
   AutoPaintSetup paint(mCanvas.get(), aOptions, aPattern);
+  if (aStrokeOptions &&
+      !StrokeOptionsToPaint(paint.mPaint, *aStrokeOptions)) {
+    return;
+  }
+
   AntialiasMode aaMode = aFont->GetDefaultAAMode();
   if (aOptions.mAntialiasMode != AntialiasMode::DEFAULT) {
     aaMode = aOptions.mAntialiasMode;
@@ -1446,6 +1523,27 @@ DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
   }
 
   mCanvas->drawPosText(&indices.front(), aBuffer.mNumGlyphs*2, &offsets.front(), paint.mPaint);
+}
+
+void
+DrawTargetSkia::FillGlyphs(ScaledFont* aFont,
+                           const GlyphBuffer& aBuffer,
+                           const Pattern& aPattern,
+                           const DrawOptions& aOptions,
+                           const GlyphRenderingOptions* aRenderingOptions)
+{
+  DrawGlyphs(aFont, aBuffer, aPattern, nullptr, aOptions, aRenderingOptions);
+}
+
+void
+DrawTargetSkia::StrokeGlyphs(ScaledFont* aFont,
+                             const GlyphBuffer& aBuffer,
+                             const Pattern& aPattern,
+                             const StrokeOptions& aStrokeOptions,
+                             const DrawOptions& aOptions,
+                             const GlyphRenderingOptions* aRenderingOptions)
+{
+  DrawGlyphs(aFont, aBuffer, aPattern, &aStrokeOptions, aOptions, aRenderingOptions);
 }
 
 void

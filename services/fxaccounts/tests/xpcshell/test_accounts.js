@@ -26,9 +26,10 @@ Cu.importGlobalProperties(["atob"]);
 var log = Log.repository.getLogger("Services.FxAccounts.test");
 log.level = Log.Level.Debug;
 
-// See verbose logging from FxAccounts.jsm
+// See verbose logging from FxAccounts.jsm and jwcrypto.jsm.
 Services.prefs.setCharPref("identity.fxaccounts.loglevel", "Trace");
 Log.repository.getLogger("FirefoxAccounts").level = Log.Level.Trace;
+Services.prefs.setCharPref("services.crypto.jwcrypto.log.level", "Debug");
 
 // The oauth server is mocked, but set these prefs to pass param checks
 Services.prefs.setCharPref("identity.fxaccounts.remote.oauth.uri", "https://example.com/v1");
@@ -69,6 +70,9 @@ MockStorageManager.prototype = {
   },
 
   updateAccountData(updatedFields) {
+    if (!this.accountData) {
+      return Promise.resolve();
+    }
     for (let [name, value] of Object.entries(updatedFields)) {
       if (value == null) {
         delete this.accountData[name];
@@ -253,6 +257,30 @@ add_task(function* test_get_signed_in_user_initially_unset() {
   // user should be undefined after sign out
   result = yield account.getSignedInUser();
   do_check_eq(result, null);
+});
+
+add_task(function* test_set_signed_in_user_deletes_previous_device() {
+  _("Check setSignedInUser tries to delete a previous registered device");
+  let account = MakeFxAccounts();
+  let deleteDeviceRegistrationCalled = false;
+  let credentials = {
+    email: "foo@example.com",
+    uid: "1234@lcip.org",
+    assertion: "foobar",
+    sessionToken: "dead",
+    kA: "beef",
+    kB: "cafe",
+    verified: true
+  };
+  yield account.setSignedInUser(credentials);
+
+  account.internal.deleteDeviceRegistration = () => {
+    deleteDeviceRegistrationCalled = true;
+    return Promise.resolve(true);
+  }
+
+  yield account.setSignedInUser(credentials);
+  do_check_true(deleteDeviceRegistrationCalled);
 });
 
 add_task(function* test_update_account_data() {
@@ -960,16 +988,16 @@ add_task(function* test_sign_out_with_device() {
 
   const spy = {
     signOut: { count: 0 },
-    signOutAndDeviceDestroy: { count: 0, args: [] }
+    deleteDeviceRegistration: { count: 0, args: [] }
   };
   const client = fxa.internal.fxAccountsClient;
   client.signOut = function() {
     spy.signOut.count += 1;
     return Promise.resolve();
   };
-  client.signOutAndDestroyDevice = function() {
-    spy.signOutAndDeviceDestroy.count += 1;
-    spy.signOutAndDeviceDestroy.args.push(arguments);
+  fxa.internal.deleteDeviceRegistration = function() {
+    spy.deleteDeviceRegistration.count += 1;
+    spy.deleteDeviceRegistration.args.push(arguments);
     return Promise.resolve();
   };
 
@@ -980,12 +1008,10 @@ add_task(function* test_sign_out_with_device() {
       fxa.internal.getUserAccountData().then(user2 => {
         do_check_eq(user2, null);
         do_check_eq(spy.signOut.count, 0);
-        do_check_eq(spy.signOutAndDeviceDestroy.count, 1);
-        do_check_eq(spy.signOutAndDeviceDestroy.args[0].length, 3);
-        do_check_eq(spy.signOutAndDeviceDestroy.args[0][0], credentials.sessionToken);
-        do_check_eq(spy.signOutAndDeviceDestroy.args[0][1], credentials.deviceId);
-        do_check_true(spy.signOutAndDeviceDestroy.args[0][2]);
-        do_check_eq(spy.signOutAndDeviceDestroy.args[0][2].service, "sync");
+        do_check_eq(spy.deleteDeviceRegistration.count, 1);
+        do_check_eq(spy.deleteDeviceRegistration.args[0].length, 2);
+        do_check_eq(spy.deleteDeviceRegistration.args[0][0], credentials.sessionToken);
+        do_check_eq(spy.deleteDeviceRegistration.args[0][1], credentials.deviceId);
         resolve();
       });
     });
@@ -1007,7 +1033,7 @@ add_task(function* test_sign_out_without_device() {
 
   const spy = {
     signOut: { count: 0, args: [] },
-    signOutAndDeviceDestroy: { count: 0 }
+    deleteDeviceRegistration: { count: 0 }
   };
   const client = fxa.internal.fxAccountsClient;
   client.signOut = function() {
@@ -1015,8 +1041,8 @@ add_task(function* test_sign_out_without_device() {
     spy.signOut.args.push(arguments);
     return Promise.resolve();
   };
-  client.signOutAndDestroyDevice = function() {
-    spy.signOutAndDeviceDestroy.count += 1;
+  fxa.internal.deleteDeviceRegistration = function() {
+    spy.deleteDeviceRegistration.count += 1;
     return Promise.resolve();
   };
 
@@ -1031,7 +1057,7 @@ add_task(function* test_sign_out_without_device() {
         do_check_eq(spy.signOut.args[0][0], credentials.sessionToken);
         do_check_true(spy.signOut.args[0][1]);
         do_check_eq(spy.signOut.args[0][1].service, "sync");
-        do_check_eq(spy.signOutAndDeviceDestroy.count, 0);
+        do_check_eq(spy.deleteDeviceRegistration.count, 0);
         resolve();
       });
     });
@@ -1044,10 +1070,9 @@ add_task(function* test_sign_out_without_device() {
 
 add_task(function* test_sign_out_with_remote_error() {
   let fxa = new MockFxAccounts();
-  let client = fxa.internal.fxAccountsClient;
   let remoteSignOutCalled = false;
   // Force remote sign out to trigger an error
-  client.signOutAndDestroyDevice = function() { remoteSignOutCalled = true; throw "Remote sign out error"; };
+  fxa.internal.deleteDeviceRegistration = function() { remoteSignOutCalled = true; throw "Remote sign out error"; };
   let promiseLogout = new Promise(resolve => {
     makeObserver(ONLOGOUT_NOTIFICATION, function() {
       log.debug("test_sign_out_with_remote_error observed onlogout");
@@ -1506,7 +1531,7 @@ function makeObserver(aObserveTopic, aObserveFunc) {
     Services.obs.removeObserver(observer, aObserveTopic);
   }
 
-  Services.obs.addObserver(observer, aObserveTopic, false);
+  Services.obs.addObserver(observer, aObserveTopic);
   return removeMe;
 }
 

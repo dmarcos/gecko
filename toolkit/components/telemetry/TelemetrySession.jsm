@@ -10,18 +10,18 @@ const Ci = Components.interfaces;
 const Cr = Components.results;
 const Cu = Components.utils;
 
-Cu.import("resource://gre/modules/debug.js", this);
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 Cu.import("resource://gre/modules/Promise.jsm", this);
 Cu.import("resource://gre/modules/DeferredTask.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
-Cu.import("resource://gre/modules/TelemetrySend.jsm", this);
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
 Cu.import("resource://gre/modules/AppConstants.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySend",
+                                  "resource://gre/modules/TelemetrySend.jsm");
 
 const Utils = TelemetryUtils;
 
@@ -56,7 +56,7 @@ const INTERNAL_PROCESSES_NAMES = {
 const ENVIRONMENT_CHANGE_LISTENER = "TelemetrySession::onEnvironmentChange";
 
 const MS_IN_ONE_HOUR  = 60 * 60 * 1000;
-const MIN_SUBSESSION_LENGTH_MS = Preferences.get("toolkit.telemetry.minSubsessionLength", 10 * 60) * 1000;
+const MIN_SUBSESSION_LENGTH_MS = Preferences.get("toolkit.telemetry.minSubsessionLength", 5 * 60) * 1000;
 
 const LOGGER_NAME = "Toolkit.Telemetry";
 const LOGGER_PREFIX = "TelemetrySession" + (Utils.isContentProcess ? "#content::" : "::");
@@ -66,7 +66,7 @@ const PREF_PREVIOUS_BUILDID = PREF_BRANCH + "previousBuildID";
 const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 const PREF_ASYNC_PLUGIN_INIT = "dom.ipc.plugins.asyncInit.enabled";
 const PREF_UNIFIED = PREF_BRANCH + "unified";
-
+const PREF_SHUTDOWN_PINGSENDER = PREF_BRANCH + "shutdownPingSender.enabled";
 
 const MESSAGE_TELEMETRY_PAYLOAD = "Telemetry:Payload";
 const MESSAGE_TELEMETRY_THREAD_HANGS = "Telemetry:ChildThreadHangs";
@@ -102,10 +102,6 @@ const SCHEDULER_MIDNIGHT_TOLERANCE_MS = 15 * 60 * 1000;
 // On idle-daily a gather-telemetry notification is fired, during it probes can
 // start asynchronous tasks to gather data.
 const IDLE_TIMEOUT_SECONDS = Preferences.get("toolkit.telemetry.idleTimeout", 5 * 60);
-
-// To avoid generating too many main pings, we ignore environment changes that
-// happen within this interval since the last main ping.
-const CHANGE_THROTTLE_INTERVAL_MS = 5 * 60 * 1000;
 
 // The frequency at which we persist session data to the disk to prevent data loss
 // in case of aborted sessions (currently 5 minutes).
@@ -157,6 +153,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "GCTelemetry",
                                   "resource://gre/modules/GCTelemetry.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryEnvironment",
                                   "resource://gre/modules/TelemetryEnvironment.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryReportingPolicy",
+                                  "resource://gre/modules/TelemetryReportingPolicy.jsm");
 
 function generateUUID() {
   let str = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID().toString();
@@ -302,7 +300,7 @@ var TelemetryScheduler = {
     this._rescheduleTimeout();
 
     idleService.addIdleObserver(this, IDLE_TIMEOUT_SECONDS);
-    Services.obs.addObserver(this, "wake_notification", false);
+    Services.obs.addObserver(this, "wake_notification");
   },
 
   /**
@@ -663,7 +661,7 @@ var Impl = {
   _slowSQLStartup: {},
   _hasWindowRestoredObserver: false,
   _hasXulWindowVisibleObserver: false,
-  _startupIO : {},
+  _startupIO: {},
   // The previous build ID, if this is the first run with a new build.
   // Null if this is the first run, or the previous build ID is unknown.
   _previousBuildId: null,
@@ -715,6 +713,7 @@ var Impl = {
   _childrenToHearFrom: null,
   // monotonically-increasing id for USS reports
   _nextTotalMemoryId: 1,
+  _USSFromChildProcesses: null,
   _lastEnvironmentChangeDate: 0,
 
 
@@ -913,23 +912,6 @@ var Impl = {
     return ret;
   },
 
-  getAddonHistograms: function getAddonHistograms() {
-    let ahs = Telemetry.addonHistogramSnapshots;
-    let ret = {};
-
-    for (let addonName in ahs) {
-      let addonHistograms = ahs[addonName];
-      let packedHistograms = {};
-      for (let name in addonHistograms) {
-        packedHistograms[name] = this.packHistogram(addonHistograms[name]);
-      }
-      if (Object.keys(packedHistograms).length != 0)
-        ret[addonName] = packedHistograms;
-    }
-
-    return ret;
-  },
-
   getKeyedHistograms(subsession, clearSubsession) {
     let registered =
       Telemetry.registeredKeyedHistograms(this.getDatasetType(), []);
@@ -1014,15 +996,17 @@ var Impl = {
       return [];
     }
 
-    let events = Telemetry.snapshotBuiltinEvents(this.getDatasetType(),
-                                                 clearSubsession);
+    let snapshot = Telemetry.snapshotBuiltinEvents(this.getDatasetType(),
+                                                   clearSubsession);
 
     // Don't return the test events outside of test environments.
     if (!this._testing) {
-      events = events.filter(e => !e[1].startsWith("telemetry.test"));
+      for (let proc of Object.keys(snapshot)) {
+        snapshot[proc] = snapshot[proc].filter(e => !e[1].startsWith("telemetry.test"));
+      }
     }
 
-    return events;
+    return snapshot;
   },
 
   getThreadHangStats: function getThreadHangStats(stats) {
@@ -1044,8 +1028,8 @@ var Impl = {
    * @return The metadata as a JS object
    */
   getMetadata: function getMetadata(reason) {
-    const sessionStartDate = Utils.toLocalTimeISOString(Utils.truncateToDays(this._sessionStartDate));
-    const subsessionStartDate = Utils.toLocalTimeISOString(Utils.truncateToDays(this._subsessionStartDate));
+    const sessionStartDate = Utils.toLocalTimeISOString(Utils.truncateToHours(this._sessionStartDate));
+    const subsessionStartDate = Utils.toLocalTimeISOString(Utils.truncateToHours(this._subsessionStartDate));
     const monotonicNow = Policy.monotonicNow();
 
     let ret = {
@@ -1126,15 +1110,16 @@ var Impl = {
     // data continuity.
     //
     let boundHandleMemoryReport = this.handleMemoryReport.bind(this);
-    function h(id, units, amountName) {
+    let h = (id, units, amountName) => {
       try {
         // If mgr[amountName] throws an exception, just move on -- some amounts
         // aren't available on all platforms.  But if the attribute simply
         // isn't present, that indicates the distinguished amounts have changed
         // and this file hasn't been updated appropriately.
         let amount = mgr[amountName];
-        NS_ASSERT(amount !== undefined,
-                  "telemetry accessed an unknown distinguished amount");
+        if (amount === undefined) {
+          this._log.error("gatherMemory - telemetry accessed an unknown distinguished amount");
+        }
         boundHandleMemoryReport(id, units, amount);
       } catch (e) {
       }
@@ -1172,6 +1157,7 @@ var Impl = {
             this._childrenToHearFrom.clear();
           },
           TOTAL_MEMORY_COLLECTOR_TIMEOUT);
+        this._USSFromChildProcesses = [];
         this._childrenToHearFrom = new Set();
         for (let i = 1; i < ppmm.childCount; i++) {
           let child = ppmm.getChildAt(i);
@@ -1196,7 +1182,7 @@ var Impl = {
     histogram.add(new Date() - startTime);
   },
 
-  handleMemoryReport(id, units, amount) {
+  handleMemoryReport(id, units, amount, key) {
     let val;
     if (units == Ci.nsIMemoryReporter.UNITS_BYTES) {
       val = Math.floor(amount / 1024);
@@ -1220,16 +1206,25 @@ var Impl = {
       val = amount - this._prevValues[id];
       this._prevValues[id] = amount;
     } else {
-      NS_ASSERT(false, "Can't handle memory reporter with units " + units);
+      this._log.error("handleMemoryReport - Can't handle memory reporter with units " + units);
       return;
     }
 
     let h = this._histograms[id];
     if (!h) {
-      h = Telemetry.getHistogramById(id);
+      if (key) {
+        h = Telemetry.getKeyedHistogramById(id);
+      } else {
+        h = Telemetry.getHistogramById(id);
+      }
       this._histograms[id] = h;
     }
-    h.add(val);
+
+    if (key) {
+      h.add(key, val);
+    } else {
+      h.add(val);
+    }
   },
 
   getChildPayloads: function getChildPayloads() {
@@ -1282,6 +1277,7 @@ var Impl = {
     let keyedHistograms = protect(() => this.getKeyedHistograms(isSubsession, clearSubsession), {});
     let scalars = protect(() => this.getScalars(isSubsession, clearSubsession), {});
     let keyedScalars = protect(() => this.getScalars(isSubsession, clearSubsession, true), {});
+    let events = protect(() => this.getEvents(isSubsession, clearSubsession))
 
     payloadObj.histograms = histograms[HISTOGRAM_SUFFIXES.PARENT] || {};
     payloadObj.keyedHistograms = keyedHistograms[HISTOGRAM_SUFFIXES.PARENT] || {};
@@ -1289,13 +1285,14 @@ var Impl = {
       parent: {
         scalars: scalars[INTERNAL_PROCESSES_NAMES.PARENT] || {},
         keyedScalars: keyedScalars[INTERNAL_PROCESSES_NAMES.PARENT] || {},
-        events: protect(() => this.getEvents(isSubsession, clearSubsession)),
+        events: events[INTERNAL_PROCESSES_NAMES.PARENT] || [],
       },
       content: {
         scalars: scalars[INTERNAL_PROCESSES_NAMES.CONTENT],
         keyedScalars: keyedScalars[INTERNAL_PROCESSES_NAMES.CONTENT],
         histograms: histograms[HISTOGRAM_SUFFIXES.CONTENT],
         keyedHistograms: keyedHistograms[HISTOGRAM_SUFFIXES.CONTENT],
+        events: events[INTERNAL_PROCESSES_NAMES.CONTENT] || [],
       },
     };
 
@@ -1309,6 +1306,7 @@ var Impl = {
         keyedScalars: keyedScalars[INTERNAL_PROCESSES_NAMES.GPU],
         histograms: histograms[HISTOGRAM_SUFFIXES.GPU],
         keyedHistograms: keyedHistograms[HISTOGRAM_SUFFIXES.GPU],
+        events: events[INTERNAL_PROCESSES_NAMES.GPU] || [],
       };
     }
 
@@ -1320,16 +1318,13 @@ var Impl = {
       payloadObj.fileIOReports = protect(() => Telemetry.fileIOReports);
       payloadObj.lateWrites = protect(() => Telemetry.lateWrites);
 
-      // Add the addon histograms if they are present
-      let addonHistograms = protect(() => this.getAddonHistograms());
-      if (addonHistograms && Object.keys(addonHistograms).length > 0) {
-        payloadObj.addonHistograms = addonHistograms;
-      }
-
       payloadObj.addonDetails = protect(() => AddonManagerPrivate.getTelemetryDetails());
 
       let clearUIsession = !(reason == REASON_GATHER_PAYLOAD || reason == REASON_GATHER_SUBSESSION_PAYLOAD);
-      payloadObj.UIMeasurements = protect(() => UITelemetry.getUIMeasurements(clearUIsession));
+
+      if (AppConstants.platform == "android") {
+        payloadObj.UIMeasurements = protect(() => UITelemetry.getUIMeasurements(clearUIsession));
+      }
 
       if (this._slowSQLStartup &&
           Object.keys(this._slowSQLStartup).length != 0 &&
@@ -1375,7 +1370,7 @@ var Impl = {
 
     let payload;
     try {
-      const isMobile = ["gonk", "android"].includes(AppConstants.platform);
+      const isMobile = (AppConstants.platform == "android");
       const isSubsession = isMobile ? false : !this._isClassicReason(reason);
 
       if (isMobile) {
@@ -1398,7 +1393,7 @@ var Impl = {
 
         // Notify that there was a subsession split in the parent process. This is an
         // internal topic and is only meant for internal Telemetry usage.
-        Services.obs.notifyObservers(null, "internal-telemetry-after-subsession-split", null);
+        Services.obs.notifyObservers(null, "internal-telemetry-after-subsession-split");
       }
     }
 
@@ -1425,9 +1420,9 @@ var Impl = {
   attachObservers: function attachObservers() {
     if (!this._initialized)
       return;
-    Services.obs.addObserver(this, "idle-daily", false);
+    Services.obs.addObserver(this, "idle-daily");
     if (Telemetry.canRecordExtended) {
-      Services.obs.addObserver(this, TOPIC_CYCLE_COLLECTOR_BEGIN, false);
+      Services.obs.addObserver(this, TOPIC_CYCLE_COLLECTOR_BEGIN);
     }
   },
 
@@ -1487,35 +1482,35 @@ var Impl = {
       Preferences.set(PREF_PREVIOUS_BUILDID, thisBuildID);
     }
 
-    Services.obs.addObserver(this, "sessionstore-windows-restored", false);
+    Services.obs.addObserver(this, "sessionstore-windows-restored");
     if (AppConstants.platform === "android") {
-      Services.obs.addObserver(this, "application-background", false);
+      Services.obs.addObserver(this, "application-background");
     }
-    Services.obs.addObserver(this, "xul-window-visible", false);
+    Services.obs.addObserver(this, "xul-window-visible");
     this._hasWindowRestoredObserver = true;
     this._hasXulWindowVisibleObserver = true;
 
     ppml.addMessageListener(MESSAGE_TELEMETRY_PAYLOAD, this);
     ppml.addMessageListener(MESSAGE_TELEMETRY_THREAD_HANGS, this);
     ppml.addMessageListener(MESSAGE_TELEMETRY_USS, this);
-},
+  },
 
-/**
-  * Does the "heavy" Telemetry initialization later on, so we
-  * don't impact startup performance.
-  * @return {Promise} Resolved when the initialization completes.
-  */
+  /**
+   * Does the "heavy" Telemetry initialization later on, so we
+   * don't impact startup performance.
+   * @return {Promise} Resolved when the initialization completes.
+   */
   delayedInit() {
     this._log.trace("delayedInit");
 
-    this._delayedInitTask = Task.spawn(function* () {
+    this._delayedInitTask = (async function() {
       try {
         this._initialized = true;
 
-        yield this._loadSessionData();
+        await this._loadSessionData();
         // Update the session data to keep track of new subsessions created before
         // the initialization.
-        yield TelemetryStorage.saveSessionData(this._getSessionDataObject());
+        await TelemetryStorage.saveSessionData(this._getSessionDataObject());
 
         this.attachObservers();
         this.gatherMemory();
@@ -1528,13 +1523,13 @@ var Impl = {
 
         if (IS_UNIFIED_TELEMETRY) {
           // Check for a previously written aborted session ping.
-          yield TelemetryController.checkAbortedSessionPing();
+          await TelemetryController.checkAbortedSessionPing();
 
           // Write the first aborted-session ping as early as possible. Just do that
           // if we are not testing, since calling Telemetry.reset() will make a previous
           // aborted ping a pending ping.
           if (!this._testing) {
-            yield this._saveAbortedSessionPing();
+            await this._saveAbortedSessionPing();
           }
 
           // The last change date for the environment, used to throttle environment changes.
@@ -1553,9 +1548,21 @@ var Impl = {
         this._delayedInitTask = null;
         throw e;
       }
-    }.bind(this));
+    }.bind(this))();
 
     return this._delayedInitTask;
+  },
+
+  getOpenTabsCount: function getOpenTabsCount() {
+    let tabCount = 0;
+
+    let browserEnum = Services.wm.getEnumerator("navigator:browser");
+    while (browserEnum.hasMoreElements()) {
+      let win = browserEnum.getNext();
+      tabCount += win.gBrowser.tabs.length;
+    }
+
+    return tabCount;
   },
 
   /**
@@ -1570,7 +1577,7 @@ var Impl = {
       return;
     }
 
-    Services.obs.addObserver(this, "content-child-shutdown", false);
+    Services.obs.addObserver(this, "content-child-shutdown");
     cpml.addMessageListener(MESSAGE_TELEMETRY_GET_CHILD_THREAD_HANGS, this);
     cpml.addMessageListener(MESSAGE_TELEMETRY_GET_CHILD_USS, this);
 
@@ -1654,7 +1661,9 @@ var Impl = {
     {
       // In parent process, receive the USS report from the child
       if (this._totalMemoryTimeout && this._childrenToHearFrom.delete(message.data.id)) {
-        this._totalMemory += message.data.bytes;
+        let uss = message.data.bytes;
+        this._totalMemory += uss;
+        this._USSFromChildProcesses.push(uss);
         if (this._childrenToHearFrom.size == 0) {
           clearTimeout(this._totalMemoryTimeout);
           this._totalMemoryTimeout = undefined;
@@ -1662,6 +1671,36 @@ var Impl = {
             "MEMORY_TOTAL",
             Ci.nsIMemoryReporter.UNITS_BYTES,
             this._totalMemory);
+
+          let length = this._USSFromChildProcesses.length;
+          if (length > 1) {
+            // Mean of the USS of all the content processes.
+            let mean = this._USSFromChildProcesses.reduce((a, b) => a + b, 0) / length;
+            // Absolute error of USS for each content process, normalized by the mean (*100 to get it in percentage).
+            // 20% means for a content process that it is using 20% more or 20% less than the mean.
+            let diffs = this._USSFromChildProcesses.map(value => Math.floor(Math.abs(value - mean) * 100 / mean));
+            let tabsCount = this.getOpenTabsCount();
+            let key;
+            if (tabsCount < 11) {
+              key = "0 - 10 tabs";
+            } else if (tabsCount < 501) {
+              key = "11 - 500 tabs";
+            } else {
+              key = "more tabs";
+            }
+
+            diffs.forEach(value => {
+              this.handleMemoryReport(
+              "MEMORY_DISTRIBUTION_AMONG_CONTENT",
+              Ci.nsIMemoryReporter.UNITS_COUNT,
+              value,
+              key);
+            });
+
+            // This notification is for testing only.
+            Services.obs.notifyObservers(null, "gather-memory-telemetry-finished");
+          }
+          this._USSFromChildProcesses = undefined;
         }
       } else {
         this._log.trace("Child USS report was missed");
@@ -1732,9 +1771,15 @@ var Impl = {
     if (IS_UNIFIED_TELEMETRY) {
       let shutdownPayload = this.getSessionPayload(REASON_SHUTDOWN, false);
 
+      // Only send the shutdown ping using the pingsender from the second
+      // browsing session on, to mitigate issues with "bot" profiles (see bug 1354482).
+      let sendWithPingsender = Preferences.get(PREF_SHUTDOWN_PINGSENDER, true) &&
+                               !TelemetryReportingPolicy.isFirstRun();
+
       let options = {
         addClientId: true,
         addEnvironment: true,
+        usePingSender: sendWithPingsender,
       };
       p.push(TelemetryController.submitExternalPing(getPingType(shutdownPayload), shutdownPayload, options)
                                 .catch(e => this._log.error("saveShutdownPings - failed to submit shutdown ping", e)));
@@ -1906,12 +1951,12 @@ var Impl = {
     case "idle-daily":
       // Enqueue to main-thread, otherwise components may be inited by the
       // idle-daily category and miss the gather-telemetry notification.
-      Services.tm.mainThread.dispatch((function() {
+      Services.tm.dispatchToMainThread((function() {
         // Notify that data should be gathered now.
         // TODO: We are keeping this behaviour for now but it will be removed as soon as
         // bug 1127907 lands.
-        Services.obs.notifyObservers(null, "gather-telemetry", null);
-      }), Ci.nsIThread.DISPATCH_NORMAL);
+        Services.obs.notifyObservers(null, "gather-telemetry");
+      }));
       break;
 
     case "application-background":
@@ -1963,15 +2008,15 @@ var Impl = {
         this._initialized = false;
       };
 
-      return Task.spawn(function*() {
-        yield this.saveShutdownPings();
+      return (async function() {
+        await this.saveShutdownPings();
 
         if (IS_UNIFIED_TELEMETRY) {
-          yield TelemetryController.removeAbortedSessionPing();
+          await TelemetryController.removeAbortedSessionPing();
         }
 
         reset();
-      }.bind(this));
+      }.bind(this))();
     };
 
     // We can be in one the following states here:
@@ -2024,8 +2069,8 @@ var Impl = {
    * @return {Promise<object>} A promise which is resolved with an object when
    *                            loading has completed, with null otherwise.
    */
-  _loadSessionData: Task.async(function* () {
-    let data = yield TelemetryStorage.loadSessionData();
+  async _loadSessionData() {
+    let data = await TelemetryStorage.loadSessionData();
 
     if (!data) {
       return null;
@@ -2047,7 +2092,7 @@ var Impl = {
     this._profileSubsessionCounter = data.profileSubsessionCounter +
                                      this._subsessionCounter;
     return data;
-  }),
+  },
 
   /**
    * Get the session data object to serialise to disk.
@@ -2065,7 +2110,7 @@ var Impl = {
 
     let now = Policy.monotonicNow();
     let timeDelta = now - this._lastEnvironmentChangeDate;
-    if (timeDelta <= CHANGE_THROTTLE_INTERVAL_MS) {
+    if (timeDelta <= MIN_SUBSESSION_LENGTH_MS) {
       this._log.trace(`_onEnvironmentChange - throttling; last change was ${Math.round(timeDelta / 1000)}s ago.`);
       return;
     }

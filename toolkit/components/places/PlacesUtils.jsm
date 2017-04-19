@@ -282,6 +282,8 @@ const SYNC_BOOKMARK_VALIDATORS = Object.freeze({
   keyword: simpleValidateFunc(v => v === null || typeof v == "string"),
   description: simpleValidateFunc(v => v === null || typeof v == "string"),
   loadInSidebar: simpleValidateFunc(v => v === true || v === false),
+  dateAdded: simpleValidateFunc(v => typeof v === "number"
+    && v > PlacesSyncUtils.bookmarks.EARLIEST_BOOKMARK_TIMESTAMP),
   feed: v => v === null ? v : BOOKMARK_VALIDATORS.url(v),
   site: v => v === null ? v : BOOKMARK_VALIDATORS.url(v),
   title: BOOKMARK_VALIDATORS.title,
@@ -516,6 +518,9 @@ this.PlacesUtils = {
    * @param behavior (object) [optional]
    *        Object defining special behavior for some of the properties.
    *        The following behaviors may be optionally set:
+   *         - required: this property is required.
+   *         - replaceWith: this property will be overwritten with the value
+   *                        provided
    *         - requiredIf: if the provided condition is satisfied, then this
    *                       property is required.
    *         - validIf: if the provided condition is not satisfied, then this
@@ -543,10 +548,13 @@ this.PlacesUtils = {
       }
       if (behavior[prop].hasOwnProperty("validIf") && input[prop] !== undefined &&
           !behavior[prop].validIf(input)) {
-        throw new Error(`Invalid value for property '${prop}': ${input[prop]}`);
+        throw new Error(`Invalid value for property '${prop}': ${JSON.stringify(input[prop])}`);
       }
       if (behavior[prop].hasOwnProperty("defaultValue") && input[prop] === undefined) {
         input[prop] = behavior[prop].defaultValue;
+      }
+      if (behavior[prop].hasOwnProperty("replaceWith")) {
+        input[prop] = behavior[prop].replaceWith;
       }
     }
 
@@ -583,7 +591,7 @@ this.PlacesUtils = {
   registerShutdownFunction: function PU_registerShutdownFunction(aFunc) {
     // If this is the first registered function, add the shutdown observer.
     if (this._shutdownFunctions.length == 0) {
-      Services.obs.addObserver(this, this.TOPIC_SHUTDOWN, false);
+      Services.obs.addObserver(this, this.TOPIC_SHUTDOWN);
     }
     this._shutdownFunctions.push(aFunc);
   },
@@ -1552,7 +1560,7 @@ this.PlacesUtils = {
 
     // Delaying to catch issues with asynchronous behavior while waiting
     // to implement asynchronous annotations in bug 699844.
-    Services.tm.mainThread.dispatch(function() {
+    Services.tm.dispatchToMainThread(function() {
       if (aCharset && aCharset.length > 0) {
         PlacesUtils.annotations.setPageAnnotation(
           aURI, PlacesUtils.CHARSET_ANNO, aCharset, 0,
@@ -1562,7 +1570,7 @@ this.PlacesUtils = {
           aURI, PlacesUtils.CHARSET_ANNO);
       }
       deferred.resolve();
-    }, Ci.nsIThread.DISPATCH_NORMAL);
+    });
 
     return deferred.promise;
   },
@@ -1577,7 +1585,7 @@ this.PlacesUtils = {
   getCharsetForURI: function PU_getCharsetForURI(aURI) {
     let deferred = Promise.defer();
 
-    Services.tm.mainThread.dispatch(function() {
+    Services.tm.dispatchToMainThread(function() {
       let charset = null;
 
       try {
@@ -1586,7 +1594,7 @@ this.PlacesUtils = {
       } catch (ex) { }
 
       deferred.resolve(charset);
-    }, Ci.nsIThread.DISPATCH_NORMAL);
+    });
 
     return deferred.promise;
   },
@@ -1663,6 +1671,23 @@ this.PlacesUtils = {
     return deferred.promise;
   },
 
+   /**
+   * Returns the passed URL with a #size ref for the specified size and
+   * devicePixelRatio.
+   *
+   * @param window
+   *        The window where the icon will appear.
+   * @param href
+   *        The string href we should add the ref to.
+   * @param size
+   *        The target image size
+   * @return The URL with the fragment at the end, in the same formar as input.
+   */
+  urlWithSizeRef(window, href, size) {
+    return href + (href.includes("#") ? "&" : "#") +
+           "size=" + (Math.round(size) * window.devicePixelRatio);
+  },
+
   /**
    * Get the unique id for an item (a bookmark, a folder or a separator) given
    * its item id.
@@ -1689,6 +1714,10 @@ this.PlacesUtils = {
    */
   promiseItemId(aGuid) {
     return GuidHelper.getItemId(aGuid)
+  },
+
+  promiseManyItemIds(aGuids) {
+    return GuidHelper.getManyItemIds(aGuids);
   },
 
   /**
@@ -1857,7 +1886,11 @@ this.PlacesUtils = {
          JOIN descendants ON b2.parent = descendants.id AND b2.id <> :tags_folder)
        SELECT d.level, d.id, d.guid, d.parent, d.parentGuid, d.type,
               d.position AS [index], d.title, d.dateAdded, d.lastModified,
-              h.url, f.url AS iconuri,
+              h.url, (SELECT icon_url FROM moz_icons i
+                      JOIN moz_icons_to_pages ON icon_id = i.id
+                      JOIN moz_pages_w_icons pi ON page_id = pi.id
+                      WHERE pi.page_url_hash = hash(h.url) AND pi.page_url = h.url
+                      ORDER BY width DESC LIMIT 1) AS iconuri,
               (SELECT GROUP_CONCAT(t.title, ',')
                FROM moz_bookmarks b2
                JOIN moz_bookmarks t ON t.id = +b2.parent AND t.parent = :tags_folder
@@ -1872,7 +1905,6 @@ this.PlacesUtils = {
        FROM descendants d
        LEFT JOIN moz_bookmarks b3 ON b3.id = d.parent
        LEFT JOIN moz_places h ON h.id = d.fk
-       LEFT JOIN moz_favicons f ON f.id = h.favicon_id
        ORDER BY d.level, d.parent, d.position`;
 
 
@@ -1943,7 +1975,7 @@ this.PlacesUtils = {
       // So we let everyone else have a go every few items (bug 1186714).
       if (++yieldCounter % 50 == 0) {
         yield new Promise(resolve => {
-          Services.tm.currentThread.dispatch(resolve, Ci.nsIThread.DISPATCH_NORMAL);
+          Services.tm.dispatchToMainThread(resolve);
         });
       }
     }
@@ -2427,7 +2459,7 @@ XPCOMUtils.defineLazyGetter(this, "gKeywordsCachePromise", () =>
         }),
       };
 
-      PlacesUtils.bookmarks.addObserver(observer, false);
+      PlacesUtils.bookmarks.addObserver(observer);
       PlacesUtils.registerShutdownFunction(() => {
         PlacesUtils.bookmarks.removeObserver(observer);
       });
@@ -2472,6 +2504,28 @@ var GuidHelper = {
 
     this.updateCache(itemId, aGuid);
     return itemId;
+  }),
+
+  getManyItemIds: Task.async(function* (aGuids) {
+    let uncachedGuids = aGuids.filter(guid => !this.idsForGuids.has(guid));
+    if (uncachedGuids.length) {
+      yield PlacesUtils.withConnectionWrapper("GuidHelper.getItemId",
+                                              Task.async(function* (db) {
+        while (uncachedGuids.length) {
+          let chunk = uncachedGuids.splice(0, 100);
+          let rows = yield db.executeCached(
+            `SELECT b.id, b.guid from moz_bookmarks b WHERE
+             b.guid IN (${"?,".repeat(chunk.length - 1) + "?"})
+             LIMIT ${chunk.length}`, chunk);
+          if (rows.length < chunk.length)
+            throw new Error("Not all items were found!");
+          for (let row of rows) {
+            this.updateCache(row.getResultByIndex(0), row.getResultByIndex(1));
+          }
+        }
+      }.bind(this)));
+    }
+    return new Map(aGuids.map(guid => [guid, this.idsForGuids.get(guid)]));
   }),
 
   getItemGuid: Task.async(function* (aItemId) {
@@ -2547,7 +2601,7 @@ var GuidHelper = {
         onItemVisited() {},
         onItemMoved() {},
       };
-      PlacesUtils.bookmarks.addObserver(this.observer, false);
+      PlacesUtils.bookmarks.addObserver(this.observer);
       PlacesUtils.registerShutdownFunction(() => {
         PlacesUtils.bookmarks.removeObserver(this.observer);
       });

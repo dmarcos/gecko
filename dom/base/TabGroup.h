@@ -7,15 +7,19 @@
 #ifndef TabGroup_h
 #define TabGroup_h
 
-#include "nsISupports.h"
 #include "nsISupportsImpl.h"
 #include "nsIPrincipal.h"
 #include "nsTHashtable.h"
 #include "nsString.h"
 
 #include "mozilla/Atomics.h"
-#include "mozilla/dom/Dispatcher.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/RefPtr.h"
+
+class mozIDOMWindowProxy;
+class nsIDocShellTreeItem;
+class nsIDocument;
+class nsPIDOMWindowOuter;
 
 namespace mozilla {
 class AbstractThread;
@@ -39,7 +43,7 @@ namespace dom {
 
 class DocGroup;
 
-class TabGroup final : public Dispatcher
+class TabGroup final : public SchedulerGroup
 {
 private:
   class HashEntry : public nsCStringHashKey
@@ -52,23 +56,24 @@ private:
   };
 
   typedef nsTHashtable<HashEntry> DocGroupMap;
+
 public:
   typedef DocGroupMap::Iterator Iterator;
 
   friend class DocGroup;
 
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(TabGroup, override)
 
   static TabGroup*
   GetChromeTabGroup();
 
-  // Checks if the PBrowserChild associated with aWindow already has a TabGroup
-  // assigned to it in IPDL. Returns this TabGroup if it does. This could happen
-  // if the parent process created the PBrowser and we needed to assign a
-  // TabGroup immediately upon receiving the IPDL message. This method is main
-  // thread only.
-  static TabGroup*
-  GetFromWindowActor(mozIDOMWindowProxy* aWindow);
+  // Checks if the TabChild already has a TabGroup assigned to it in
+  // IPDL. Returns this TabGroup if it does. This could happen if the parent
+  // process created the PBrowser and we needed to assign a TabGroup immediately
+  // upon receiving the IPDL message. This method is main thread only.
+  static TabGroup* GetFromActor(TabChild* aTabChild);
+
+  static TabGroup* GetFromWindow(mozIDOMWindowProxy* aWindow);
 
   explicit TabGroup(bool aIsChrome = false);
 
@@ -111,30 +116,28 @@ public:
 
   nsTArray<nsPIDOMWindowOuter*> GetTopLevelWindows();
 
-  // This method is always safe to call off the main thread.
-  virtual nsresult Dispatch(const char* aName,
-                            TaskCategory aCategory,
-                            already_AddRefed<nsIRunnable>&& aRunnable) override;
-
   // This method is always safe to call off the main thread. The nsIEventTarget
   // can always be used off the main thread.
-  virtual nsIEventTarget* EventTargetFor(TaskCategory aCategory) const override;
+  nsIEventTarget* EventTargetFor(TaskCategory aCategory) const override;
+
+private:
+  virtual AbstractThread*
+  AbstractMainThreadForImpl(TaskCategory aCategory) override;
 
   TabGroup* AsTabGroup() override { return this; }
 
-  virtual AbstractThread*
-  AbstractMainThreadFor(TaskCategory aCategory) override;
-
-private:
   void EnsureThrottledEventQueues();
 
   ~TabGroup();
-  DocGroupMap mDocGroups;
+
+  // Thread-safe members
   Atomic<bool> mLastWindowLeft;
-  nsTArray<nsPIDOMWindowOuter*> mWindows;
   Atomic<bool> mThrottledQueuesInitialized;
-  nsCOMPtr<nsIEventTarget> mEventTargets[size_t(TaskCategory::Count)];
-  RefPtr<AbstractThread> mAbstractThreads[size_t(TaskCategory::Count)];
+  const bool mIsChrome;
+
+  // Main thread only
+  DocGroupMap mDocGroups;
+  nsTArray<nsPIDOMWindowOuter*> mWindows;
 };
 
 } // namespace dom

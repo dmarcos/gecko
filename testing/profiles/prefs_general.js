@@ -13,6 +13,7 @@ user_pref("dom.experimental_forms", true); // on for testing
 user_pref("dom.forms.number", true); // on for testing
 user_pref("dom.forms.color", true); // on for testing
 user_pref("dom.forms.datetime", true); // on for testing
+user_pref("dom.forms.datetime.others", true); // on for testing
 user_pref("dom.max_script_run_time", 0); // no slow script dialogs
 user_pref("hangmonitor.timeout", 0); // no hang monitor
 user_pref("dom.max_chrome_script_run_time", 0);
@@ -47,6 +48,7 @@ user_pref("media.cache_size", 1000);
 user_pref("media.volume_scale", "0.01");
 user_pref("media.test.dumpDebugInfo", true);
 user_pref("media.dormant-on-pause-timeout-ms", 0); // Enter dormant immediately without waiting for timeout.
+user_pref("media.suspend-bkgnd-video.enabled", false);
 user_pref("security.warn_viewing_mixed", false);
 user_pref("app.update.enabled", false);
 user_pref("app.update.staging.enabled", false);
@@ -176,9 +178,6 @@ user_pref("layout.css.contain.enabled", true);
 // Enable CSS initial-letter for testing
 user_pref("layout.css.initial-letter.enabled", true);
 
-// Enable CSS object-fit & object-position for testing
-user_pref("layout.css.object-fit-and-position.enabled", true);
-
 // Enable webkit prefixed CSS features for testing
 user_pref("layout.css.prefixes.webkit", true);
 
@@ -187,6 +186,9 @@ user_pref("layout.css.prefixes.device-pixel-ratio-webkit", true);
 
 // Enable CSS shape-outside for testing
 user_pref("layout.css.shape-outside.enabled", true);
+
+// Enable CSS text-justify for testing
+user_pref("layout.css.text-justify.enabled", true);
 
 // Disable spammy layout warnings because they pollute test logs
 user_pref("layout.spammy_warnings.enabled", false);
@@ -228,6 +230,7 @@ user_pref("browser.snippets.firstrunHomepage.enabled", false);
 
 // Disable useragent updates.
 user_pref("general.useragent.updates.enabled", false);
+user_pref("general.useragent.updates.url", "https://example.com/0/%%APP_ID%%");
 
 // Disable webapp updates.  Yes, it is supposed to be an integer.
 user_pref("browser.webapps.checkForUpdates", 0);
@@ -338,6 +341,8 @@ user_pref("browser.urlbar.suggest.searches", false);
 // tests that don't expect it to be there.
 user_pref("browser.urlbar.userMadeSearchSuggestionsChoice", true);
 
+user_pref("browser.urlbar.usepreloadedtopurls.enabled", false);
+
 user_pref("dom.audiochannel.mutedByDefault", false);
 
 user_pref("webextensions.tests", true);
@@ -357,3 +362,14 @@ user_pref("media.openUnsupportedTypeWithExternalApp", false);
 // Disable password capture, so that mochitests that include forms aren't
 // influenced by the presence of the persistent doorhanger notification.
 user_pref("signon.rememberSignons", false);
+
+// Enable form autofill feature testing.
+user_pref("browser.formautofill.experimental", true);
+
+// Disable all recommended Marionette preferences for Gecko tests.
+// The prefs recommended by Marionette are typically geared towards
+// consumer automation; not vendor testing.
+user_pref("marionette.prefs.recommended", false);
+
+// Disable Screenshots by default for now
+user_pref("extensions.screenshots.system-disabled", true);

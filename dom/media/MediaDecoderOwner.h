@@ -11,7 +11,9 @@
 namespace mozilla {
 
 class AbstractThread;
+class GMPCrashHelper;
 class VideoFrameContainer;
+class MediaInfo;
 class MediaResult;
 
 namespace dom {
@@ -73,6 +75,11 @@ public:
   // The decoder owner should call Shutdown() on the decoder and drop the
   // reference to the decoder to prevent further calls into the decoder.
   virtual void DecodeError(const MediaResult& aError) = 0;
+
+  // Called by the decoder object, on the main thread, when the
+  // resource has a decode issue during metadata loading or decoding, but can
+  // continue decoding.
+  virtual void DecodeWarning(const MediaResult& aError) = 0;
 
   // Return true if media element error attribute is not null.
   virtual bool HasError() const = 0;
@@ -142,7 +149,7 @@ public:
   // Called by media decoder when the audible state changed
   virtual void SetAudibleState(bool aAudible) = 0;
 
-  // Notified by the shutdown manager that XPCOM shutdown has begun.
+  // Notified by the decoder that XPCOM shutdown has begun.
   // The decoder owner should call Shutdown() on the decoder and drop the
   // reference to the decoder to prevent further calls into the decoder.
   virtual void NotifyXPCOMShutdown() = 0;
@@ -152,6 +159,26 @@ public:
   // Main thread only.
   virtual void DispatchEncrypted(const nsTArray<uint8_t>& aInitData,
                                  const nsAString& aInitDataType) = 0;
+
+  // Return the decoder owner's owner document.
+  virtual nsIDocument* GetDocument() const = 0;
+
+  // Called by the media decoder to create audio/video tracks and add to its
+  // owner's track list.
+  virtual void ConstructMediaTracks(const MediaInfo* aInfo) = 0;
+
+  // Called by the media decoder to removes all audio/video tracks from its
+  // owner's track list.
+  virtual void RemoveMediaTracks() = 0;
+
+  // Called by the media decoder to create a GMPCrashHelper.
+  virtual already_AddRefed<GMPCrashHelper> CreateGMPCrashHelper() = 0;
+
+  // Called by the media decoder to notify the owner to resolve a seek promise.
+  virtual void AsyncResolveSeekDOMPromiseIfExists() = 0;
+
+  // Called by the media decoder to notify the owner to reject a seek promise.
+  virtual void AsyncRejectSeekDOMPromiseIfExists() = 0;
 };
 
 } // namespace mozilla

@@ -15,6 +15,10 @@
 #include "nsFrame.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/dom/Element.h"
+#include "Layers.h"
+#include "gfxPrefs.h"
+#include "gfxUtils.h"
+#include "mozilla/layers/WebRenderDisplayItemLayer.h"
 
 #define ACTIVE   "active"
 #define HOVER    "hover"
@@ -22,6 +26,7 @@
 
 using namespace mozilla;
 using namespace mozilla::image;
+using namespace mozilla::layers;
 
 nsButtonFrameRenderer::nsButtonFrameRenderer()
 {
@@ -73,7 +78,7 @@ class nsDisplayButtonBoxShadowOuter : public nsDisplayItem {
 public:
   nsDisplayButtonBoxShadowOuter(nsDisplayListBuilder* aBuilder,
                                 nsButtonFrameRenderer* aRenderer)
-    : nsDisplayItem(aBuilder, aRenderer->GetFrame()), mBFR(aRenderer) {
+    : nsDisplayItem(aBuilder, aRenderer->GetFrame()) {
     MOZ_COUNT_CTOR(nsDisplayButtonBoxShadowOuter);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
@@ -87,8 +92,6 @@ public:
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
                            bool* aSnap) override;
   NS_DISPLAY_DECL_NAME("ButtonBoxShadowOuter", TYPE_BUTTON_BOX_SHADOW_OUTER)
-private:
-  nsButtonFrameRenderer* mBFR;
 };
 
 nsRect
@@ -102,11 +105,8 @@ nsDisplayButtonBoxShadowOuter::Paint(nsDisplayListBuilder* aBuilder,
                                      nsRenderingContext* aCtx) {
   nsRect frameRect = nsRect(ToReferenceFrame(), mFrame->GetSize());
 
-  nsRect buttonRect;
-  mBFR->GetButtonRect(frameRect, buttonRect);
-
   nsCSSRendering::PaintBoxShadowOuter(mFrame->PresContext(), *aCtx, mFrame,
-                                      buttonRect, mVisibleRect);
+                                      frameRect, mVisibleRect);
 }
 
 class nsDisplayButtonBorder : public nsDisplayItem {
@@ -134,15 +134,90 @@ public:
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
                                          nsRegion *aInvalidRegion) override;
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) override;
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) override;
+  virtual void CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                       nsTArray<WebRenderParentCommand>& aParentCommands,
+                                       WebRenderDisplayItemLayer* aLayer) override;
   NS_DISPLAY_DECL_NAME("ButtonBorderBackground", TYPE_BUTTON_BORDER_BACKGROUND)
 private:
   nsButtonFrameRenderer* mBFR;
+  Maybe<nsCSSBorderRenderer> mBorderRenderer;
 };
 
 nsDisplayItemGeometry*
 nsDisplayButtonBorder::AllocateGeometry(nsDisplayListBuilder* aBuilder)
 {
   return new nsDisplayItemGenericImageGeometry(this, aBuilder);
+}
+
+LayerState
+nsDisplayButtonBorder::GetLayerState(nsDisplayListBuilder* aBuilder,
+                                     LayerManager* aManager,
+                                     const ContainerLayerParameters& aParameters)
+{
+  if (gfxPrefs::LayersAllowDisplayButtonBorder()) {
+    // TODO: Figure out what to do with sync decode images
+    if (aBuilder->ShouldSyncDecodeImages()) {
+      return LAYER_NONE;
+    }
+
+    nsPoint offset = ToReferenceFrame();
+    if (!nsDisplayBoxShadowInner::CanCreateWebRenderCommands(aBuilder,
+                                                             mFrame,
+                                                             offset)) {
+      return LAYER_NONE;
+    }
+
+    Maybe<nsCSSBorderRenderer> br =
+    nsCSSRendering::CreateBorderRenderer(mFrame->PresContext(),
+                                         nullptr,
+                                         mFrame,
+                                         nsRect(),
+                                         nsRect(offset, mFrame->GetSize()),
+                                         mFrame->StyleContext(),
+                                         mFrame->GetSkipSides());
+    if (!br) {
+      return LAYER_NONE;
+    }
+
+    if (!br->CanCreateWebRenderCommands()) {
+      return LAYER_NONE;
+    }
+
+    mBorderRenderer = br;
+    return LAYER_ACTIVE;
+  }
+
+  return LAYER_NONE;
+}
+
+already_AddRefed<Layer>
+nsDisplayButtonBorder::BuildLayer(nsDisplayListBuilder* aBuilder,
+                                  LayerManager* aManager,
+                                  const ContainerLayerParameters& aContainerParameters)
+{
+  return BuildDisplayItemLayer(aBuilder, aManager, aContainerParameters);
+}
+
+void
+nsDisplayButtonBorder::CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                               nsTArray<WebRenderParentCommand>& aCommands,
+                                               WebRenderDisplayItemLayer* aLayer)
+{
+  MOZ_ASSERT(mBorderRenderer);
+  // This is really a combination of paint box shadow inner +
+  // paint border.
+  nsRect buttonRect = nsRect(ToReferenceFrame(), mFrame->GetSize());
+  nsDisplayBoxShadowInner::CreateInsetBoxShadowWebRenderCommands(aBuilder,
+                                                                 aLayer,
+                                                                 mFrame,
+                                                                 buttonRect);
+  mBorderRenderer->CreateWebRenderCommands(aBuilder, aLayer);
 }
 
 void
@@ -163,8 +238,9 @@ nsDisplayButtonBorder::ComputeInvalidationRegion(
   nsDisplayItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
 }
 
-void nsDisplayButtonBorder::Paint(nsDisplayListBuilder* aBuilder,
-                                  nsRenderingContext* aCtx)
+void
+nsDisplayButtonBorder::Paint(nsDisplayListBuilder* aBuilder,
+                             nsRenderingContext* aCtx)
 {
   NS_ASSERTION(mFrame, "No frame?");
   nsPresContext* pc = mFrame->PresContext();
@@ -203,9 +279,19 @@ public:
                                  nsRegion *aInvalidRegion) override;
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      nsRenderingContext* aCtx) override;
+  virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
+                                   LayerManager* aManager,
+                                   const ContainerLayerParameters& aParameters) override;
+  virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
+                                             LayerManager* aManager,
+                                             const ContainerLayerParameters& aContainerParameters) override;
+   virtual void CreateWebRenderCommands(wr::DisplayListBuilder& aBuilder,
+                                        nsTArray<WebRenderParentCommand>& aParentCommands,
+                                        WebRenderDisplayItemLayer* aLayer) override;
   NS_DISPLAY_DECL_NAME("ButtonForeground", TYPE_BUTTON_FOREGROUND)
 private:
   nsButtonFrameRenderer* mBFR;
+  Maybe<nsCSSBorderRenderer> mBorderRenderer;
 };
 
 nsDisplayItemGeometry*
@@ -238,7 +324,7 @@ void nsDisplayButtonForeground::Paint(nsDisplayListBuilder* aBuilder,
   nsPresContext *presContext = mFrame->PresContext();
   const nsStyleDisplay *disp = mFrame->StyleDisplay();
   if (!mFrame->IsThemed(disp) ||
-      !presContext->GetTheme()->ThemeDrawsFocusForWidget(disp->mAppearance)) {
+      !presContext->GetTheme()->ThemeDrawsFocusForWidget(disp->UsedAppearance())) {
     nsRect r = nsRect(ToReferenceFrame(), mFrame->GetSize());
 
     // Draw the -moz-focus-inner border
@@ -247,6 +333,49 @@ void nsDisplayButtonForeground::Paint(nsDisplayListBuilder* aBuilder,
 
     nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, result);
   }
+}
+
+LayerState
+nsDisplayButtonForeground::GetLayerState(nsDisplayListBuilder* aBuilder,
+                                         LayerManager* aManager,
+                                         const ContainerLayerParameters& aParameters)
+{
+  Maybe<nsCSSBorderRenderer> br;
+
+  if (gfxPrefs::LayersAllowButtonForegroundLayers()) {
+    nsPresContext *presContext = mFrame->PresContext();
+    const nsStyleDisplay *disp = mFrame->StyleDisplay();
+    if (!mFrame->IsThemed(disp) ||
+        !presContext->GetTheme()->ThemeDrawsFocusForWidget(disp->UsedAppearance())) {
+      nsRect r = nsRect(ToReferenceFrame(), mFrame->GetSize());
+      br = mBFR->CreateInnerFocusBorderRenderer(aBuilder, presContext, nullptr, mVisibleRect, r);
+    }
+  }
+
+  if (!br || !br->CanCreateWebRenderCommands()) {
+    return LAYER_NONE;
+  }
+
+  mBorderRenderer = br;
+
+  return LAYER_ACTIVE;
+}
+
+already_AddRefed<mozilla::layers::Layer>
+nsDisplayButtonForeground::BuildLayer(nsDisplayListBuilder* aBuilder,
+                                      LayerManager* aManager,
+                                      const ContainerLayerParameters& aContainerParameters)
+{
+  return BuildDisplayItemLayer(aBuilder, aManager, aContainerParameters);
+}
+
+void
+nsDisplayButtonForeground::CreateWebRenderCommands(wr::DisplayListBuilder& aBuilder,
+                                                   nsTArray<WebRenderParentCommand>& aParentCommands,
+                                                   mozilla::layers::WebRenderDisplayItemLayer* aLayer)
+{
+  MOZ_ASSERT(mBorderRenderer.isSome());
+  mBorderRenderer->CreateWebRenderCommands(aBuilder, aLayer);
 }
 
 nsresult
@@ -259,8 +388,7 @@ nsButtonFrameRenderer::DisplayButton(nsDisplayListBuilder* aBuilder,
       nsDisplayButtonBoxShadowOuter(aBuilder, this));
   }
 
-  nsRect buttonRect;
-  GetButtonRect(mFrame->GetRectRelativeToSelf(), buttonRect);
+  nsRect buttonRect = mFrame->GetRectRelativeToSelf();
 
   nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
     aBuilder, mFrame, buttonRect, aBackground);
@@ -280,7 +408,7 @@ nsButtonFrameRenderer::DisplayButton(nsDisplayListBuilder* aBuilder,
 void
 nsButtonFrameRenderer::GetButtonInnerFocusRect(const nsRect& aRect, nsRect& aResult)
 {
-  GetButtonRect(aRect, aResult);
+  aResult = aRect;
   aResult.Deflate(mFrame->GetUsedBorderAndPadding());
 
   nsMargin innerFocusPadding(0,0,0,0);
@@ -320,6 +448,30 @@ nsButtonFrameRenderer::PaintInnerFocusBorder(
   return result;
 }
 
+Maybe<nsCSSBorderRenderer>
+nsButtonFrameRenderer::CreateInnerFocusBorderRenderer(
+  nsDisplayListBuilder* aBuilder,
+  nsPresContext* aPresContext,
+  nsRenderingContext* aRenderingContext,
+  const nsRect& aDirtyRect,
+  const nsRect& aRect)
+{
+  if (mInnerFocusStyle) {
+    nsRect rect;
+    GetButtonInnerFocusRect(aRect, rect);
+
+    gfx::DrawTarget* dt = aRenderingContext ? aRenderingContext->GetDrawTarget() : nullptr;
+    return nsCSSRendering::CreateBorderRenderer(aPresContext,
+                                                dt,
+                                                mFrame,
+                                                aDirtyRect,
+                                                rect,
+                                                mInnerFocusStyle);
+  }
+
+  return Nothing();
+}
+
 DrawResult
 nsButtonFrameRenderer::PaintBorder(
   nsDisplayListBuilder* aBuilder,
@@ -329,9 +481,7 @@ nsButtonFrameRenderer::PaintBorder(
   const nsRect& aRect)
 {
   // get the button rect this is inside the focus and outline rects
-  nsRect buttonRect;
-  GetButtonRect(aRect, buttonRect);
-
+  nsRect buttonRect = aRect;
   nsStyleContext* context = mFrame->StyleContext();
 
   PaintBorderFlags borderFlags = aBuilder->ShouldSyncDecodeImages()
@@ -347,14 +497,6 @@ nsButtonFrameRenderer::PaintBorder(
 
   return result;
 }
-
-
-void
-nsButtonFrameRenderer::GetButtonRect(const nsRect& aRect, nsRect& r)
-{
-  r = aRect;
-}
-
 
 /**
  * Call this when styles change

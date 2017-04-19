@@ -20,7 +20,6 @@
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/WindowsVersion.h"
 
 #include <psapi.h>
 
@@ -1093,7 +1092,7 @@ MouseScrollHandler::UserPrefs::UserPrefs() :
   // We need to reset mouse wheel transaction when all of mousewheel related
   // prefs are changed.
   DebugOnly<nsresult> rv =
-    Preferences::RegisterCallback(OnChange, "mousewheel.", this);
+    Preferences::RegisterPrefixCallback(OnChange, "mousewheel.", this);
   MOZ_ASSERT(NS_SUCCEEDED(rv),
     "Failed to register callback for mousewheel.");
 }
@@ -1101,7 +1100,7 @@ MouseScrollHandler::UserPrefs::UserPrefs() :
 MouseScrollHandler::UserPrefs::~UserPrefs()
 {
   DebugOnly<nsresult> rv =
-    Preferences::UnregisterCallback(OnChange, "mousewheel.", this);
+    Preferences::UnregisterPrefixCallback(OnChange, "mousewheel.", this);
   MOZ_ASSERT(NS_SUCCEEDED(rv),
     "Failed to unregister callback for mousewheel.");
 }

@@ -17,10 +17,7 @@
 #include "nsIOutputStream.h"
 #include "nsClassHashtable.h"
 #include "nsDataHashtable.h"
-
-#if DEBUG
 #include "plbase64.h"
-#endif
 
 namespace mozilla {
 namespace safebrowsing {
@@ -85,14 +82,16 @@ struct SafebrowsingHash
     return Comparator::Compare(buf, aOther.buf) < 0;
   }
 
-#ifdef DEBUG
   void ToString(nsACString& aStr) const {
     uint32_t len = ((sHashSize + 2) / 3) * 4;
+
+    // Capacity should be one greater than length, because PL_Base64Encode
+    // will not be null-terminated, while nsCString requires it.
     aStr.SetCapacity(len + 1);
     PL_Base64Encode((char*)buf, sHashSize, aStr.BeginWriting());
     aStr.BeginWriting()[len] = '\0';
+    aStr.SetLength(len);
   }
-#endif
 
   void ToHexString(nsACString& aStr) const {
     static const char* const lut = "0123456789ABCDEF";
@@ -318,6 +317,43 @@ WriteTArray(nsIOutputStream* aStream, nsTArray_Impl<T, Alloc>& aArray)
 typedef nsClassHashtable<nsUint32HashKey, nsCString> PrefixStringMap;
 
 typedef nsDataHashtable<nsCStringHashKey, int64_t> TableFreshnessMap;
+
+typedef nsCStringHashKey FullHashString;
+
+typedef nsDataHashtable<FullHashString, int64_t> FullHashExpiryCache;
+
+struct CachedFullHashResponse {
+  int64_t negativeCacheExpirySec;
+
+  // Map contains all matches found in Fullhash response, this field might be empty.
+  FullHashExpiryCache fullHashes;
+
+  CachedFullHashResponse& operator=(const CachedFullHashResponse& aOther) {
+    negativeCacheExpirySec = aOther.negativeCacheExpirySec;
+
+    fullHashes.Clear();
+    for (auto iter = aOther.fullHashes.ConstIter(); !iter.Done(); iter.Next()) {
+      fullHashes.Put(iter.Key(), iter.Data());
+    }
+
+    return *this;
+  }
+
+  bool operator==(const CachedFullHashResponse& aOther) const {
+    if (negativeCacheExpirySec != aOther.negativeCacheExpirySec ||
+        fullHashes.Count() != aOther.fullHashes.Count()) {
+      return false;
+    }
+    for (auto iter = fullHashes.ConstIter(); !iter.Done(); iter.Next()) {
+      if (iter.Data() != aOther.fullHashes.Get(iter.Key())) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
+typedef nsClassHashtable<nsUint32HashKey, CachedFullHashResponse> FullHashResponseMap;
 
 } // namespace safebrowsing
 } // namespace mozilla

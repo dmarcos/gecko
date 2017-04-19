@@ -71,9 +71,10 @@ var tests = [
       let win = yield BrowserTestUtils.openNewBrowserWindow();
 
       // Open the notification in the original window, now in the background.
-      showNotification(notifyObj);
+      let notification = showNotification(notifyObj);
       let anchor = document.getElementById("default-notification-icon");
       is(anchor.getAttribute("showing"), "true", "the anchor is shown");
+      notification.remove();
 
       yield BrowserTestUtils.closeWindow(win);
       yield waitForWindowReadyForPopupNotifications(window);
@@ -194,6 +195,7 @@ var tests = [
       // Reset to false so that we can ensure these are not fired a second time.
       notifyObj.shownCallbackTriggered = false;
       notifyObj.showingCallbackTriggered = false;
+      let timeShown = this.notification.timeShown;
 
       let promiseWin = BrowserTestUtils.waitForNewWindow();
       gBrowser.replaceTabWithWindow(firstTab);
@@ -217,6 +219,8 @@ var tests = [
          "Should not have triggered a second shown event");
       ok(!notifyObj.showingCallbackTriggered,
          "Should not have triggered a second showing event");
+      ok(this.notification.timeShown > timeShown,
+         "should have updated timeShown to restart the security delay");
 
       this.notification.remove();
       gBrowser.removeTab(gBrowser.selectedTab);
@@ -328,6 +332,78 @@ var tests = [
       this.notification1.remove();
       this.notification2.remove();
       this.notification3.remove();
+    }
+  },
+  // Test clicking the anchor icon.
+  // Clicking the anchor of an already visible persistent notification should
+  // focus the main action button, but not cause additional showing/shown event
+  // callback calls.
+  // Clicking the anchor of a dismissed notification should show it, even when
+  // the currently displayed notification is a persistent one.
+  { id: "Test#11",
+    *run() {
+      yield SpecialPowers.pushPrefEnv({"set": [["accessibility.tabfocus", 7]]});
+
+      function clickAnchor(notifyObj) {
+        let anchor = document.getElementById(notifyObj.anchorID);
+        EventUtils.synthesizeMouseAtCenter(anchor, {});
+      }
+
+      let popup = PopupNotifications.panel;
+
+      let notifyObj1 = new BasicNotification(this.id);
+      notifyObj1.id += "_1";
+      notifyObj1.anchorID = "default-notification-icon";
+      notifyObj1.options.persistent = true;
+      let shown = waitForNotificationPanel();
+      let notification1 = showNotification(notifyObj1);
+      yield shown;
+      checkPopup(popup, notifyObj1);
+      ok(!notifyObj1.dismissalCallbackTriggered,
+         "Should not have dismissed the notification");
+      notifyObj1.shownCallbackTriggered = false;
+      notifyObj1.showingCallbackTriggered = false;
+
+      // Click the anchor. This should focus the closebutton
+      // (because it's the first focusable element), but not
+      // call event callbacks on the notification object.
+      clickAnchor(notifyObj1);
+      is(document.activeElement, popup.childNodes[0].closebutton);
+      ok(!notifyObj1.dismissalCallbackTriggered,
+         "Should not have dismissed the notification");
+      ok(!notifyObj1.shownCallbackTriggered,
+         "Should have triggered the shown event again");
+      ok(!notifyObj1.showingCallbackTriggered,
+         "Should have triggered the showing event again");
+
+      // Add another notification.
+      let notifyObj2 = new BasicNotification(this.id);
+      notifyObj2.id += "_2";
+      notifyObj2.anchorID = "geo-notification-icon";
+      notifyObj2.options.dismissed = true;
+      let notification2 = showNotification(notifyObj2);
+
+      // Click the anchor of the second notification, this should dismiss the
+      // first notification.
+      shown = waitForNotificationPanel();
+      clickAnchor(notifyObj2);
+      yield shown;
+      checkPopup(popup, notifyObj2);
+      ok(notifyObj1.dismissalCallbackTriggered,
+         "Should have dismissed the first notification");
+
+      // Click the anchor of the first notification, it should be shown again.
+      shown = waitForNotificationPanel();
+      clickAnchor(notifyObj1);
+      yield shown;
+      checkPopup(popup, notifyObj1);
+      ok(notifyObj2.dismissalCallbackTriggered,
+         "Should have dismissed the second notification");
+
+      // Cleanup.
+      notification1.remove();
+      notification2.remove();
+      goNext();
     }
   },
 ];

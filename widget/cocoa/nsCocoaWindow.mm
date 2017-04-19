@@ -34,7 +34,6 @@
 #include "nsIScreenManager.h"
 #include "nsIWidgetListener.h"
 #include "nsIPresShell.h"
-#include "nsScreenCocoa.h"
 
 #include "gfxPlatform.h"
 #include "qcms.h"
@@ -1398,8 +1397,7 @@ NS_IMPL_ISUPPORTS0(FullscreenTransitionData)
 nsCocoaWindow::PrepareForFullscreenTransition(nsISupports** aData)
 {
   nsCOMPtr<nsIScreen> widgetScreen = GetWidgetScreen();
-  nsScreenCocoa* screen = static_cast<nsScreenCocoa*>(widgetScreen.get());
-  NSScreen* cocoaScreen = screen->CocoaScreen();
+  NSScreen* cocoaScreen = ScreenHelperCocoa::CocoaScreenForScreen(widgetScreen);
 
   NSWindow* win =
     [[NSWindow alloc] initWithContentRect:[cocoaScreen frame]
@@ -3188,7 +3186,9 @@ static const NSString* kStateCollectionBehavior = @"collectionBehavior";
   if ([self drawsContentsIntoWindowFrame]) {
     return aRect;
   }
-  if ([super respondsToSelector:@selector(contentRectForFrameRect:styleMask:)]) {
+  // Call the instance method on super, if it exists (it's undocumented so we
+  // shouldn't rely on it), or fall back to the (documented) class method.
+  if ([NSWindow instancesRespondToSelector:@selector(contentRectForFrameRect:styleMask:)]) {
     return [super contentRectForFrameRect:aRect styleMask:aMask];
   } else {
     return [NSWindow contentRectForFrameRect:aRect styleMask:aMask];
@@ -3208,7 +3208,9 @@ static const NSString* kStateCollectionBehavior = @"collectionBehavior";
   if ([self drawsContentsIntoWindowFrame]) {
     return aRect;
   }
-  if ([super respondsToSelector:@selector(frameRectForContentRect:styleMask:)]) {
+  // Call the instance method on super, if it exists (it's undocumented so we
+  // shouldn't rely on it), or fall back to the (documented) class method.
+  if ([NSWindow instancesRespondToSelector:@selector(frameRectForContentRect:styleMask:)]) {
     return [super frameRectForContentRect:aRect styleMask:aMask];
   } else {
     return [NSWindow frameRectForContentRect:aRect styleMask:aMask];
@@ -3382,6 +3384,7 @@ static const NSString* kStateCollectionBehavior = @"collectionBehavior";
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
+  [super setBackgroundColor:[NSColor whiteColor]];
   [mColor release];
   [mBackgroundColor release];
   [mTitlebarView release];
@@ -3415,7 +3418,7 @@ static const NSString* kStateCollectionBehavior = @"collectionBehavior";
 
 - (void)restoreBackgroundColor
 {
-  [super setBackgroundColor:mBackgroundColor];
+  [super setBackgroundColor:mColor];
 }
 
 - (void)setTitlebarNeedsDisplayInRect:(NSRect)aRect

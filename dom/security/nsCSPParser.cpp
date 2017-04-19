@@ -6,6 +6,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
 #include "nsCSPParser.h"
@@ -876,7 +877,7 @@ nsCSPParser::referrerDirectiveValue(nsCSPDirective* aDir)
   CSPPARSERLOG(("nsCSPParser::referrerDirectiveValue"));
 
   if (mCurDir.Length() != 2) {
-    CSPPARSERLOG(("Incorrect number of tokens in referrer directive, got %d expected 1",
+    CSPPARSERLOG(("Incorrect number of tokens in referrer directive, got %" PRIuSIZE " expected 1",
                  mCurDir.Length() - 1));
     delete aDir;
     return;
@@ -1115,7 +1116,7 @@ nsCSPParser::directiveName()
 
   // if we have a frame-src, cache it so we can decide whether to use child-src
   if (CSP_IsDirective(mCurToken, nsIContentSecurityPolicy::FRAME_SRC_DIRECTIVE)) {
-    const char16_t* params[] = { mCurToken.get(), NS_LITERAL_STRING("child-src").get() };
+    const char16_t* params[] = { mCurToken.get(), u"child-src" };
     logWarningErrorToConsole(nsIScriptError::warningFlag, "deprecatedDirective",
                              params, ArrayLength(params));
     mFrameSrc = new nsCSPDirective(CSP_StringToCSPDirective(mCurToken));

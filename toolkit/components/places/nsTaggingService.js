@@ -20,10 +20,10 @@ const TOPIC_SHUTDOWN = "places-shutdown";
  */
 function TaggingService() {
   // Observe bookmarks changes.
-  PlacesUtils.bookmarks.addObserver(this, false);
+  PlacesUtils.bookmarks.addObserver(this);
 
   // Cleanup on shutdown.
-  Services.obs.addObserver(this, TOPIC_SHUTDOWN, false);
+  Services.obs.addObserver(this, TOPIC_SHUTDOWN);
 }
 
 TaggingService.prototype = {
@@ -591,7 +591,7 @@ function TagAutoCompleteSearch() {
 }
 
 TagAutoCompleteSearch.prototype = {
-  _stopped : false,
+  _stopped: false,
 
   /*
    * Search for a given string and notify a listener (either synchronously

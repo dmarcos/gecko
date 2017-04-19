@@ -37,9 +37,9 @@ function assertNotificationCount(count) {
 }
 
 function* awaitNotification(callback) {
-  let awaitNotification = TestUtils.topicObserved(TOPIC);
+  let notification = TestUtils.topicObserved(TOPIC);
   executeSoon(callback);
-  yield awaitNotification;
+  yield notification;
 }
 
 add_task(function* test_closedObjectsChangedNotifications() {
@@ -48,10 +48,10 @@ add_task(function* test_closedObjectsChangedNotifications() {
 
   // Forget any previous closed windows or tabs from other tests that may have
   // run in the same session.
-  yield awaitNotification(() => Services.obs.notifyObservers(null, "browser:purge-session-history", 0));
+  yield awaitNotification(() => Services.obs.notifyObservers(null, "browser:purge-session-history"));
 
   // Add an observer to count the number of notifications.
-  Services.obs.addObserver(countingObserver, TOPIC, false);
+  Services.obs.addObserver(countingObserver, TOPIC);
 
   info("Opening and closing initial window.");
   yield openAndCloseWindow("about:robots");
@@ -75,7 +75,7 @@ add_task(function* test_closedObjectsChangedNotifications() {
   assertNotificationCount(4);
 
   info(`Changing the ${MAX_WINDOWS_UNDO_PREF} pref.`);
-  registerCleanupFunction(function () {
+  registerCleanupFunction(function() {
     Services.prefs.clearUserPref(MAX_WINDOWS_UNDO_PREF);
   });
   yield awaitNotification(() => Services.prefs.setIntPref(MAX_WINDOWS_UNDO_PREF, 1));
@@ -96,7 +96,7 @@ add_task(function* test_closedObjectsChangedNotifications() {
   assertNotificationCount(8);
 
   info("Sending idle-daily");
-  yield awaitNotification(() => Services.obs.notifyObservers(null, "idle-daily", ""));
+  yield awaitNotification(() => Services.obs.notifyObservers(null, "idle-daily"));
   assertNotificationCount(9);
 
   info("Opening and closing another window.");
@@ -104,7 +104,7 @@ add_task(function* test_closedObjectsChangedNotifications() {
   assertNotificationCount(10);
 
   info("Purging session history.");
-  yield awaitNotification(() => Services.obs.notifyObservers(null, "browser:purge-session-history", 0));
+  yield awaitNotification(() => Services.obs.notifyObservers(null, "browser:purge-session-history"));
   assertNotificationCount(11);
 
   info("Setting window state.")

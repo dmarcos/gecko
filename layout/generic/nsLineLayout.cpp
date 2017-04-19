@@ -5,9 +5,6 @@
 
 /* state and methods used while laying out a single line of a block frame */
 
-// This has to be defined before nsLineLayout.h is included, because
-// nsLineLayout.h has a #include for plarena.h, which needs this defined:
-#define PL_ARENA_CONST_ALIGN_MASK (sizeof(void*)-1)
 #include "nsLineLayout.h"
 
 #include "LayoutLogging.h"
@@ -79,7 +76,7 @@ nsLineLayout::nsLineLayout(nsPresContext* aPresContext,
     mDirtyNextLine(false),
     mLineAtStart(false),
     mHasRuby(false),
-    mSuppressLineWrap(aOuterReflowInput->mFrame->IsSVGText())
+    mSuppressLineWrap(nsSVGUtils::IsInSVGTextSubtree(aOuterReflowInput->mFrame))
 {
   MOZ_ASSERT(aOuterReflowInput, "aOuterReflowInput must not be null");
   NS_ASSERTION(aFloatManager || aOuterReflowInput->mFrame->GetType() ==
@@ -111,7 +108,6 @@ nsLineLayout::nsLineLayout(nsPresContext* aPresContext,
   // spans, we do it on demand so that situations that only use a few
   // frames and spans won't waste a lot of time in unneeded
   // initialization.
-  PL_INIT_ARENA_POOL(&mArena, "nsLineLayout", 1024);
   mFrameFreeList = nullptr;
   mSpanFreeList = nullptr;
 
@@ -129,8 +125,6 @@ nsLineLayout::~nsLineLayout()
   MOZ_COUNT_DTOR(nsLineLayout);
 
   NS_ASSERTION(nullptr == mRootSpan, "bad line-layout user");
-
-  PL_FinishArenaPool(&mArena);
 }
 
 // Find out if the frame has a non-null prev-in-flow, i.e., whether it
@@ -386,12 +380,7 @@ nsLineLayout::NewPerSpanData()
   nsLineLayout* outerLineLayout = GetOutermostLineLayout();
   PerSpanData* psd = outerLineLayout->mSpanFreeList;
   if (!psd) {
-    void *mem;
-    size_t sz = sizeof(PerSpanData);
-    PL_ARENA_ALLOCATE(mem, &outerLineLayout->mArena, sz);
-    if (!mem) {
-      NS_ABORT_OOM(sz);
-    }
+    void *mem = outerLineLayout->mArena.Allocate(sizeof(PerSpanData));
     psd = reinterpret_cast<PerSpanData*>(mem);
   }
   else {
@@ -652,12 +641,7 @@ nsLineLayout::NewPerFrameData(nsIFrame* aFrame)
   nsLineLayout* outerLineLayout = GetOutermostLineLayout();
   PerFrameData* pfd = outerLineLayout->mFrameFreeList;
   if (!pfd) {
-    void *mem;
-    size_t sz = sizeof(PerFrameData);
-    PL_ARENA_ALLOCATE(mem, &outerLineLayout->mArena, sz);
-    if (!mem) {
-      NS_ABORT_OOM(sz);
-    }
+    void *mem = outerLineLayout->mArena.Allocate(sizeof(PerFrameData));
     pfd = reinterpret_cast<PerFrameData*>(mem);
   }
   else {
@@ -1028,7 +1012,7 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
 #ifdef DEBUG
   // Note: break-before means ignore the reflow metrics since the
   // frame will be reflowed another time.
-  if (!NS_INLINE_IS_BREAK_BEFORE(aReflowStatus)) {
+  if (!aReflowStatus.IsInlineBreakBefore()) {
     if ((CRAZY_SIZE(reflowOutput.ISize(lineWM)) ||
          CRAZY_SIZE(reflowOutput.BSize(lineWM))) &&
         !LineContainerFrame()->GetParent()->IsCrazySizeAssertSuppressed()) {
@@ -1067,12 +1051,12 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
     *aMetrics = reflowOutput;
   }
 
-  if (!NS_INLINE_IS_BREAK_BEFORE(aReflowStatus)) {
+  if (!aReflowStatus.IsInlineBreakBefore()) {
     // If frame is complete and has a next-in-flow, we need to delete
     // them now. Do not do this when a break-before is signaled because
     // the frame is going to get reflowed again (and may end up wanting
     // a next-in-flow where it ends up).
-    if (NS_FRAME_IS_COMPLETE(aReflowStatus)) {
+    if (aReflowStatus.IsComplete()) {
       nsIFrame* kidNextInFlow = aFrame->GetNextInFlow();
       if (nullptr != kidNextInFlow) {
         // Remove all of the childs next-in-flows. Make sure that we ask
@@ -1136,7 +1120,7 @@ nsLineLayout::ReflowFrame(nsIFrame* aFrame,
                                           optionalBreakAfterFits,
                                           gfxBreakPriority::eNormalBreak)) {
             // If this returns true then we are being told to actually break here.
-            aReflowStatus = NS_INLINE_LINE_BREAK_AFTER(aReflowStatus);
+            aReflowStatus.SetInlineLineBreakAfter();
           }
         }
       }
@@ -1293,7 +1277,7 @@ nsLineLayout::CanPlaceFrame(PerFrameData* pfd,
    * For box-decoration-break:clone we apply the end margin on all
    * continuations (that are not letter frames).
    */
-  if ((NS_FRAME_IS_NOT_COMPLETE(aStatus) ||
+  if ((aStatus.IsIncomplete() ||
        pfd->mFrame->LastInFlow()->GetNextContinuation() ||
        pfd->mFrame->FrameIsNonLastInIBSplit()) &&
       !pfd->mIsLetterFrame &&
@@ -1418,7 +1402,7 @@ nsLineLayout::CanPlaceFrame(PerFrameData* pfd,
 #ifdef NOISY_CAN_PLACE_FRAME
   printf("   ==> didn't fit\n");
 #endif
-  aStatus = NS_INLINE_LINE_BREAK_BEFORE();
+  aStatus.SetInlineLineBreakBeforeAndReset();
   return false;
 }
 
@@ -1740,7 +1724,7 @@ static float
 GetInflationForBlockDirAlignment(nsIFrame* aFrame,
                                  nscoord aInflationMinFontSize)
 {
-  if (aFrame->IsSVGText()) {
+  if (nsSVGUtils::IsInSVGTextSubtree(aFrame)) {
     const nsIFrame* container =
       nsLayoutUtils::GetClosestFrameOfType(aFrame, nsGkAtoms::svgTextFrame);
     NS_ASSERTION(container, "expected to find an ancestor SVGTextFrame");
@@ -3140,7 +3124,7 @@ nsLineLayout::TextAlignLine(nsLineBox* aLine,
     }
   }
 
-  bool isSVG = mBlockReflowInput->mFrame->IsSVGText();
+  bool isSVG = nsSVGUtils::IsInSVGTextSubtree(mBlockReflowInput->mFrame);
   bool doTextAlign = remainingISize > 0 || textAlignTrue;
 
   int32_t additionalGaps = 0;

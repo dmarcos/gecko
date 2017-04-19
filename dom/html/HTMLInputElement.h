@@ -164,7 +164,6 @@ public:
   NS_IMETHOD SetUserInput(const nsAString& aInput) override;
 
   // Overriden nsIFormControl methods
-  NS_IMETHOD_(uint32_t) GetType() const override { return mType; }
   NS_IMETHOD Reset() override;
   NS_IMETHOD SubmitNamesValues(HTMLFormSubmission* aFormSubmission) override;
   NS_IMETHOD SaveState() override;
@@ -232,14 +231,28 @@ public:
   NS_IMETHOD BindToFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD CreateEditor() override;
-  NS_IMETHOD_(nsIContent*) GetRootEditorNode() override;
+  NS_IMETHOD_(Element*) GetRootEditorNode() override;
   NS_IMETHOD_(Element*) CreatePlaceholderNode() override;
   NS_IMETHOD_(Element*) GetPlaceholderNode() override;
-  NS_IMETHOD_(void) UpdatePlaceholderVisibility(bool aNotify) override;
+  NS_IMETHOD_(Element*) CreatePreviewNode() override;
+  NS_IMETHOD_(Element*) GetPreviewNode() override;
+  NS_IMETHOD_(void) UpdateOverlayTextVisibility(bool aNotify) override;
+  NS_IMETHOD_(void) SetPreviewValue(const nsAString& aValue) override;
+  NS_IMETHOD_(void) GetPreviewValue(nsAString& aValue) override;
+  NS_IMETHOD_(void) EnablePreview() override;
+  NS_IMETHOD_(bool) IsPreviewEnabled() override;
   NS_IMETHOD_(bool) GetPlaceholderVisibility() override;
+  NS_IMETHOD_(bool) GetPreviewVisibility() override;
   NS_IMETHOD_(void) InitializeKeyboardEventListeners() override;
   NS_IMETHOD_(void) OnValueChanged(bool aNotify, bool aWasInteractiveUserChange) override;
+  virtual void GetValueFromSetRangeText(nsAString& aValue) override;
+  virtual nsresult SetValueFromSetRangeText(const nsAString& aValue) override;
   NS_IMETHOD_(bool) HasCachedSelection() override;
+
+  // Methods for nsFormFillController so it can do selection operations on input
+  // types the HTML spec doesn't support them on, like "email".
+  uint32_t GetSelectionStartIgnoringType(ErrorResult& aRv);
+  uint32_t GetSelectionEndIgnoringType(ErrorResult& aRv);
 
   void GetDisplayFileName(nsAString& aFileName) const;
 
@@ -291,11 +304,10 @@ public:
 
   void MaybeLoadImage();
 
-  void SetSelectionProperties(const nsTextEditorState::SelectionProperties& aProps)
+  void SetSelectionCached()
   {
     MOZ_ASSERT(mType == NS_FORM_INPUT_NUMBER);
     mSelectionCached = true;
-    mSelectionProperties = aProps;
   }
   bool IsSelectionCached() const
   {
@@ -669,7 +681,7 @@ public:
 
   Nullable<Date> GetValueAsDate(ErrorResult& aRv);
 
-  void SetValueAsDate(Nullable<Date>, ErrorResult& aRv);
+  void SetValueAsDate(const Nullable<Date>& aDate, ErrorResult& aRv);
 
   double ValueAsNumber() const
   {
@@ -710,25 +722,24 @@ public:
 
   // XPCOM Select() is OK
 
-  Nullable<int32_t> GetSelectionStart(ErrorResult& aRv);
-  void SetSelectionStart(const Nullable<int32_t>& aValue, ErrorResult& aRv);
+  Nullable<uint32_t> GetSelectionStart(ErrorResult& aRv);
+  void SetSelectionStart(const Nullable<uint32_t>& aValue, ErrorResult& aRv);
 
-  Nullable<int32_t> GetSelectionEnd(ErrorResult& aRv);
-  void SetSelectionEnd(const Nullable<int32_t>& aValue, ErrorResult& aRv);
+  Nullable<uint32_t> GetSelectionEnd(ErrorResult& aRv);
+  void SetSelectionEnd(const Nullable<uint32_t>& aValue, ErrorResult& aRv);
 
   void GetSelectionDirection(nsAString& aValue, ErrorResult& aRv);
   void SetSelectionDirection(const nsAString& aValue, ErrorResult& aRv);
 
-  void SetSelectionRange(int32_t aStart, int32_t aEnd,
+  void SetSelectionRange(uint32_t aStart, uint32_t aEnd,
                          const Optional< nsAString >& direction,
                          ErrorResult& aRv);
 
   void SetRangeText(const nsAString& aReplacement, ErrorResult& aRv);
 
   void SetRangeText(const nsAString& aReplacement, uint32_t aStart,
-                    uint32_t aEnd, const SelectionMode& aSelectMode,
-                    ErrorResult& aRv, int32_t aSelectionStart = -1,
-                    int32_t aSelectionEnd = -1);
+                    uint32_t aEnd, SelectionMode aSelectMode,
+                    ErrorResult& aRv);
 
   bool Allowdirs() const
   {
@@ -782,6 +793,12 @@ public:
   void MozSetFileArray(const Sequence<OwningNonNull<File>>& aFiles);
   void MozSetDirectory(const nsAString& aDirectoryPath, ErrorResult& aRv);
 
+  bool MozInputRangeIgnorePreventDefault() const
+  {
+    return (IsInChromeDocument() || IsInNativeAnonymousSubtree()) &&
+      GetBoolAttr(nsGkAtoms::mozinputrangeignorepreventdefault);
+  }
+
   /*
    * The following functions are called from datetime picker to let input box
    * know the current state of the picker or to update the input box on changes.
@@ -798,8 +815,13 @@ public:
   void UpdateDateTimePicker(const DateTimeValue& aValue);
   void CloseDateTimePicker();
 
+  /*
+   * Called from datetime input box binding when inner text fields are focused
+   * or blurred.
+   */
+  void SetFocusState(bool aIsFocused);
+
   HTMLInputElement* GetOwnerNumberControl();
-  HTMLInputElement* GetOwnerDateTimeControl();
 
   void StartNumberControlSpinnerSpin();
   enum SpinnerStopState {
@@ -847,6 +869,8 @@ public:
   static Decimal StringToDecimal(const nsAString& aValue);
 
   void UpdateEntries(const nsTArray<OwningFileOrDirectory>& aFilesOrDirectories);
+
+  static void Shutdown();
 
 protected:
   virtual ~HTMLInputElement();
@@ -950,13 +974,11 @@ protected:
   void SetIndeterminateInternal(bool aValue,
                                 bool aShouldInvalidate);
 
-  nsresult GetSelectionRange(int32_t* aSelectionStart, int32_t* aSelectionEnd);
-
   /**
    * Called when an attribute is about to be changed
    */
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 nsAttrValueOrString* aValue,
+                                 const nsAttrValueOrString* aValue,
                                  bool aNotify) override;
   /**
    * Called when an attribute has just been changed
@@ -1070,11 +1092,7 @@ protected:
   /**
    * Returns if the step attribute apply for the current type.
    */
-  bool DoesStepApply() const
-  {
-    // TODO: this is temporary until bug 888331 is fixed.
-    return DoesMinMaxApply() && mType != NS_FORM_INPUT_DATETIME_LOCAL;
-  }
+  bool DoesStepApply() const { return DoesMinMaxApply(); }
 
   /**
    * Returns if stepDown and stepUp methods apply for the current type.
@@ -1102,7 +1120,7 @@ protected:
   /**
    * Manages the internal data storage across type changes.
    */
-  void HandleTypeChange(uint8_t aNewType);
+  void HandleTypeChange(uint8_t aNewType, bool aNotify);
 
   /**
    * Sanitize the value of the element depending of its current type.
@@ -1455,7 +1473,6 @@ protected:
   };
   nsresult InitFilePicker(FilePickerType aType);
   nsresult InitColorPicker();
-  nsresult InitDatePicker();
 
   /**
    * Use this function before trying to open a picker.
@@ -1472,7 +1489,7 @@ protected:
   void ClearGetFilesHelpers();
 
   /**
-   * nsINode::SetMayBeApzAware() will be invoked in this function if necessary 
+   * nsINode::SetMayBeApzAware() will be invoked in this function if necessary
    * to prevent default action of APZC so that we can increase/decrease the
    * value of this InputElement when mouse wheel event comes without scrolling
    * the page.
@@ -1481,6 +1498,19 @@ protected:
    * decide whether to add this element into its dispatch-to-content region.
    */
   void UpdateApzAwareFlag();
+
+  /**
+   * A helper to get the current selection range.  Will throw on the ErrorResult
+   * if we have no editor state.
+   */
+  void GetSelectionRange(uint32_t* aSelectionStart,
+                         uint32_t* aSelectionEnd,
+                         ErrorResult& aRv);
+
+  /**
+   * Override for nsImageLoadingContent.
+   */
+  nsIContent* AsContent() override { return this; }
 
   nsCOMPtr<nsIControllers> mControllers;
 
@@ -1592,12 +1622,6 @@ protected:
   // Milliseconds in a day.
   static const double kMsPerDay;
 
-
-  /**
-   * The type of this input (<input type=...>) as an integer.
-   * @see nsIFormControl.h (specifically NS_FORM_INPUT_*)
-   */
-  uint8_t                  mType;
   nsContentUtils::AutocompleteAttrState mAutocompleteAttrState;
   bool                     mDisabledChanged     : 1;
   bool                     mValueChanged        : 1;
@@ -1619,10 +1643,11 @@ protected:
   bool                     mNumberControlSpinnerSpinsUp : 1;
   bool                     mPickerRunning : 1;
   bool                     mSelectionCached : 1;
+  bool                     mIsPreviewEnabled : 1;
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
-                                    nsRuleData* aData);
+                                    GenericSpecifiedValues* aGenericData);
 
   /**
    * Returns true if this input's type will fire a DOM "change" event when it
@@ -1647,6 +1672,69 @@ private:
            aType == NS_FORM_INPUT_NUMBER ||
            aType == NS_FORM_INPUT_TIME;
   }
+
+  /**
+   * Checks if aDateTimeInputType should be supported based on "dom.forms.datetime",
+   * and "dom.experimental_forms".
+   */
+  static bool
+  IsDateTimeTypeSupported(uint8_t aDateTimeInputType);
+
+  /**
+   * Checks preference "dom.webkitBlink.dirPicker.enabled" to determine if
+   * webkitdirectory should be supported.
+   */
+  static bool
+  IsWebkitDirPickerEnabled();
+
+  /**
+   * Checks preference "dom.webkitBlink.filesystem.enabled" to determine if
+   * webkitEntries should be supported.
+   */
+  static bool
+  IsWebkitFileSystemEnabled();
+
+  /**
+   * Checks preference "dom.input.dirpicker" to determine if file and directory
+   * entries API should be supported.
+   */
+  static bool
+  IsDirPickerEnabled();
+
+  /**
+   * Checks preference "dom.experimental_forms" to determine if experimental
+   * implementation of input element should be enabled.
+   */
+  static bool
+  IsExperimentalFormsEnabled();
+
+  /**
+   * Checks preference "dom.forms.datetime" to determine if input date and time
+   * should be supported.
+   */
+  static bool
+  IsInputDateTimeEnabled();
+
+  /**
+   * Checks preference "dom.forms.datetime.others" to determine if input week,
+   * month and datetime-local should be supported.
+   */
+  static bool
+  IsInputDateTimeOthersEnabled();
+
+  /**
+   * Checks preference "dom.forms.number" to determine if input type=number
+   * should be supported.
+   */
+  static bool
+  IsInputNumberEnabled();
+
+  /**
+   * Checks preference "dom.forms.color" to determine if date/time related
+   * types should be supported.
+   */
+  static bool
+  IsInputColorEnabled();
 
   struct nsFilePickerFilter {
     nsFilePickerFilter()
@@ -1698,6 +1786,11 @@ private:
     nsCOMPtr<nsIFilePicker> mFilePicker;
     RefPtr<HTMLInputElement> mInput;
   };
+
+  static void ReleaseTextEditorState(nsTextEditorState* aState);
+
+  static nsTextEditorState* sCachedTextEditorState;
+  static bool sShutdown;
 };
 
 } // namespace dom

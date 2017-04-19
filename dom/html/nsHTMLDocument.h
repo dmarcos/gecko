@@ -144,6 +144,8 @@ public:
 
   void EndUpdate(nsUpdateType aUpdateType) override;
 
+  virtual void SetMayStartLayout(bool aMayStartLayout) override;
+
   virtual nsresult SetEditingState(EditingState aState) override;
 
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
@@ -164,6 +166,8 @@ public:
   virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
     override;
   void SetDomain(const nsAString& aDomain, mozilla::ErrorResult& rv);
+  bool IsRegistrableDomainSuffixOfOrEqualTo(const nsAString& aHostSuffixString,
+                                            const nsACString& aOrigHost);
   void GetCookie(nsAString& aCookie, mozilla::ErrorResult& rv);
   void SetCookie(const nsAString& aCookie, mozilla::ErrorResult& rv);
   void NamedGetter(JSContext* cx, const nsAString& aName, bool& aFound,
@@ -218,10 +222,10 @@ public:
                      mozilla::ErrorResult& rv);
   bool ExecCommand(const nsAString& aCommandID, bool aDoShowUI,
                    const nsAString& aValue,
-                   mozilla::dom::CallerType aCallerType,
+                   nsIPrincipal& aSubjectPrincipal,
                    mozilla::ErrorResult& rv);
   bool QueryCommandEnabled(const nsAString& aCommandID,
-                           mozilla::dom::CallerType aCallerType,
+                           nsIPrincipal& aSubjectPrincipal,
                            mozilla::ErrorResult& rv);
   bool QueryCommandIndeterm(const nsAString& aCommandID,
                             mozilla::ErrorResult& rv);
@@ -260,17 +264,22 @@ protected:
 
   nsIContent *MatchId(nsIContent *aContent, const nsAString& aId);
 
-  static bool MatchLinks(nsIContent *aContent, int32_t aNamespaceID,
+  static bool MatchLinks(mozilla::dom::Element* aElement, int32_t aNamespaceID,
+                         nsIAtom* aAtom, void* aData);
+  static bool MatchAnchors(mozilla::dom::Element* aElement, int32_t aNamespaceID,
                            nsIAtom* aAtom, void* aData);
-  static bool MatchAnchors(nsIContent *aContent, int32_t aNamespaceID,
-                             nsIAtom* aAtom, void* aData);
-  static bool MatchNameAttribute(nsIContent* aContent, int32_t aNamespaceID,
-                                   nsIAtom* aAtom, void* aData);
+  static bool MatchNameAttribute(mozilla::dom::Element* aElement,
+                                 int32_t aNamespaceID,
+                                 nsIAtom* aAtom, void* aData);
   static void* UseExistingNameString(nsINode* aRootNode, const nsString* aName);
 
   static void DocumentWriteTerminationFunc(nsISupports *aRef);
 
   already_AddRefed<nsIURI> GetDomainURI();
+  already_AddRefed<nsIURI> CreateInheritingURIForHost(const nsACString& aHostString);
+  already_AddRefed<nsIURI> RegistrableDomainSuffixOfInternal(const nsAString& aHostSuffixString,
+                                                             nsIURI* aOrigHost);
+
 
   nsresult WriteCommon(JSContext *cx, const nsAString& aText,
                        bool aNewlineTerminate);

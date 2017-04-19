@@ -52,7 +52,6 @@ browser.jar:
         content/browser/aboutaccounts/aboutaccounts.css                       (content/aboutaccounts/aboutaccounts.css)
         content/browser/aboutaccounts/main.css                                (content/aboutaccounts/main.css)
         content/browser/aboutaccounts/normalize.css                           (content/aboutaccounts/normalize.css)
-        content/browser/aboutaccounts/images/fox.png                          (content/aboutaccounts/images/fox.png)
 
 
         content/browser/aboutRobots-icon.png          (content/aboutRobots-icon.png)
@@ -143,8 +142,8 @@ browser.jar:
         content/browser/safeMode.js                   (content/safeMode.js)
         content/browser/safeMode.xul                  (content/safeMode.xul)
         content/browser/sanitize.js                   (content/sanitize.js)
-*       content/browser/sanitize.xul                  (content/sanitize.xul)
-*       content/browser/sanitizeDialog.js             (content/sanitizeDialog.js)
+        content/browser/sanitize.xul                  (content/sanitize.xul)
+        content/browser/sanitizeDialog.js             (content/sanitizeDialog.js)
         content/browser/sanitizeDialog.css            (content/sanitizeDialog.css)
         content/browser/contentSearchUI.js            (content/contentSearchUI.js)
         content/browser/contentSearchUI.css           (content/contentSearchUI.css)
@@ -155,8 +154,10 @@ browser.jar:
         content/browser/usercontext.svg               (content/usercontext.svg)
         content/browser/web-panels.js                 (content/web-panels.js)
 *       content/browser/web-panels.xul                (content/web-panels.xul)
+        content/browser/webext-panels.js              (content/webext-panels.js)
+*       content/browser/webext-panels.xul             (content/webext-panels.xul)
 *       content/browser/baseMenuOverlay.xul           (content/baseMenuOverlay.xul)
-*       content/browser/nsContextMenu.js              (content/nsContextMenu.js)
+        content/browser/nsContextMenu.js              (content/nsContextMenu.js)
 # XXX: We should exclude this one as well (bug 71895)
 *       content/browser/hiddenWindow.xul              (content/hiddenWindow.xul)
 #ifdef XP_MACOSX

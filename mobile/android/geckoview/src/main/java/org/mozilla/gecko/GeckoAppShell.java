@@ -36,20 +36,14 @@ import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.process.GeckoProcessManager;
 import org.mozilla.gecko.process.GeckoServiceChildProcess;
 import org.mozilla.gecko.util.EventCallback;
-import org.mozilla.gecko.util.GeckoRequest;
 import org.mozilla.gecko.util.HardwareCodecCapabilityUtils;
 import org.mozilla.gecko.util.HardwareUtils;
-import org.mozilla.gecko.util.NativeEventListener;
-import org.mozilla.gecko.util.NativeJSContainer;
-import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.util.ProxySelector;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityManager;
-import android.app.AlarmManager;
-import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -207,9 +201,6 @@ public class GeckoAppShell
     private static Sensor gRotationVectorSensor;
     private static Sensor gGameRotationVectorSensor;
 
-    private static final String GECKOREQUEST_RESPONSE_KEY = "response";
-    private static final String GECKOREQUEST_ERROR_KEY = "error";
-
     /*
      * Keep in sync with constants found here:
      * http://dxr.mozilla.org/mozilla-central/source/uriloader/base/nsIWebProgressListener.idl
@@ -256,39 +247,6 @@ public class GeckoAppShell
     public static LayerView getLayerView() {
         return sLayerView;
     }
-
-    /**
-     * Sends an asynchronous request to Gecko.
-     *
-     * The response data will be passed to {@link GeckoRequest#onResponse(NativeJSObject)} if the
-     * request succeeds; otherwise, {@link GeckoRequest#onError()} will fire.
-     *
-     * It can be called from any thread. The GeckoRequest callbacks will be executed on the Gecko thread.
-     *
-     * @param request The request to dispatch. Cannot be null.
-     */
-    @RobocopTarget
-    public static void sendRequestToGecko(final GeckoRequest request) {
-        final String responseMessage = "Gecko:Request" + request.getId();
-
-        EventDispatcher.getInstance().registerGeckoThreadListener(new NativeEventListener() {
-            @Override
-            public void handleMessage(String event, NativeJSObject message, EventCallback callback) {
-                EventDispatcher.getInstance().unregisterGeckoThreadListener(this, event);
-                if (!message.has(GECKOREQUEST_RESPONSE_KEY)) {
-                    request.onError(message.getObject(GECKOREQUEST_ERROR_KEY));
-                    return;
-                }
-                request.onResponse(message.getObject(GECKOREQUEST_RESPONSE_KEY));
-            }
-        }, responseMessage);
-
-        notifyObservers(request.getName(), request.getData());
-    }
-
-    // Synchronously notify a Gecko observer; must be called from Gecko thread.
-    @WrapForJNI(calledFrom = "gecko")
-    public static native void syncNotifyObservers(String topic, String data);
 
     @WrapForJNI(stubName = "NotifyObservers", dispatchTo = "gecko")
     private static native void nativeNotifyObservers(String topic, String data);
@@ -434,34 +392,6 @@ public class GeckoAppShell
     @WrapForJNI(calledFrom = "gecko")
     private static void enableLocationHighAccuracy(final boolean enable) {
         locationHighAccuracyEnabled = enable;
-    }
-
-    @WrapForJNI(calledFrom = "gecko")
-    private static boolean setAlarm(int aSeconds, int aNanoSeconds) {
-        AlarmManager am = (AlarmManager)
-            getApplicationContext().getSystemService(Context.ALARM_SERVICE);
-
-        Intent intent = new Intent(getApplicationContext(), AlarmReceiver.class);
-        PendingIntent pi = PendingIntent.getBroadcast(
-                getApplicationContext(), 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
-
-        // AlarmManager only supports millisecond precision
-        long time = ((long) aSeconds * 1000) + ((long) aNanoSeconds / 1_000_000L);
-        am.setExact(AlarmManager.RTC_WAKEUP, time, pi);
-
-        return true;
-    }
-
-    @WrapForJNI(calledFrom = "gecko")
-    private static void disableAlarm() {
-        AlarmManager am = (AlarmManager)
-            getApplicationContext().getSystemService(Context.ALARM_SERVICE);
-
-        Intent intent = new Intent(getApplicationContext(), AlarmReceiver.class);
-        PendingIntent pi = PendingIntent.getBroadcast(
-                getApplicationContext(), 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT);
-        am.cancel(pi);
     }
 
     @WrapForJNI(calledFrom = "ui", dispatchTo = "gecko")
@@ -1131,16 +1061,6 @@ public class GeckoAppShell
     }
 
     @WrapForJNI(calledFrom = "gecko")
-    private static void setKeepScreenOn(final boolean on) {
-        ThreadUtils.postToUiThread(new Runnable() {
-            @Override
-            public void run() {
-                // TODO
-            }
-        });
-    }
-
-    @WrapForJNI(calledFrom = "gecko")
     private static boolean isNetworkLinkUp() {
         ConnectivityManager cm = (ConnectivityManager)
            getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -1761,7 +1681,6 @@ public class GeckoAppShell
         public void notifyWakeLockChanged(String topic, String state);
         public boolean areTabsShown();
         public AbsoluteLayout getPluginContainer();
-        public void notifyCheckUpdateResult(String result);
         public void invalidateOptionsMenu();
         public boolean isForegrounded();
 
@@ -1818,7 +1737,7 @@ public class GeckoAppShell
 
         /**
          * URI of the underlying chrome window to be opened, or null to use the default GeckoView
-         * XUL container <tt>chrome://browser/content/geckoview.xul</tt>.  See
+         * XUL container <tt>chrome://geckoview/content/geckoview.xul</tt>.  See
          * <a href="https://developer.mozilla.org/en/docs/toolkit.defaultChromeURI">https://developer.mozilla.org/en/docs/toolkit.defaultChromeURI</a>
          *
          * @return URI or null.
@@ -1970,23 +1889,6 @@ public class GeckoAppShell
     }
 
     @WrapForJNI(calledFrom = "gecko")
-    private static void handleGeckoMessage(final NativeJSContainer message) {
-        boolean success = EventDispatcher.getInstance().dispatchEvent(message);
-        if (getGeckoInterface() != null && getGeckoInterface().getAppEventDispatcher() != null) {
-            success |= getGeckoInterface().getAppEventDispatcher().dispatchEvent(message);
-        }
-
-        if (!success) {
-            final String type = message.optString("type", null);
-            final String guid = message.optString(EventDispatcher.GUID, null);
-            if (type != null && guid != null) {
-                (new EventDispatcher.GeckoEventCallback(guid, type)).sendError("No listeners for request");
-            }
-        }
-        message.disposeNative();
-    }
-
-    @WrapForJNI(calledFrom = "gecko")
     private static void disableBatteryNotifications() {
         GeckoBatteryManager.disableNotifications();
     }
@@ -2045,7 +1947,7 @@ public class GeckoAppShell
         if (imeIsEnabled && !sImeWasEnabledOnLastResize) {
             // The IME just came up after not being up, so let's scroll
             // to the focused input.
-            notifyObservers("ScrollTo:FocusedInput", "");
+            EventDispatcher.getInstance().dispatch("ScrollTo:FocusedInput", null);
         }
         sImeWasEnabledOnLastResize = imeIsEnabled;
     }
@@ -2241,44 +2143,6 @@ public class GeckoAppShell
     @WrapForJNI
     private static String connectionGetMimeType(URLConnection connection) {
         return connection.getContentType();
-    }
-
-    /**
-     * Retrieve the absolute path of an external storage directory.
-     *
-     * @param type The type of directory to return
-     * @return Absolute path of the specified directory or null on failure
-     */
-    @WrapForJNI(calledFrom = "gecko")
-    private static String getExternalPublicDirectory(final String type) {
-        final String state = Environment.getExternalStorageState();
-        if (!Environment.MEDIA_MOUNTED.equals(state) &&
-            !Environment.MEDIA_MOUNTED_READ_ONLY.equals(state)) {
-            // External storage is not available.
-            return null;
-        }
-
-        if ("sdcard".equals(type)) {
-            // SD card has a separate path.
-            return Environment.getExternalStorageDirectory().getAbsolutePath();
-        }
-
-        final String systemType;
-        if ("downloads".equals(type)) {
-            systemType = Environment.DIRECTORY_DOWNLOADS;
-        } else if ("pictures".equals(type)) {
-            systemType = Environment.DIRECTORY_PICTURES;
-        } else if ("videos".equals(type)) {
-            systemType = Environment.DIRECTORY_MOVIES;
-        } else if ("music".equals(type)) {
-            systemType = Environment.DIRECTORY_MUSIC;
-        } else if ("apps".equals(type)) {
-            File appInternalStorageDirectory = getApplicationContext().getFilesDir();
-            return new File(appInternalStorageDirectory, "mozilla").getAbsolutePath();
-        } else {
-            return null;
-        }
-        return Environment.getExternalStoragePublicDirectory(systemType).getAbsolutePath();
     }
 
     @WrapForJNI(calledFrom = "gecko")

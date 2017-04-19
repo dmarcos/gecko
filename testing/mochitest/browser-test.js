@@ -33,8 +33,8 @@ var TabDestroyObserver = {
   promiseResolver: null,
 
   init: function() {
-    Services.obs.addObserver(this, "message-manager-close", false);
-    Services.obs.addObserver(this, "message-manager-disconnect", false);
+    Services.obs.addObserver(this, "message-manager-close");
+    Services.obs.addObserver(this, "message-manager-disconnect");
   },
 
   destroy: function() {
@@ -486,6 +486,23 @@ Tester.prototype = {
 
       yield new Promise(resolve => SpecialPowers.flushPrefEnv(resolve));
 
+      if (gConfig.cleanupCrashes) {
+        let gdir = Services.dirsvc.get("UAppData", Ci.nsIFile);
+        gdir.append("Crash Reports");
+        gdir.append("pending");
+        if (gdir.exists()) {
+          let entries = gdir.directoryEntries;
+          while (entries.hasMoreElements()) {
+            let entry = entries.getNext().QueryInterface(Ci.nsIFile);
+            if (entry.isFile()) {
+              entry.remove(false);
+              let msg = "this test left a pending crash report; deleted " + entry.path;
+              this.structuredLogger.info(msg);
+            }
+          }
+        }
+      }
+
       // Notify a long running test problem if it didn't end up in a timeout.
       if (this.currentTest.unexpectedTimeouts && !this.currentTest.timedOut) {
         let msg = "This test exceeded the timeout threshold. It should be " +
@@ -627,7 +644,7 @@ Tester.prototype = {
         let barrier = new AsyncShutdown.Barrier(
           "ShutdownLeaks: Wait for cleanup to be finished before checking for leaks");
         Services.obs.notifyObservers({wrappedJSObject: barrier},
-          "shutdown-leaks-before-check", null);
+          "shutdown-leaks-before-check");
 
         barrier.client.addBlocker("ShutdownLeaks: Wait for tabs to finish closing",
                                   TabDestroyObserver.wait());
@@ -932,11 +949,11 @@ function testScope(aTester, aTest, expected) {
   };
 
   this.executeSoon = function test_executeSoon(func) {
-    Services.tm.mainThread.dispatch({
+    Services.tm.dispatchToMainThread({
       run: function() {
         func();
       }
-    }, Ci.nsIThread.DISPATCH_NORMAL);
+    });
   };
 
   this.waitForExplicitFinish = function test_waitForExplicitFinish() {

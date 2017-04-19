@@ -142,6 +142,10 @@ public:
                                      LayoutDeviceIntPoint aPoint,
                                      CSSIntPoint aDefaultPoint);
 
+  static already_AddRefed<Event> Constructor(EventTarget* aEventTarget,
+                                             const nsAString& aType,
+                                             const EventInit& aParam);
+
   static already_AddRefed<Event> Constructor(const GlobalObject& aGlobal,
                                              const nsAString& aType,
                                              const EventInit& aParam,
@@ -260,6 +264,14 @@ public:
     mEvent->mSpecifiedEventTypeString.Truncate();
     mEvent->mSpecifiedEventType = nullptr;
   }
+
+  /**
+   * For WidgetEvent, return it's type in string.
+   *
+   * @param aEvent is a WidgetEvent to get its type.
+   * @param aType is a string where to return the type.
+   */
+  static void GetWidgetEventType(WidgetEvent* aEvent, nsAString& aType);
 
 protected:
 

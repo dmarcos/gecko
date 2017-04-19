@@ -776,13 +776,18 @@ ContentEventHandler::AppendFontRanges(FontRangeArray& aFontRanges,
   }
 
   int32_t baseOffset = aBaseOffset;
-  nsTextFrame* curr = do_QueryFrame(frame);
-  MOZ_ASSERT(curr, "Not a text frame");
+#ifdef DEBUG
+  {
+    nsTextFrame* text = do_QueryFrame(frame);
+    MOZ_ASSERT(text, "Not a text frame");
+  }
+#endif
+  auto* curr = static_cast<nsTextFrame*>(frame);
   while (curr) {
     int32_t frameXPStart = std::max(curr->GetContentOffset(), aXPStartOffset);
     int32_t frameXPEnd = std::min(curr->GetContentEnd(), aXPEndOffset);
     if (frameXPStart >= frameXPEnd) {
-      curr = static_cast<nsTextFrame*>(curr->GetNextContinuation());
+      curr = curr->GetNextContinuation();
       continue;
     }
 
@@ -791,11 +796,11 @@ ContentEventHandler::AppendFontRanges(FontRangeArray& aFontRanges,
 
     nsTextFrame* next = nullptr;
     if (frameXPEnd < aXPEndOffset) {
-      next = static_cast<nsTextFrame*>(curr->GetNextContinuation());
+      next = curr->GetNextContinuation();
       while (next && next->GetTextRun(nsTextFrame::eInflated) == textRun) {
         frameXPEnd = std::min(next->GetContentEnd(), aXPEndOffset);
         next = frameXPEnd < aXPEndOffset ?
-          static_cast<nsTextFrame*>(next->GetNextContinuation()) : nullptr;
+          next->GetNextContinuation() : nullptr;
       }
     }
 
@@ -2159,7 +2164,7 @@ ContentEventHandler::OnQueryTextRect(WidgetQueryContentEvent* aEvent)
     }
 
     // Look for the last frame which should be included text rects.
-    ErrorResult erv;
+    IgnoredErrorResult erv;
     range->SelectNodeContents(*mRootContent, erv);
     if (NS_WARN_IF(erv.Failed())) {
       return NS_ERROR_UNEXPECTED;

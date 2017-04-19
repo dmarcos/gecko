@@ -133,7 +133,7 @@ function testTextAttrs(aID, aOffset, aAttrs, aDefAttrs,
   var startOffset = { value: -1 };
   var endOffset = { value: -1 };
 
-  // do not include attributes exposed on hyper text accessbile
+  // do not include attributes exposed on hyper text accessible
   var attrs = getTextAttributes(aID, accessible, false, aOffset,
                                 startOffset, endOffset);
 
@@ -147,7 +147,7 @@ function testTextAttrs(aID, aOffset, aAttrs, aDefAttrs,
 
   compareAttrs(errorMsg, attrs, aAttrs, aSkipUnexpectedAttrs);
 
-  // include attributes exposed on hyper text accessbile
+  // include attributes exposed on hyper text accessible
   var expectedAttrs = {};
   for (var name in aAttrs)
     expectedAttrs[name] = aAttrs[name];
@@ -269,7 +269,7 @@ function buildDefaultTextAttrs(aID, aFontSize, aFontWeight, aFontFamily)
 {
   var elm = getNode(aID);
   var computedStyle = document.defaultView.getComputedStyle(elm);
-  var bgColor = computedStyle.backgroundColor == "transparent" ?
+  var bgColor = computedStyle.backgroundColor == "rgba(0, 0, 0, 0)" ?
     "rgb(255, 255, 255)" : computedStyle.backgroundColor;
 
   var defAttrs = {

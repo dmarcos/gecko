@@ -38,6 +38,8 @@ pref("extensions.minCompatibleAppVersion", "4.0");
 pref("extensions.checkCompatibility.temporaryThemeOverride_minAppVersion", "29.0a1");
 
 pref("xpinstall.customConfirmationUI", true);
+pref("extensions.webextPermissionPrompts", true);
+pref("extensions.webextOptionalPermissionPrompts", true);
 
 // Preferences for AMO integration
 pref("extensions.getAddons.cache.enabled", true);
@@ -61,12 +63,12 @@ pref("extensions.hotfix.certs.2.sha1Fingerprint", "39:E7:2B:7A:5B:CF:37:78:F9:5D
 // Check AUS for system add-on updates.
 pref("extensions.systemAddon.update.url", "https://aus5.mozilla.org/update/3/SystemAddons/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
 
+// Disable screenshots for now, Shield will enable this.
+pref("extensions.screenshots.system-disabled", true);
+
 // Disable add-ons that are not installed by the user in all scopes by default.
 // See the SCOPE constants in AddonManager.jsm for values to use here.
 pref("extensions.autoDisableScopes", 15);
-
-// Whether or not webextension themes are supported.
-pref("extensions.webextensions.themes.enabled", false);
 
 // Add-on content security policies.
 pref("extensions.webextensions.base-content-security-policy", "script-src 'self' https://* moz-extension: blob: filesystem: 'unsafe-eval' 'unsafe-inline'; object-src 'self' https://* moz-extension: blob: filesystem:;");
@@ -117,6 +119,17 @@ pref("app.update.backgroundMaxErrors", 10);
 // Whether or not app updates are enabled
 pref("app.update.enabled", true);
 
+// Whether or not to use the doorhanger application update UI.
+pref("app.update.doorhanger", true);
+
+// How many times we should let downloads fail before prompting the user to
+// download a fresh installer.
+pref("app.update.download.promptMaxAttempts", 2);
+
+// How many times we should let an elevation prompt fail before prompting the user to
+// download a fresh installer.
+pref("app.update.elevation.promptMaxAttempts", 2);
+
 // If set to true, the Update Service will automatically download updates when
 // app updates are enabled per the app.update.enabled preference and if the user
 // can apply updates.
@@ -125,12 +138,6 @@ pref("app.update.auto", true);
 // If set to true, the Update Service will present no UI for any event.
 pref("app.update.silent", false);
 
-// If set to true, the hamburger button will show badges for update events.
-#ifndef RELEASE_OR_BETA
-pref("app.update.badge", true);
-#else
-pref("app.update.badge", false);
-#endif
 // app.update.badgeWaitTime is in branding section
 
 // If set to true, the Update Service will apply updates in the background
@@ -165,12 +172,13 @@ pref("extensions.update.background.url", "https://versioncheck-bg.addons.mozilla
 pref("extensions.update.interval", 86400);  // Check for updates to Extensions and
                                             // Themes every day
 // Non-symmetric (not shared by extensions) extension-specific [update] preferences
-pref("extensions.dss.enabled", false);          // Dynamic Skin Switching
 pref("extensions.dss.switchPending", false);    // Non-dynamic switch pending after next
                                                 // restart.
 
 pref("extensions.{972ce4c6-7e08-4474-a285-3208198ce6fd}.name", "chrome://browser/locale/browser.properties");
 pref("extensions.{972ce4c6-7e08-4474-a285-3208198ce6fd}.description", "chrome://browser/locale/browser.properties");
+
+pref("extensions.webextensions.themes.icons.buttons", "back,forward,reload,stop,bookmark_star,bookmark_menu,downloads,home,app_menu,cut,copy,paste,new_window,new_private_window,save_page,print,history,full_screen,find,options,addons,developer,synced_tabs,open_file,sidebars,share_page,subscribe,text_encoding,email_link,forget,pocket");
 
 pref("lightweightThemes.update.enabled", true);
 pref("lightweightThemes.getMoreURL", "https://addons.mozilla.org/%LOCALE%/firefox/themes");
@@ -188,8 +196,6 @@ pref("browser.uitour.loglevel", "Error");
 pref("browser.uitour.requireSecure", true);
 pref("browser.uitour.themeOrigin", "https://addons.mozilla.org/%LOCALE%/firefox/themes/");
 pref("browser.uitour.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tour/");
-// This is used as a regexp match against the page's URL.
-pref("browser.uitour.readerViewTrigger", "^https:\\/\\/www\\.mozilla\\.org\\/[^\\/]+\\/firefox\\/reading\\/start");
 // How long to show a Hearbeat survey (two hours, in seconds)
 pref("browser.uitour.surveyDuration", 7200);
 
@@ -424,6 +430,8 @@ pref("browser.link.open_newwindow.disabled_in_fullscreen", true);
 pref("browser.link.open_newwindow.disabled_in_fullscreen", false);
 #endif
 
+pref("browser.photon.structure.enabled", false);
+
 // Tabbed browser
 pref("browser.tabs.closeWindowWithLastTab", true);
 pref("browser.tabs.insertRelatedAfterCurrent", true);
@@ -534,7 +542,9 @@ pref("privacy.sanitize.migrateFx3Prefs",    false);
 
 pref("privacy.panicButton.enabled",         true);
 
-pref("privacy.firstparty.isolate",          false);
+pref("privacy.firstparty.isolate",                        false);
+pref("privacy.firstparty.isolate.restrict_opener_access", true);
+pref("privacy.resistFingerprinting", false);
 
 // Time until temporary permissions expire, in ms
 pref("privacy.temporary_permission_expire_time_ms",  3600000);
@@ -672,6 +682,19 @@ pref("browser.preferences.instantApply", false);
 pref("browser.preferences.instantApply", true);
 #endif
 
+// Toggling Search bar on and off in about:preferences
+pref("browser.preferences.search", false);
+
+// Once the Storage Management is completed.
+// (The Storage Management-related prefs are browser.storageManager.* )
+// The Offline(Appcache) Group section in about:preferences will be hidden.
+// And the task to clear appcache will be done by Storage Management.
+#if defined(NIGHTLY_BUILD)
+pref("browser.preferences.offlineGroup.enabled", false);
+#else
+pref("browser.preferences.offlineGroup.enabled", true);
+#endif
+
 pref("browser.download.show_plugins_in_list", true);
 pref("browser.download.hide_plugins_without_extensions", true);
 
@@ -785,8 +808,16 @@ pref("browser.selfsupport.url", "https://self-repair.mozilla.org/%LOCALE%/repair
 pref("browser.sessionstore.resume_from_crash", true);
 pref("browser.sessionstore.resume_session_once", false);
 
-// minimal interval between two save operations in milliseconds
-pref("browser.sessionstore.interval", 15000);
+// Minimal interval between two save operations in milliseconds (while the user is active).
+pref("browser.sessionstore.interval", 15000); // 15 seconds
+
+// Minimal interval between two save operations in milliseconds (while the user is idle).
+pref("browser.sessionstore.interval.idle", 3600000); // 1h
+
+// Time (ms) before we assume that the user is idle and that we don't need to
+// collect/save the session quite as often.
+pref("browser.sessionstore.idleDelay", 180000); // 3 minutes
+
 // on which sites to save text data, POSTDATA and cookies
 // 0 = everywhere, 1 = unencrypted sites, 2 = nowhere
 pref("browser.sessionstore.privacy_level", 0);
@@ -1194,20 +1225,8 @@ pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/
 // endpoint to send newtab click and view pings
 pref("browser.newtabpage.directory.ping", "https://tiles.services.mozilla.com/v3/links/");
 
-// activates the remote-hosted newtab page
-pref("browser.newtabpage.remote", false);
-
-// remote newtab version targeted
-pref("browser.newtabpage.remote.version", "1");
-
-// Toggles endpoints allowed for remote newtab communications
-pref("browser.newtabpage.remote.mode", "production");
-
-// content-signature tests for remote newtab
-pref("browser.newtabpage.remote.content-signing-test", false);
-
-// verification keys for remote-hosted newtab page
-pref("browser.newtabpage.remote.keys", "");
+// activates Activity Stream
+pref("browser.newtabpage.activity-stream.enabled", false);
 
 // Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
@@ -1216,6 +1235,11 @@ pref("full-screen-api.enabled", true);
 // number of startup crashes that can occur before starting into safe mode automatically
 // (this pref has no effect if more than 6 hours have passed since the last crash)
 pref("toolkit.startup.max_resumed_crashes", 3);
+
+// Whether we use pdfium to view content with the pdf mime type.
+// Note: if the pref is set to false while Firefox is open, it won't
+// take effect until there are no open pdfium tabs.
+pref("pdfium.enabled", false);
 
 // Completely disable pdf.js as an option to preview pdfs within firefox.
 // Note: if this is not disabled it does not necessarily mean pdf.js is the pdf
@@ -1263,19 +1287,15 @@ pref("dom.debug.propagate_gesture_events_through_content", false);
 
 // All the Geolocation preferences are here.
 //
-// The request URL of the GeoLocation backend.
-#ifdef RELEASE_OR_BETA
+
+// Geolocation preferences for the RELEASE and "later" Beta channels.
+// Some of these prefs are specified even though they are redundant; they are
+// here for clarity and end-user experiments.
+#ifndef EARLY_BETA_OR_EARLIER
 pref("geo.wifi.uri", "https://www.googleapis.com/geolocation/v1/geolocate?key=%GOOGLE_API_KEY%");
-#else
-pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
-#endif
 
 #ifdef XP_MACOSX
-#ifdef RELEASE_OR_BETA
 pref("geo.provider.use_corelocation", false);
-#else
-pref("geo.provider.use_corelocation", true);
-#endif
 #endif
 
 #ifdef XP_WIN
@@ -1283,19 +1303,29 @@ pref("geo.provider.ms-windows-location", false);
 #endif
 
 #ifdef MOZ_WIDGET_GTK
-#ifdef MOZ_GPSD
-#ifdef RELEASE_OR_BETA
 pref("geo.provider.use_gpsd", false);
-#else
-pref("geo.provider.use_gpsd", true);
-#endif
-#endif
 #endif
 
-// We keep allowing non-HTTPS geo requests on all the release
-// channels, for now.
-// TODO: default to false (or remove altogether) for #1072859.
-pref("geo.security.allowinsecure", true);
+#else
+
+// Geolocation preferences for Nightly/Aurora/Beta.
+pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
+
+#ifdef XP_MACOSX
+pref("geo.provider.use_corelocation", true);
+#endif
+
+// The native Windows location provider is only enabled in Nightly and likely to
+// be unstable. Set to false if things are really broken.
+#if defined(XP_WIN) && defined(NIGHTLY_BUILD)
+pref("geo.provider.ms-windows-location", true);
+#endif
+
+#if defined(MOZ_WIDGET_GTK) && defined(MOZ_GPSD)
+pref("geo.provider.use_gpsd", true);
+#endif
+
+#endif
 
 // Necko IPC security checks only needed for app isolation for cookies/cache/etc:
 // currently irrelevant for desktop e10s
@@ -1375,7 +1405,12 @@ pref("media.eme.enabled", false);
 #else
 pref("media.eme.enabled", true);
 #endif
-pref("media.eme.apiVisible", true);
+
+#ifdef NIGHTLY_BUILD
+pref("media.eme.vp9-in-mp4.enabled", true);
+#else
+pref("media.eme.vp9-in-mp4.enabled", false);
+#endif
 
 // Whether we should run a test-pattern through EME GMPs before assuming they'll
 // decode H.264.
@@ -1464,9 +1499,10 @@ pref("browser.tabs.crashReporting.email", "");
 pref("extensions.interposition.enabled", true);
 pref("extensions.interposition.prefetching", true);
 
-// Enable blocking of e10s for add-on users on beta/release.
+// Enable blocking of e10s and e10s-multi for add-on users on beta/release.
 #ifdef RELEASE_OR_BETA
 pref("extensions.e10sBlocksEnabling", true);
+pref("extensions.e10sMultiBlocksEnabling", true);
 #endif
 
 // How often to check for CPOW timeouts. CPOWs are only timed out by
@@ -1480,7 +1516,7 @@ pref("dom.ipc.cpows.forbid-unsafe-from-browser", true);
 pref("dom.ipc.cpows.forbid-cpows-in-compat-addons", true);
 
 // ...except for these add-ons:
-pref("dom.ipc.cpows.allow-cpows-in-compat-addons", "{b9db16a4-6edc-47ec-a1f4-b86292ed211d},firegestures@xuldev.org,{DDC359D1-844A-42a7-9AA1-88A850A938A8},privateTab@infocatcher,mousegesturessuite@lemon_juice.addons.mozilla.org,treestyletab@piro.sakura.ne.jp,cliqz@cliqz.com,{AE93811A-5C9A-4d34-8462-F7B864FC4696},contextsearch2@lwz.addons.mozilla.org,{EF522540-89F5-46b9-B6FE-1829E2B572C6},{677a8f98-fd64-40b0-a883-b8c95d0cbf17},images@wink.su,fx-devtools,toolkit/require,url_advisor@kaspersky.com,{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d},{dc572301-7619-498c-a57d-39143191b318},dta@downthemall.net,{86095750-AD15-46d8-BF32-C0789F7E6A32},screenwise-prod@google.com,{91aa5abe-9de4-4347-b7b5-322c38dd9271},secureLogin@blueimp.net,ich@maltegoetz.de,come.back.block.image.from@cat-in-136.blogspot.com,{7b1bf0b6-a1b9-42b0-b75d-252036438bdc},s3crypto@data,{1e0fd655-5aea-4b4c-a583-f76ef1e3af9c},akahuku.fx.sp@toshiakisp.github.io,{aff87fa2-a58e-4edd-b852-0a20203c1e17},{1018e4d6-728f-4b20-ad56-37578a4de76b},rehostimage@engy.us,lazarus@interclue.com,{b2e69492-2358-071a-7056-24ad0c3defb1},flashstopper@byo.co.il,{e4a8a97b-f2ed-450b-b12d-ee082ba24781},jid1-f3mYMbCpz2AZYl@jetpack,{8c550e28-88c9-4764-bb52-aa489cf2efcd},{37fa1426-b82d-11db-8314-0800200c9a66},{ac2cfa60-bc96-11e0-962b-0800200c9a66},igetter@presenta.net,killspinners@byo.co.il,abhere2@moztw.org,{fc6339b8-9581-4fc7-b824-dffcb091fcb7},wampi@wink.su,backtrack@byalexv.co.uk,Gladiator_X@mail.ru,{73a6fe31-595d-460b-a920-fcc0f8843232},{46551EC9-40F0-4e47-8E18-8E5CF550CFB8},acewebextension_unlisted@acestream.org,@screen_maker,yasearch@yandex.ru,sp@avast.com,s3google@translator,igetterextension@presenta.net,{C1A2A613-35F1-4FCF-B27F-2840527B6556},screenwise-testing@google.com,helper-sig@savefrom.net,browser-loader,ImageSaver@Merci.chao,proxtube@abz.agency,wrc@avast.com,{9AA46F4F-4DC7-4c06-97AF-5035170634FE},jid1-CikLKKPVkw6ipw@jetpack,artur.dubovoy@gmail.com,nlgfeb@nlgfeb.ext,{A065A84F-95B6-433A-A0C8-4C040B77CE8A},fdm_ffext@freedownloadmanager.org");
+pref("dom.ipc.cpows.allow-cpows-in-compat-addons", "{b9db16a4-6edc-47ec-a1f4-b86292ed211d},firegestures@xuldev.org,{DDC359D1-844A-42a7-9AA1-88A850A938A8},privateTab@infocatcher,mousegesturessuite@lemon_juice.addons.mozilla.org,treestyletab@piro.sakura.ne.jp,cliqz@cliqz.com,{AE93811A-5C9A-4d34-8462-F7B864FC4696},contextsearch2@lwz.addons.mozilla.org,{EF522540-89F5-46b9-B6FE-1829E2B572C6},{677a8f98-fd64-40b0-a883-b8c95d0cbf17},images@wink.su,fx-devtools,url_advisor@kaspersky.com,{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d},{dc572301-7619-498c-a57d-39143191b318},dta@downthemall.net,{86095750-AD15-46d8-BF32-C0789F7E6A32},screenwise-prod@google.com,{91aa5abe-9de4-4347-b7b5-322c38dd9271},secureLogin@blueimp.net,ich@maltegoetz.de,come.back.block.image.from@cat-in-136.blogspot.com,{7b1bf0b6-a1b9-42b0-b75d-252036438bdc},s3crypto@data,{1e0fd655-5aea-4b4c-a583-f76ef1e3af9c},akahuku.fx.sp@toshiakisp.github.io,{aff87fa2-a58e-4edd-b852-0a20203c1e17},{1018e4d6-728f-4b20-ad56-37578a4de76b},rehostimage@engy.us,lazarus@interclue.com,{b2e69492-2358-071a-7056-24ad0c3defb1},flashstopper@byo.co.il,{e4a8a97b-f2ed-450b-b12d-ee082ba24781},jid1-f3mYMbCpz2AZYl@jetpack,{8c550e28-88c9-4764-bb52-aa489cf2efcd},{37fa1426-b82d-11db-8314-0800200c9a66},{ac2cfa60-bc96-11e0-962b-0800200c9a66},igetter@presenta.net,killspinners@byo.co.il,abhere2@moztw.org,{fc6339b8-9581-4fc7-b824-dffcb091fcb7},wampi@wink.su,backtrack@byalexv.co.uk,Gladiator_X@mail.ru,{73a6fe31-595d-460b-a920-fcc0f8843232},{46551EC9-40F0-4e47-8E18-8E5CF550CFB8},acewebextension_unlisted@acestream.org,@screen_maker,yasearch@yandex.ru,sp@avast.com,s3google@translator,igetterextension@presenta.net,{C1A2A613-35F1-4FCF-B27F-2840527B6556},screenwise-testing@google.com,helper-sig@savefrom.net,ImageSaver@Merci.chao,proxtube@abz.agency,wrc@avast.com,{9AA46F4F-4DC7-4c06-97AF-5035170634FE},jid1-CikLKKPVkw6ipw@jetpack,artur.dubovoy@gmail.com,nlgfeb@nlgfeb.ext,{A065A84F-95B6-433A-A0C8-4C040B77CE8A},fdm_ffext@freedownloadmanager.org");
 
 // Enable e10s hang monitoring (slow script checking and plugin hang
 // detection).
@@ -1523,11 +1559,19 @@ pref("browser.esedbreader.loglevel", "Error");
 
 pref("browser.laterrun.enabled", false);
 
+#ifdef EARLY_BETA_OR_EARLIER
+pref("browser.migrate.automigrate.enabled", true);
+#else
 pref("browser.migrate.automigrate.enabled", false);
+#endif
 // 4 here means the suggestion notification will be automatically
 // hidden the 4th day, so it will actually be shown on 3 different days.
 pref("browser.migrate.automigrate.daysToOfferUndo", 4);
 pref("browser.migrate.automigrate.ui.enabled", true);
+
+// See comments in bug 1340115 on how we got to these numbers.
+pref("browser.migrate.chrome.history.limit", 2000);
+pref("browser.migrate.chrome.history.maxAgeInDays", 180);
 
 // Enable browser frames for use on desktop.  Only exposed to chrome callers.
 pref("dom.mozBrowserFramesEnabled", true);
@@ -1571,14 +1615,10 @@ pref("browser.crashReports.unsubmittedCheck.enabled", false);
 pref("browser.crashReports.unsubmittedCheck.chancesUntilSuppress", 4);
 pref("browser.crashReports.unsubmittedCheck.autoSubmit", false);
 
-#ifdef NIGHTLY_BUILD
-// Enable the (fairly costly) client/server validation on nightly only. The other prefs
-// controlling validation are located in /services/sync/services-sync.js
-pref("services.sync.validation.enabled", true);
-#endif
-
 // Preferences for the form autofill system extension
 pref("browser.formautofill.experimental", false);
+pref("browser.formautofill.enabled", false);
+pref("browser.formautofill.loglevel", "Warn");
 
 // Enable safebrowsing v4 tables (suffixed by "-proto") update.
 #ifdef NIGHTLY_BUILD

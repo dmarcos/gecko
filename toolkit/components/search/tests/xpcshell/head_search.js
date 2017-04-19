@@ -348,7 +348,11 @@ function useHttpServer() {
   httpServer.start(-1);
   httpServer.registerDirectory("/", do_get_cwd());
   gDataUrl = "http://localhost:" + httpServer.identity.primaryPort + "/data/";
-  do_register_cleanup(() => httpServer.stop(() => {}));
+  do_register_cleanup(function* cleanup_httpServer() {
+    yield new Promise(resolve => {
+      httpServer.stop(resolve);
+    });
+  });
   return httpServer;
 }
 
@@ -390,7 +394,7 @@ var addTestEngines = Task.async(function* (aItems) {
         } catch (ex) {
           reject(ex);
         }
-      }, "browser-search-engine-modified", false);
+      }, "browser-search-engine-modified");
 
       if (item.xmlFileName) {
         Services.search.addEngine(gDataUrl + item.xmlFileName,
@@ -488,7 +492,7 @@ function waitForSearchNotification(aExpectedData) {
 
       Services.obs.removeObserver(observer, SEARCH_SERVICE_TOPIC);
       resolve(aSubject);
-    }, SEARCH_SERVICE_TOPIC, false);
+    }, SEARCH_SERVICE_TOPIC);
   });
 }
 

@@ -5,7 +5,6 @@
 "use strict";
 
 const { Ci } = require("chrome");
-const promise = require("promise");
 const defer = require("devtools/shared/defer");
 const EventEmitter = require("devtools/shared/event-emitter");
 const Services = require("Services");
@@ -278,7 +277,7 @@ TabTarget.prototype = {
     return this._form;
   },
 
-  // Get a promise of the root form returned by a listTabs request. This promise
+  // Get a promise of the root form returned by a getRoot request. This promise
   // is cached.
   get root() {
     if (!this._root) {
@@ -289,7 +288,7 @@ TabTarget.prototype = {
 
   _getRoot: function () {
     return new Promise((resolve, reject) => {
-      this.client.listTabs(response => {
+      this.client.mainRoot.getRoot(response => {
         if (response.error) {
           reject(new Error(response.error + ": " + response.message));
           return;
@@ -426,9 +425,7 @@ TabTarget.prototype = {
     };
 
     let attachConsole = () => {
-      this._client.attachConsole(this._form.consoleActor,
-                                 [ "NetworkActivity" ],
-                                 onConsoleAttached);
+      this._client.attachConsole(this._form.consoleActor, [], onConsoleAttached);
     };
 
     if (this.isLocalTab) {
@@ -486,30 +483,30 @@ TabTarget.prototype = {
   _setupRemoteListeners: function () {
     this.client.addListener("closed", this.destroy);
 
-    this._onTabDetached = (aType, aPacket) => {
+    this._onTabDetached = (type, packet) => {
       // We have to filter message to ensure that this detach is for this tab
-      if (aPacket.from == this._form.actor) {
+      if (packet.from == this._form.actor) {
         this.destroy();
       }
     };
     this.client.addListener("tabDetached", this._onTabDetached);
 
-    this._onTabNavigated = (aType, aPacket) => {
+    this._onTabNavigated = (type, packet) => {
       let event = Object.create(null);
-      event.url = aPacket.url;
-      event.title = aPacket.title;
-      event.nativeConsoleAPI = aPacket.nativeConsoleAPI;
-      event.isFrameSwitching = aPacket.isFrameSwitching;
+      event.url = packet.url;
+      event.title = packet.title;
+      event.nativeConsoleAPI = packet.nativeConsoleAPI;
+      event.isFrameSwitching = packet.isFrameSwitching;
 
-      if (!aPacket.isFrameSwitching) {
+      if (!packet.isFrameSwitching) {
         // Update the title and url unless this is a frame switch.
-        this._url = aPacket.url;
-        this._title = aPacket.title;
+        this._url = packet.url;
+        this._title = packet.title;
       }
 
       // Send any stored event payload (DOMWindow or nsIRequest) for backwards
       // compatibility with non-remotable tools.
-      if (aPacket.state == "start") {
+      if (packet.state == "start") {
         event._navPayload = this._navRequest;
         this.emit("will-navigate", event);
         this._navRequest = null;
@@ -521,8 +518,8 @@ TabTarget.prototype = {
     };
     this.client.addListener("tabNavigated", this._onTabNavigated);
 
-    this._onFrameUpdate = (aType, aPacket) => {
-      this.emit("frame-update", aPacket);
+    this._onFrameUpdate = (type, packet) => {
+      this.emit("frame-update", packet);
     };
     this.client.addListener("frameUpdate", this._onFrameUpdate);
 
@@ -565,9 +562,11 @@ TabTarget.prototype = {
     }
   },
 
-  // Automatically respawn the toolbox when the tab changes between being
-  // loaded within the parent process and loaded from a content process.
-  // Process change can go in both ways.
+  /**
+   * Automatically respawn the toolbox when the tab changes between being
+   * loaded within the parent process and loaded from a content process.
+   * Process change can go in both ways.
+   */
   onRemotenessChange: function () {
     // Responsive design do a crazy dance around tabs and triggers
     // remotenesschange events. But we should ignore them as at the end
@@ -687,11 +686,11 @@ TabTarget.prototype = {
 /**
  * WebProgressListener for TabTarget.
  *
- * @param object aTarget
+ * @param object target
  *        The TabTarget instance to work with.
  */
-function TabWebProgressListener(aTarget) {
-  this.target = aTarget;
+function TabWebProgressListener(target) {
+  this.target = target;
 }
 
 TabWebProgressListener.prototype = {

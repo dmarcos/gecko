@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* global APP_SHUTDOWN:false */
+
 let { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
@@ -25,7 +27,7 @@ let prefObserver = function(aSubject, aTopic, aData) {
 
 function startup(aData, aReason) {
   // Observe pref changes and enable/disable as necessary.
-  Services.prefs.addObserver(PREF_WC_REPORTER_ENABLED, prefObserver, false);
+  Services.prefs.addObserver(PREF_WC_REPORTER_ENABLED, prefObserver);
 
   // Only initialize if pref is enabled.
   let enabled = Services.prefs.getBoolPref(PREF_WC_REPORTER_ENABLED);

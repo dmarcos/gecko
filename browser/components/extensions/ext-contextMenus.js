@@ -2,16 +2,16 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+Cu.import("resource://gre/modules/ExtensionManagement.jsm");
 Cu.import("resource://gre/modules/MatchPattern.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/AppConstants.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                  "resource://gre/modules/NetUtil.jsm");
 
 var {
   ExtensionError,
   IconDetails,
-  SingletonEventManager,
 } = ExtensionUtils;
 
 const ACTION_MENU_TOP_LEVEL_LIMIT = 6;
@@ -90,7 +90,7 @@ var gMenuBuilder = {
   buildActionContextMenu(contextData) {
     const {menu} = contextData;
 
-    contextData.tab = TabManager.activeTab;
+    contextData.tab = tabTracker.activeTab;
     contextData.pageUrl = contextData.tab.linkedBrowser.currentURI.spec;
 
     const root = gRootItems.get(contextData.extension);
@@ -240,6 +240,18 @@ var gMenuBuilder = {
         info.modifiers.push("MacCtrl");
       }
 
+      // Allow context menu's to open various actions supported in webext prior
+      // to notifying onclicked.
+      let actionFor = {
+        _execute_page_action: global.pageActionFor,
+        _execute_browser_action: global.browserActionFor,
+        _execute_sidebar_action: global.sidebarActionFor,
+      }[item.command];
+      if (actionFor) {
+        let win = event.target.ownerGlobal;
+        actionFor(item.extension).triggerAction(win);
+      }
+
       item.extension.emit("webext-contextmenu-menuitem-click", info, tab);
     });
 
@@ -328,7 +340,7 @@ function MenuItem(extension, createProperties, isRoot = false) {
   this.extension = extension;
   this.children = [];
   this.parent = null;
-  this.tabManager = TabManager.for(extension);
+  this.tabManager = extension.tabManager;
 
   this.setDefaults();
   this.setProps(createProperties);
@@ -500,6 +512,7 @@ MenuItem.prototype = {
     setIfDefined("srcUrl", contextData.srcUrl);
     setIfDefined("pageUrl", contextData.pageUrl);
     setIfDefined("frameUrl", contextData.frameUrl);
+    setIfDefined("frameId", contextData.frameId);
     setIfDefined("selectionText", contextData.selectionText);
 
     if ((this.type === "checkbox") || (this.type === "radio")) {
@@ -517,7 +530,7 @@ MenuItem.prototype = {
     }
 
     let docPattern = this.documentUrlMatchPattern;
-    let pageURI = Services.io.newURI(contextData.pageUrl);
+    let pageURI = Services.io.newURI(contextData[contextData.inFrame ? "frameUrl" : "pageUrl"]);
     if (docPattern && !docPattern.matches(pageURI)) {
       return false;
     }
@@ -545,20 +558,20 @@ MenuItem.prototype = {
 // for contex-menu events from both content and chrome.
 const contextMenuTracker = {
   register() {
-    Services.obs.addObserver(this, "on-build-contextmenu", false);
-    for (const window of WindowListManager.browserWindows()) {
+    Services.obs.addObserver(this, "on-build-contextmenu");
+    for (const window of windowTracker.browserWindows()) {
       this.onWindowOpen(window);
     }
-    WindowListManager.addOpenListener(this.onWindowOpen);
+    windowTracker.addOpenListener(this.onWindowOpen);
   },
 
   unregister() {
     Services.obs.removeObserver(this, "on-build-contextmenu");
-    for (const window of WindowListManager.browserWindows()) {
+    for (const window of windowTracker.browserWindows()) {
       const menu = window.document.getElementById("tabContextMenu");
       menu.removeEventListener("popupshowing", this);
     }
-    WindowListManager.removeOpenListener(this.onWindowOpen);
+    windowTracker.removeOpenListener(this.onWindowOpen);
   },
 
   observe(subject, topic, data) {
@@ -575,7 +588,7 @@ const contextMenuTracker = {
     const menu = event.target;
     if (menu.id === "tabContextMenu") {
       const trigger = menu.triggerNode;
-      const tab = trigger.localName === "tab" ? trigger : TabManager.activeTab;
+      const tab = trigger.localName === "tab" ? trigger : tabTracker.activeTab;
       const pageUrl = tab.linkedBrowser.currentURI.spec;
       gMenuBuilder.build({menu, tab, pageUrl, onTab: true});
     }
@@ -583,66 +596,70 @@ const contextMenuTracker = {
 };
 
 var gExtensionCount = 0;
-/* eslint-disable mozilla/balanced-listeners */
-extensions.on("startup", (type, extension) => {
-  gContextMenuMap.set(extension, new Map());
-  if (++gExtensionCount == 1) {
-    contextMenuTracker.register();
+
+this.contextMenus = class extends ExtensionAPI {
+  onShutdown(reason) {
+    let {extension} = this;
+
+    if (gContextMenuMap.has(extension)) {
+      gContextMenuMap.delete(extension);
+      gRootItems.delete(extension);
+      if (--gExtensionCount == 0) {
+        contextMenuTracker.unregister();
+      }
+    }
   }
-});
 
-extensions.on("shutdown", (type, extension) => {
-  gContextMenuMap.delete(extension);
-  gRootItems.delete(extension);
-  if (--gExtensionCount == 0) {
-    contextMenuTracker.unregister();
+  getAPI(context) {
+    let {extension} = context;
+
+    gContextMenuMap.set(extension, new Map());
+    if (++gExtensionCount == 1) {
+      contextMenuTracker.register();
+    }
+
+    return {
+      contextMenus: {
+        createInternal: function(createProperties) {
+          // Note that the id is required by the schema. If the addon did not set
+          // it, the implementation of contextMenus.create in the child should
+          // have added it.
+          let menuItem = new MenuItem(extension, createProperties);
+          gContextMenuMap.get(extension).set(menuItem.id, menuItem);
+        },
+
+        update: function(id, updateProperties) {
+          let menuItem = gContextMenuMap.get(extension).get(id);
+          if (menuItem) {
+            menuItem.setProps(updateProperties);
+          }
+        },
+
+        remove: function(id) {
+          let menuItem = gContextMenuMap.get(extension).get(id);
+          if (menuItem) {
+            menuItem.remove();
+          }
+        },
+
+        removeAll: function() {
+          let root = gRootItems.get(extension);
+          if (root) {
+            root.remove();
+          }
+        },
+
+        onClicked: new SingletonEventManager(context, "contextMenus.onClicked", fire => {
+          let listener = (event, info, tab) => {
+            fire.async(info, tab);
+          };
+
+          extension.on("webext-contextmenu-menuitem-click", listener);
+          return () => {
+            extension.off("webext-contextmenu-menuitem-click", listener);
+          };
+        }).api(),
+      },
+    };
   }
-});
-/* eslint-enable mozilla/balanced-listeners */
-
-extensions.registerSchemaAPI("contextMenus", "addon_parent", context => {
-  let {extension} = context;
-  return {
-    contextMenus: {
-      createInternal: function(createProperties) {
-        // Note that the id is required by the schema. If the addon did not set
-        // it, the implementation of contextMenus.create in the child should
-        // have added it.
-        let menuItem = new MenuItem(extension, createProperties);
-        gContextMenuMap.get(extension).set(menuItem.id, menuItem);
-      },
-
-      update: function(id, updateProperties) {
-        let menuItem = gContextMenuMap.get(extension).get(id);
-        if (menuItem) {
-          menuItem.setProps(updateProperties);
-        }
-      },
-
-      remove: function(id) {
-        let menuItem = gContextMenuMap.get(extension).get(id);
-        if (menuItem) {
-          menuItem.remove();
-        }
-      },
-
-      removeAll: function() {
-        let root = gRootItems.get(extension);
-        if (root) {
-          root.remove();
-        }
-      },
-
-      onClicked: new SingletonEventManager(context, "contextMenus.onClicked", fire => {
-        let listener = (event, info, tab) => {
-          fire.async(info, tab);
-        };
-
-        extension.on("webext-contextmenu-menuitem-click", listener);
-        return () => {
-          extension.off("webext-contextmenu-menuitem-click", listener);
-        };
-      }).api(),
-    },
-  };
-});
+};

@@ -33,7 +33,7 @@ function test() {
     }, {capture: true, once: true});
 
     aWindow.gBrowser.selectedBrowser.loadURI(testURI);
-  };
+  }
 
   function openPrivateBrowsingModeByUI(aWindow, aCallback) {
     Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
@@ -42,12 +42,12 @@ function test() {
           windowsToClose.push(aSubject);
           aCallback(aSubject);
       }, {once: true});
-    }, "domwindowopened", false);
+    }, "domwindowopened");
 
     cmd = aWindow.document.getElementById("Tools:PrivateBrowsing");
     var func = new Function("", cmd.getAttribute("oncommand"));
     func.call(cmd);
-  };
+  }
 
   function testOnWindow(aOptions, aCallback) {
     whenNewWindowLoaded(aOptions, function(aWin) {
@@ -57,7 +57,7 @@ function test() {
       // call whenNewWindowLoaded() instead of testOnWindow() on your test.
       executeSoon(() => aCallback(aWin));
     });
-  };
+  }
 
    // this function is called after calling finish() on the test.
   registerCleanupFunction(function() {

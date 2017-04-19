@@ -41,7 +41,6 @@ class nsIPrincipal;
 namespace mozilla {
 
 namespace dom {
-class Promise;
 class HTMLMediaElement;
 }
 
@@ -50,6 +49,7 @@ class VideoFrameContainer;
 class MediaDecoderStateMachine;
 
 enum class MediaEventType : int8_t;
+enum class Visibility : uint8_t;
 
 // GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
 // GetTickCount() and conflicts with MediaDecoder::GetCurrentTime implementation.
@@ -62,7 +62,8 @@ class MediaDecoder : public AbstractMediaDecoder
 public:
   // Used to register with MediaResource to receive notifications which will
   // be forwarded to MediaDecoder.
-  class ResourceCallback : public MediaResourceCallback {
+  class ResourceCallback : public MediaResourceCallback
+  {
     // Throttle calls to MediaDecoder::NotifyDataArrived()
     // to be at most once per 500ms.
     static const uint32_t sDelay = 500;
@@ -96,12 +97,15 @@ public:
     const RefPtr<AbstractThread> mAbstractMainThread;
   };
 
-  typedef MozPromise<bool /* aIgnored */, bool /* aIgnored */, /* IsExclusive = */ true> SeekPromise;
+  typedef MozPromise<bool /* aIgnored */, bool /* aIgnored */,
+                     /* IsExclusive = */ true>
+    SeekPromise;
 
   NS_DECL_THREADSAFE_ISUPPORTS
 
   // Enumeration for the valid play states (see mPlayState)
-  enum PlayState {
+  enum PlayState
+  {
     PLAY_STATE_START,
     PLAY_STATE_LOADING,
     PLAY_STATE_PAUSED,
@@ -129,6 +133,11 @@ public:
   // Cleanup internal data structures. Must be called on the main
   // thread by the owning object before that object disposes of this object.
   virtual void Shutdown();
+
+  // Notified by the shutdown manager that XPCOM shutdown has begun.
+  // The decoder should notify its owner to drop the reference to the decoder
+  // to prevent further calls into the decoder.
+  void NotifyXPCOMShutdown();
 
   // Start downloading the media. Decode the downloaded data up to the
   // point of the first frame of data.
@@ -169,8 +178,7 @@ public:
   // Seek to the time position in (seconds) from the start of the video.
   // If aDoFastSeek is true, we'll seek to the sync point/keyframe preceeding
   // the seek target.
-  virtual nsresult Seek(double aTime, SeekTarget::Type aSeekType,
-                        dom::Promise* aPromise = nullptr);
+  virtual nsresult Seek(double aTime, SeekTarget::Type aSeekType);
 
   // Initialize state machine and schedule it.
   nsresult InitializeStateMachine();
@@ -180,7 +188,9 @@ public:
   virtual nsresult Play();
 
   // Notify activity of the decoder owner is changed.
-  virtual void NotifyOwnerActivityChanged(bool aIsVisible);
+  virtual void NotifyOwnerActivityChanged(bool aIsDocumentVisible,
+                                          Visibility aElementVisibility,
+                                          bool aIsElementInTree);
 
   // Pause video playback.
   virtual void Pause();
@@ -207,7 +217,8 @@ public:
   // Add an output stream. All decoder output will be sent to the stream.
   // The stream is initially blocked. The decoder is responsible for unblocking
   // it while it is playing back.
-  virtual void AddOutputStream(ProcessedMediaStream* aStream, bool aFinishWhenEnded);
+  virtual void AddOutputStream(ProcessedMediaStream* aStream,
+                               bool aFinishWhenEnded);
   // Remove an output stream added with AddOutputStream.
   virtual void RemoveOutputStream(MediaStream* aStream);
 
@@ -231,6 +242,9 @@ public:
 
   // Return true if the decoder has reached the end of playback.
   bool IsEnded() const;
+
+  // True if we are playing a MediaSource object.
+  virtual bool IsMSE() const { return false; }
 
   // Return true if the MediaDecoderOwner's error attribute is not null.
   // Must be called before Shutdown().
@@ -358,11 +372,21 @@ private:
   dom::AudioChannel GetAudioChannel() { return mAudioChannel; }
 
   // Called from HTMLMediaElement when owner document activity changes
-  virtual void SetElementVisibility(bool aIsVisible);
+  virtual void SetElementVisibility(bool aIsDocumentVisible,
+                                    Visibility aElementVisibility,
+                                    bool aIsElementInTree);
 
   // Force override the visible state to hidden.
   // Called from HTMLMediaElement when testing of video decode suspend from mochitests.
   void SetForcedHidden(bool aForcedHidden);
+
+  // Mark the decoder as tainted, meaning suspend-video-decoder is disabled.
+  void SetSuspendTaint(bool aTaint);
+
+  // Returns true if the decoder can't participate in suspend-video-decoder.
+  bool HasSuspendTaint() const;
+
+  void UpdateVideoDecodeMode();
 
   /******
    * The following methods must only be called on the main
@@ -374,14 +398,16 @@ private:
   // change. Call on the main thread only.
   virtual void ChangeState(PlayState aState);
 
-  // Called from MetadataLoaded(). Creates audio tracks and adds them to its
-  // owner's audio track list, and implies to video tracks respectively.
+  // Called from MetadataLoaded(). Ask its owner to create audio/video tracks
+  // and adds them to its owner's audio/video track list.
   // Call on the main thread only.
   void ConstructMediaTracks();
 
-  // Removes all audio tracks and video tracks that are previously added into
-  // the track list. Call on the main thread only.
+  // Ask its owner to remove all audio tracks and video tracks that are
+  // previously added into the track list.
+  // Call on the main thread only.
   void RemoveMediaTracks();
+
 
   // Called when the video has completed playing.
   // Call on the main thread only.
@@ -430,7 +456,9 @@ private:
     return mAbstractMainThread;
   }
 
-  typedef MozPromise<RefPtr<CDMProxy>, bool /* aIgnored */, /* IsExclusive = */ true> CDMProxyPromise;
+  typedef MozPromise<RefPtr<CDMProxy>, bool /* aIgnored */,
+                     /* IsExclusive = */ true>
+    CDMProxyPromise;
 
   // Resolved when a CDMProxy is available and the capabilities are known or
   // rejected when this decoder is about to shut down.
@@ -476,12 +504,15 @@ private:
     GetOwner()->UpdateReadyState();
   }
 
-  virtual MediaDecoderOwner::NextFrameStatus NextFrameStatus() { return mNextFrameStatus; }
+  virtual MediaDecoderOwner::NextFrameStatus NextFrameStatus()
+  {
+    return mNextFrameStatus;
+  }
   virtual MediaDecoderOwner::NextFrameStatus NextFrameBufferedStatus();
 
   // Returns a string describing the state of the media player internal
   // data. Used for debugging purposes.
-  virtual void GetMozDebugReaderData(nsACString& aString) {}
+  virtual void GetMozDebugReaderData(nsACString& aString) { }
 
   virtual void DumpDebugInfo();
 
@@ -537,7 +568,10 @@ protected:
   // This corresponds to the "current position" in HTML5.
   // We allow omx subclasses to substitute an alternative current position for
   // usage with the audio offload player.
-  virtual int64_t CurrentPosition() { return mCurrentPosition; }
+  virtual int64_t CurrentPosition()
+  {
+    return mCurrentPosition.Ref().ToMicroseconds();
+  }
 
   // Official duration of the media resource as observed by script.
   double mDuration;
@@ -565,6 +599,9 @@ private:
 
   MediaEventSource<void>*
   DataArrivedEvent() override { return &mDataArrivedEvent; }
+
+  // Called when the owner's activity changed.
+  void NotifyCompositor();
 
   MediaEventSource<RefPtr<layers::KnowsCompositor>>*
   CompositorUpdatedEvent() override { return &mCompositorUpdatedEvent; }
@@ -602,21 +639,10 @@ private:
   RefPtr<CDMProxyPromise> mCDMProxyPromise;
 
 protected:
-  // The promise resolving/rejection is queued as a "micro-task" which will be
-  // handled immediately after the current JS task and before any pending JS
-  // tasks.
-  // At the time we are going to resolve/reject a promise, the "seeking" event
-  // task should already be queued but might yet be processed, so we queue one
-  // more task to file the promise resolving/rejection micro-tasks
-  // asynchronously to make sure that the micro-tasks are processed after the
-  // "seeking" event task.
-  void AsyncResolveSeekDOMPromiseIfExists();
-  void AsyncRejectSeekDOMPromiseIfExists();
   void DiscardOngoingSeekIfExists();
-  virtual void CallSeek(const SeekTarget& aTarget, dom::Promise* aPromise);
+  virtual void CallSeek(const SeekTarget& aTarget);
 
   MozPromiseRequestHolder<SeekPromise> mSeekRequest;
-  RefPtr<dom::Promise> mSeekDOMPromise;
 
   // True when seeking or otherwise moving the play position around in
   // such a manner that progress event data is inaccurate. This is set
@@ -670,7 +696,8 @@ protected:
   bool mMinimizePreroll;
 
   // True if audio tracks and video tracks are constructed and added into the
-  // track list, false if all tracks are removed from the track list.
+  // owenr's track list, false if all tracks are removed from the owner's track
+  // list.
   bool mMediaTracksConstructed;
 
   // True if we've already fired metadataloaded.
@@ -687,11 +714,21 @@ protected:
   // only be accessed from main thread.
   nsAutoPtr<MediaInfo> mInfo;
 
-  // Tracks the visiblity status from HTMLMediaElement
-  bool mElementVisible;
+  // Tracks the visibility status of owner element's document.
+  bool mIsDocumentVisible;
+
+  // Tracks the visibility status of owner element.
+  Visibility mElementVisibility;
+
+  // Tracks the owner is in-tree or not.
+  bool mIsElementInTree;
 
   // If true, forces the decoder to be considered hidden.
   bool mForcedHidden;
+
+  // True if the decoder has a suspend taint - meaning suspend-video-decoder is
+  // disabled.
+  bool mHasSuspendTaint;
 
   // A listener to receive metadata updates from MDSM.
   MediaEventListener mTimedMetadataListener;
@@ -715,7 +752,7 @@ protected:
   Mirror<MediaDecoderOwner::NextFrameStatus> mNextFrameStatus;
 
   // NB: Don't use mCurrentPosition directly, but rather CurrentPosition().
-  Mirror<int64_t> mCurrentPosition;
+  Mirror<media::TimeUnit> mCurrentPosition;
 
   // Duration of the media resource according to the state machine.
   Mirror<media::NullableTimeUnit> mStateMachineDuration;
@@ -782,49 +819,46 @@ protected:
   // back again.
   Canonical<int64_t> mDecoderPosition;
 
-  // True if the decoder is visible.
-  Canonical<bool> mIsVisible;
-
 public:
   AbstractCanonical<media::NullableTimeUnit>* CanonicalDurationOrNull() override;
-  AbstractCanonical<double>* CanonicalVolume() {
-    return &mVolume;
-  }
-  AbstractCanonical<bool>* CanonicalPreservesPitch() {
+  AbstractCanonical<double>* CanonicalVolume() { return &mVolume; }
+  AbstractCanonical<bool>* CanonicalPreservesPitch()
+  {
     return &mPreservesPitch;
   }
-  AbstractCanonical<media::NullableTimeUnit>* CanonicalEstimatedDuration() {
+  AbstractCanonical<media::NullableTimeUnit>* CanonicalEstimatedDuration()
+  {
     return &mEstimatedDuration;
   }
-  AbstractCanonical<Maybe<double>>* CanonicalExplicitDuration() {
+  AbstractCanonical<Maybe<double>>* CanonicalExplicitDuration()
+  {
     return &mExplicitDuration;
   }
-  AbstractCanonical<PlayState>* CanonicalPlayState() {
-    return &mPlayState;
-  }
-  AbstractCanonical<PlayState>* CanonicalNextPlayState() {
-    return &mNextState;
-  }
-  AbstractCanonical<bool>* CanonicalLogicallySeeking() {
+  AbstractCanonical<PlayState>* CanonicalPlayState() { return &mPlayState; }
+  AbstractCanonical<PlayState>* CanonicalNextPlayState() { return &mNextState; }
+  AbstractCanonical<bool>* CanonicalLogicallySeeking()
+  {
     return &mLogicallySeeking;
   }
-  AbstractCanonical<bool>* CanonicalSameOriginMedia() {
+  AbstractCanonical<bool>* CanonicalSameOriginMedia()
+  {
     return &mSameOriginMedia;
   }
-  AbstractCanonical<PrincipalHandle>* CanonicalMediaPrincipalHandle() {
+  AbstractCanonical<PrincipalHandle>* CanonicalMediaPrincipalHandle()
+  {
     return &mMediaPrincipalHandle;
   }
-  AbstractCanonical<double>* CanonicalPlaybackBytesPerSecond() {
+  AbstractCanonical<double>* CanonicalPlaybackBytesPerSecond()
+  {
     return &mPlaybackBytesPerSecond;
   }
-  AbstractCanonical<bool>* CanonicalPlaybackRateReliable() {
+  AbstractCanonical<bool>* CanonicalPlaybackRateReliable()
+  {
     return &mPlaybackRateReliable;
   }
-  AbstractCanonical<int64_t>* CanonicalDecoderPosition() {
+  AbstractCanonical<int64_t>* CanonicalDecoderPosition()
+  {
     return &mDecoderPosition;
-  }
-  AbstractCanonical<bool>* CanonicalIsVisible() {
-    return &mIsVisible;
   }
 
 private:

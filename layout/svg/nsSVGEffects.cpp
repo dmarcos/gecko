@@ -7,8 +7,8 @@
 #include "nsSVGEffects.h"
 
 // Keep others in (case-insensitive) order:
-#include "mozilla/RestyleManagerHandle.h"
-#include "mozilla/RestyleManagerHandleInlines.h"
+#include "mozilla/RestyleManager.h"
+#include "mozilla/RestyleManagerInlines.h"
 #include "nsCSSFrameConstructor.h"
 #include "nsISupportsImpl.h"
 #include "nsSVGClipPathFrame.h"
@@ -418,7 +418,8 @@ nsSVGTextPathProperty::DoUpdate()
   if (!frame)
     return;
 
-  NS_ASSERTION(frame->IsFrameOfType(nsIFrame::eSVG) || frame->IsSVGText(),
+  NS_ASSERTION(frame->IsFrameOfType(nsIFrame::eSVG) ||
+               nsSVGUtils::IsInSVGTextSubtree(frame),
                "SVG frame expected");
 
   // Avoid getting into an infinite loop of reflows if the <textPath> is
@@ -588,7 +589,7 @@ nsSVGEffects::GetEffectProperties(nsIFrame* aFrame)
   }
 
   MOZ_ASSERT(style->mMask.mImageCount > 0);
-  result.mMask = style->mMask.HasLayerWithImage()
+  result.mMask = style->HasMask()
                  ? GetOrCreateMaskProperty(aFrame) : nullptr;
 
   return result;
@@ -670,24 +671,6 @@ bool
 nsSVGEffects::EffectProperties::HasNoOrValidEffects()
 {
   return HasNoOrValidClipPath() && HasNoOrValidMask() && HasNoOrValidFilter();
-}
-
-bool
-nsSVGEffects::EffectProperties::MightHaveNoneSVGMask() const
-{
-  if (!mMask) {
-    return false;
-  }
-
-  const nsTArray<RefPtr<nsSVGPaintingProperty>>& props = mMask->GetProps();
-  for (size_t i = 0; i < props.Length(); i++) {
-    if (!props[i] ||
-        !props[i]->GetReferencedFrame(nsGkAtoms::svgMaskFrame, nullptr)) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 bool
@@ -1035,6 +1018,7 @@ nsSVGEffects::GetMaskURI(nsIFrame* aFrame, uint32_t aIndex)
   const nsStyleSVGReset* svgReset = aFrame->StyleSVGReset();
   MOZ_ASSERT(svgReset->mMask.mLayers.Length() > aIndex);
 
-  return ResolveURLUsingLocalRef(aFrame,
-                                 svgReset->mMask.mLayers[aIndex].mSourceURI);
+  mozilla::css::URLValueData* data =
+    svgReset->mMask.mLayers[aIndex].mImage.GetURLValue();
+  return ResolveURLUsingLocalRef(aFrame, data);
 }

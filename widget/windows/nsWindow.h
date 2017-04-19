@@ -210,7 +210,6 @@ public:
   virtual nsTransparencyMode GetTransparencyMode() override;
   virtual void            UpdateOpaqueRegion(const LayoutDeviceIntRegion& aOpaqueRegion) override;
 #endif // MOZ_XUL
-  virtual nsIMEUpdatePreference GetIMEUpdatePreference() override;
   virtual nsresult        SetNonClientMargins(LayoutDeviceIntMargin& aMargins) override;
   void                    SetDrawsInTitlebar(bool aState) override;
   virtual void            UpdateWindowDraggingRegion(const LayoutDeviceIntRegion& aRegion) override;
@@ -414,6 +413,7 @@ protected:
   TimeStamp               GetMessageTimeStamp(LONG aEventTime) const;
   static void             UpdateFirstEventTime(DWORD aEventTime);
   void                    FinishLiveResizing(ResizeState aNewState);
+  nsIntPoint              GetTouchCoordinates(WPARAM wParam, LPARAM lParam);
 
   /**
    * Event handlers
@@ -532,6 +532,7 @@ protected:
   bool                  mFullscreenMode;
   bool                  mMousePresent;
   bool                  mDestroyCalled;
+  bool                  mOpeningAnimationSuppressed;
   uint32_t              mBlurSuppressLevel;
   DWORD_PTR             mOldStyle;
   DWORD_PTR             mOldExStyle;

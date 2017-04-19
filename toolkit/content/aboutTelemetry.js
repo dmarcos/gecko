@@ -17,10 +17,11 @@ Cu.import("resource://gre/modules/TelemetryUtils.jsm");
 Cu.import("resource://gre/modules/TelemetryLog.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
                                   "resource://gre/modules/AppConstants.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
+                                  "resource://gre/modules/Preferences.jsm");
 
 const Telemetry = Services.telemetry;
 const bundle = Services.strings.createBundle(
@@ -175,7 +176,7 @@ function removeAllChildNodes(node) {
  * Pad a number to two digits with leading "0".
  */
 function padToTwoDigits(n) {
-  return (n > 9) ? n : "0" + n;
+  return new String(n).padStart(2, "0");
 }
 
 /**
@@ -241,7 +242,13 @@ var Settings = {
         } else {
           // Show the data choices preferences on desktop.
           let mainWindow = getMainWindowWithPreferencesPane();
-          mainWindow.openAdvancedPreferences("dataChoicesTab");
+          // The advanced subpanes are only supported in the old organization, which will
+          // be removed by bug 1349689.
+          if (Preferences.get("browser.preferences.useOldOrganization", false)) {
+            mainWindow.openAdvancedPreferences("dataChoicesTab");
+          } else {
+            mainWindow.openPreferences("paneAdvanced");
+          }
         }
       });
     }
@@ -314,6 +321,8 @@ var PingPicker = {
             .addEventListener("change", () => displayPingData(gPingData));
     document.getElementById("keyed-histograms-processes")
             .addEventListener("change", () => displayPingData(gPingData));
+    document.getElementById("events-processes")
+            .addEventListener("change", () => displayPingData(gPingData));
   },
 
   onPingSourceChanged() {
@@ -324,7 +333,7 @@ var PingPicker = {
     this.update();
   },
 
-  update: Task.async(function*() {
+  async update() {
     let viewCurrent = document.getElementById("ping-source-current").checked;
     let viewStructured = document.getElementById("ping-source-structured").checked;
     let currentChanged = viewCurrent !== this.viewCurrentPingData;
@@ -334,7 +343,7 @@ var PingPicker = {
 
     // If we have no archived pings, disable the ping archive selection.
     // This can happen on new profiles or if the ping archive is disabled.
-    let archivedPingList = yield TelemetryArchive.promiseArchivedPingList();
+    let archivedPingList = await TelemetryArchive.promiseArchivedPingList();
     let sourceArchived = document.getElementById("ping-source-archive");
     sourceArchived.disabled = (archivedPingList.length == 0);
 
@@ -345,7 +354,7 @@ var PingPicker = {
         this._updateCurrentPingData();
       } else {
         document.getElementById("current-ping-picker").classList.add("hidden");
-        yield this._updateArchivedPingList(archivedPingList);
+        await this._updateArchivedPingList(archivedPingList);
         document.getElementById("archived-ping-picker").classList.remove("hidden");
       }
     }
@@ -357,7 +366,7 @@ var PingPicker = {
         this._showRawPingData();
       }
     }
-  }),
+  },
 
   _updateCurrentPingData() {
     const subsession = document.getElementById("show-subsession-data").checked;
@@ -374,7 +383,7 @@ var PingPicker = {
                            .then((ping) => displayPingData(ping, true));
   },
 
-  _updateArchivedPingList: Task.async(function*(pingList) {
+  async _updateArchivedPingList(pingList) {
     // The archived ping list is sorted in ascending timestamp order,
     // but descending is more practical for the operations we do here.
     pingList.reverse();
@@ -411,8 +420,8 @@ var PingPicker = {
     this._renderPingList();
 
     // Update the displayed ping.
-    yield this._updateArchivedPingData();
-  }),
+    await this._updateArchivedPingData();
+  },
 
   _renderWeeks() {
     let weekSelector = document.getElementById("choose-ping-week");
@@ -1069,8 +1078,8 @@ SymbolicationRequest.prototype.fetchSymbols =
 function SymbolicationRequest_fetchSymbols() {
   let symbolServerURI =
     Preferences.get(PREF_SYMBOL_SERVER_URI, DEFAULT_SYMBOL_SERVER_URI);
-  let request = {"memoryMap" : this.memoryMap, "stacks" : this.stacks,
-                 "version" : 3};
+  let request = {"memoryMap": this.memoryMap, "stacks": this.stacks,
+                 "version": 3};
   let requestJSON = JSON.stringify(request);
 
   this.symbolRequest = new XMLHttpRequest();
@@ -1734,7 +1743,16 @@ var Events = {
       return;
     }
 
-    const events = aPayload.processes.parent.events;
+    let processesSelect = document.getElementById("events-processes");
+    let selectedProcess = processesSelect.selectedOptions.item(0).getAttribute("value");
+
+    if (!aPayload.processes ||
+        !selectedProcess ||
+        !(selectedProcess in aPayload.processes)) {
+      return;
+    }
+
+    let events = aPayload.processes[selectedProcess].events;
     const hasData = events && Object.keys(events).length > 0;
     setHasData("events-section", hasData);
     if (!hasData) {
@@ -2082,6 +2100,7 @@ function displayPingData(ping, updatePayloadList = false) {
     renderProcessList(ping, document.getElementById("keyed-scalars-processes"));
     renderProcessList(ping, document.getElementById("histograms-processes"));
     renderProcessList(ping, document.getElementById("keyed-histograms-processes"));
+    renderProcessList(ping, document.getElementById("events-processes"));
   }
 
   // Show general data.

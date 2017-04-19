@@ -3,9 +3,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#define PL_ARENA_CONST_ALIGN_MASK (sizeof(void*)-1)
-#include "plarena.h"
-
 #include "nsAutoPtr.h"
 #include "nsViewManager.h"
 #include "nsGfxCIID.h"
@@ -17,6 +14,7 @@
 #include "nsIPluginWidget.h"
 #include "nsXULPopupManager.h"
 #include "nsIPresShell.h"
+#include "nsIPresShellInlines.h"
 #include "nsPresContext.h"
 #include "mozilla/StartupTimeline.h"
 #include "GeckoProfiler.h"
@@ -229,10 +227,9 @@ nsViewManager::SetWindowDimensions(nscoord aWidth, nscoord aHeight, bool aDelayR
       DoSetWindowDimensions(aWidth, aHeight);
     } else {
       mDelayedResize.SizeTo(aWidth, aHeight);
-      if (mPresShell && mPresShell->GetDocument()) {
-        nsIDocument* doc = mPresShell->GetDocument();
-        doc->SetNeedStyleFlush();
-        doc->SetNeedLayoutFlush();
+      if (mPresShell) {
+        mPresShell->SetNeedStyleFlush();
+        mPresShell->SetNeedLayoutFlush();
       }
     }
   }
@@ -383,7 +380,7 @@ nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
   }
 
   nsCOMPtr<nsIPresShell> rootShell(mPresShell);
-  nsTArray<nsCOMPtr<nsIWidget> > widgets;
+  AutoTArray<nsCOMPtr<nsIWidget>, 1> widgets;
   aView->GetViewManager()->ProcessPendingUpdatesRecurse(aView, widgets);
   for (uint32_t i = 0; i < widgets.Length(); ++i) {
     nsView* view = nsView::GetViewFor(widgets[i]);
@@ -406,7 +403,6 @@ nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
     return; // presentation might have been torn down
   }
   if (aFlushDirtyRegion) {
-    GeckoProfilerTracingRAII tracer("Paint", "DisplayList");
     nsAutoScriptBlocker scriptBlocker;
     SetPainting(true);
     for (uint32_t i = 0; i < widgets.Length(); ++i) {
@@ -422,7 +418,7 @@ nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
 
 void
 nsViewManager::ProcessPendingUpdatesRecurse(nsView* aView,
-                                            nsTArray<nsCOMPtr<nsIWidget> >& aWidgets)
+                                            AutoTArray<nsCOMPtr<nsIWidget>, 1>& aWidgets)
 {
   if (mPresShell && mPresShell->IsNeverPainting()) {
     return;
@@ -997,18 +993,18 @@ bool nsViewManager::IsViewInserted(nsView *aView)
 {
   if (mRootView == aView) {
     return true;
-  } else if (aView->GetParent() == nullptr) {
-    return false;
-  } else {
-    nsView* view = aView->GetParent()->GetFirstChild();
-    while (view != nullptr) {
-      if (view == aView) {
-        return true;
-      }
-      view = view->GetNextSibling();
-    }
+  }
+  if (aView->GetParent() == nullptr) {
     return false;
   }
+  nsView* view = aView->GetParent()->GetFirstChild();
+  while (view != nullptr) {
+    if (view == aView) {
+      return true;
+    }
+    view = view->GetNextSibling();
+  }
+  return false;
 }
 
 void

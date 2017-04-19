@@ -167,10 +167,9 @@ add_task(async function test_updateClientMode() {
   do_check_false(scheduler.numClients > 1);
   do_check_false(scheduler.idle);
 
-  // Trigger a change in interval & threshold by adding a client.
-  clientsEngine._store.create(
-    { id: "foo", cleartext: { os: "mobile", version: "0.01", type: "desktop" } }
-  );
+  // Trigger a change in interval & threshold by noting there are multiple clients.
+  Svc.Prefs.set("clients.devices.desktop", 1);
+  Svc.Prefs.set("clients.devices.mobile", 1);
   scheduler.updateClientMode();
 
   do_check_eq(scheduler.syncThreshold, MULTI_DEVICE_THRESHOLD);
@@ -180,6 +179,7 @@ add_task(async function test_updateClientMode() {
 
   // Resets the number of clients to 0.
   clientsEngine.resetClient();
+  Svc.Prefs.reset("clients.devices.mobile");
   scheduler.updateClientMode();
 
   // Goes back to single user if # clients is 1.
@@ -193,6 +193,8 @@ add_task(async function test_updateClientMode() {
 });
 
 add_task(async function test_masterpassword_locked_retry_interval() {
+  enableValidationPrefs();
+
   _("Test Status.login = MASTER_PASSWORD_LOCKED results in reschedule at MASTER_PASSWORD interval");
   let loginFailed = false;
   Svc.Obs.add("weave:service:login:error", function onLoginError() {
@@ -252,6 +254,8 @@ add_task(async function test_calculateBackoff() {
 });
 
 add_task(async function test_scheduleNextSync_nowOrPast() {
+  enableValidationPrefs();
+
   let promiseObserved = promiseOneObserver("weave:service:sync:finish");
 
   let server = sync_httpd_setup();
@@ -264,6 +268,8 @@ add_task(async function test_scheduleNextSync_nowOrPast() {
 });
 
 add_task(async function test_scheduleNextSync_future_noBackoff() {
+  enableValidationPrefs();
+
   _("scheduleNextSync() uses the current syncInterval if no interval is provided.");
   // Test backoffInterval is 0 as expected.
   do_check_eq(Status.backoffInterval, 0);
@@ -313,6 +319,8 @@ add_task(async function test_scheduleNextSync_future_noBackoff() {
 });
 
 add_task(async function test_scheduleNextSync_future_backoff() {
+  enableValidationPrefs();
+
  _("scheduleNextSync() will honour backoff in all scheduling requests.");
   // Let's take a backoff interval that's bigger than the default sync interval.
   const BACKOFF = 7337;
@@ -363,6 +371,8 @@ add_task(async function test_scheduleNextSync_future_backoff() {
 });
 
 add_task(async function test_handleSyncError() {
+  enableValidationPrefs();
+
   let server = sync_httpd_setup();
   await setUp(server);
 
@@ -426,6 +436,8 @@ add_task(async function test_handleSyncError() {
 });
 
 add_task(async function test_client_sync_finish_updateClientMode() {
+  enableValidationPrefs();
+
   let server = sync_httpd_setup();
   await setUp(server);
 
@@ -465,6 +477,8 @@ add_task(async function test_client_sync_finish_updateClientMode() {
 });
 
 add_task(async function test_autoconnect_nextSync_past() {
+  enableValidationPrefs();
+
   let promiseObserved = promiseOneObserver("weave:service:sync:finish");
   // nextSync will be 0 by default, so it's way in the past.
 
@@ -477,6 +491,8 @@ add_task(async function test_autoconnect_nextSync_past() {
 });
 
 add_task(async function test_autoconnect_nextSync_future() {
+  enableValidationPrefs();
+
   let previousSync = Date.now() + scheduler.syncInterval / 2;
   scheduler.nextSync = previousSync;
   // nextSync rounds to the nearest second.
@@ -575,6 +591,8 @@ add_task(async function test_no_autoconnect_status_not_ok() {
 });
 
 add_task(async function test_autoconnectDelay_pref() {
+  enableValidationPrefs();
+
   let promiseObserved = promiseOneObserver("weave:service:sync:finish");
 
   Svc.Prefs.set("autoconnectDelay", 1);
@@ -602,9 +620,8 @@ add_task(async function test_idle_adjustSyncInterval() {
 
   // Multiple devices: switch to idle interval.
   scheduler.idle = false;
-  clientsEngine._store.create(
-    { id: "foo", cleartext: { os: "mobile", version: "0.01", type: "desktop" } }
-  );
+  Svc.Prefs.set("clients.devices.desktop", 1);
+  Svc.Prefs.set("clients.devices.mobile", 1);
   scheduler.updateClientMode();
   scheduler.observe(null, "idle", Svc.Prefs.get("scheduler.idleTime"));
   do_check_eq(scheduler.idle, true);
@@ -619,7 +636,8 @@ add_task(async function test_back_triggersSync() {
   do_check_eq(Status.backoffInterval, 0);
 
   // Set up: Define 2 clients and put the system in idle.
-  scheduler.numClients = 2;
+  Svc.Prefs.set("clients.devices.desktop", 1);
+  Svc.Prefs.set("clients.devices.mobile", 1);
   scheduler.observe(null, "idle", Svc.Prefs.get("scheduler.idleTime"));
   do_check_true(scheduler.idle);
 
@@ -640,7 +658,8 @@ add_task(async function test_active_triggersSync_observesBackoff() {
   // Set up: Set backoff, define 2 clients and put the system in idle.
   const BACKOFF = 7337;
   Status.backoffInterval = scheduler.idleInterval + BACKOFF;
-  scheduler.numClients = 2;
+  Svc.Prefs.set("clients.devices.desktop", 1);
+  Svc.Prefs.set("clients.devices.mobile", 1);
   scheduler.observe(null, "idle", Svc.Prefs.get("scheduler.idleTime"));
   do_check_eq(scheduler.idle, true);
 
@@ -669,7 +688,8 @@ add_task(async function test_back_debouncing() {
   do_check_eq(scheduler.idle, false);
 
   // Set up: Define 2 clients and put the system in idle.
-  scheduler.numClients = 2;
+  Svc.Prefs.set("clients.devices.desktop", 1);
+  Svc.Prefs.set("clients.devices.mobile", 1);
   scheduler.observe(null, "idle", Svc.Prefs.get("scheduler.idleTime"));
   do_check_eq(scheduler.idle, true);
 
@@ -688,6 +708,8 @@ add_task(async function test_back_debouncing() {
 });
 
 add_task(async function test_no_sync_node() {
+  enableValidationPrefs();
+
   // Test when Status.sync == NO_SYNC_NODE_FOUND
   // it is not overwritten on sync:finish
   let server = sync_httpd_setup();
@@ -708,6 +730,8 @@ add_task(async function test_no_sync_node() {
 });
 
 add_task(async function test_sync_failed_partial_500s() {
+  enableValidationPrefs();
+
   _("Test a 5xx status calls handleSyncError.");
   scheduler._syncErrors = MAX_ERROR_COUNT_BEFORE_BACKOFF;
   let server = sync_httpd_setup();
@@ -735,6 +759,8 @@ add_task(async function test_sync_failed_partial_500s() {
 });
 
 add_task(async function test_sync_failed_partial_400s() {
+  enableValidationPrefs();
+
   _("Test a non-5xx status doesn't call handleSyncError.");
   scheduler._syncErrors = MAX_ERROR_COUNT_BEFORE_BACKOFF;
   let server = sync_httpd_setup();
@@ -767,6 +793,8 @@ add_task(async function test_sync_failed_partial_400s() {
 });
 
 add_task(async function test_sync_X_Weave_Backoff() {
+  enableValidationPrefs();
+
   let server = sync_httpd_setup();
   await setUp(server);
 
@@ -811,9 +839,9 @@ add_task(async function test_sync_X_Weave_Backoff() {
   Service.sync();
 
   do_check_true(Status.backoffInterval >= BACKOFF * 1000);
-  // Allowing 3 seconds worth of of leeway between when Status.minimumNextSync
+  // Allowing 20 seconds worth of of leeway between when Status.minimumNextSync
   // was set and when this line gets executed.
-  let minimumExpectedDelay = (BACKOFF - 3) * 1000;
+  let minimumExpectedDelay = (BACKOFF - 20) * 1000;
   do_check_true(Status.minimumNextSync >= Date.now() + minimumExpectedDelay);
 
   // Verify that the next sync is actually going to wait that long.
@@ -824,6 +852,8 @@ add_task(async function test_sync_X_Weave_Backoff() {
 });
 
 add_task(async function test_sync_503_Retry_After() {
+  enableValidationPrefs();
+
   let server = sync_httpd_setup();
   await setUp(server);
 

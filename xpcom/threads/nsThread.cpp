@@ -28,6 +28,7 @@
 #include "mozilla/IOInterposer.h"
 #include "mozilla/ipc/MessageChannel.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/Services.h"
 #include "nsXPCOMPrivate.h"
 #include "mozilla/ChaosMode.h"
@@ -324,7 +325,8 @@ struct nsThreadShutdownContext
 
   // NB: This will be the last reference.
   NotNull<RefPtr<nsThread>> mTerminatingThread;
-  NotNull<nsThread*> mJoiningThread;
+  NotNull<nsThread*> MOZ_UNSAFE_REF("Thread manager is holding reference to joining thread")
+    mJoiningThread;
   bool mAwaitingShutdownAck;
 };
 
@@ -459,16 +461,21 @@ nsThread::ThreadFunc(void* aArg)
   self->mThread = PR_GetCurrentThread();
   SetupCurrentThreadForChaosMode();
 
-  if (initData->name.Length() > 0) {
+  if (!initData->name.IsEmpty()) {
     PR_SetCurrentThreadName(initData->name.BeginReading());
-
-    profiler_register_thread(initData->name.BeginReading(), &stackTop);
   }
 
   // Inform the ThreadManager
   nsThreadManager::get().RegisterCurrentThread(*self);
 
   mozilla::IOInterposer::RegisterCurrentThread();
+
+  // This must come after the call to nsThreadManager::RegisterCurrentThread(),
+  // because that call is needed to properly set up this thread as an nsThread,
+  // which profiler_register_thread() requires. See bug 1347007.
+  if (!initData->name.IsEmpty()) {
+    profiler_register_thread(initData->name.BeginReading(), &stackTop);
+  }
 
   // Wait for and process startup event
   nsCOMPtr<nsIRunnable> event;
@@ -1110,7 +1117,7 @@ void canary_alarm_handler(int signum)
 #endif
 
 #define NOTIFY_EVENT_OBSERVERS(func_, params_)                                 \
-  PR_BEGIN_MACRO                                                               \
+  do {                                                                         \
     if (!mEventObservers.IsEmpty()) {                                          \
       nsAutoTObserverArray<NotNull<nsCOMPtr<nsIThreadObserver>>, 2>::ForwardIterator \
         iter_(mEventObservers);                                                \
@@ -1120,7 +1127,7 @@ void canary_alarm_handler(int signum)
         obs_ -> func_ params_ ;                                                \
       }                                                                        \
     }                                                                          \
-  PR_END_MACRO
+  } while(0)
 
 void
 nsThread::GetIdleEvent(nsIRunnable** aEvent, MutexAutoLock& aProofOfLock)
@@ -1196,8 +1203,10 @@ nsThread::ProcessNextEvent(bool aMayWait, bool* aResult)
   // and repeat the nested event loop since its state change hasn't happened yet.
   bool reallyWait = aMayWait && (mNestedEventLoopDepth > 0 || !ShuttingDown());
 
+  Maybe<SchedulerGroup::AutoProcessEvent> ape;
   if (mIsMainThread == MAIN_THREAD) {
     DoMainThreadSpecificProcessing(reallyWait);
+    ape.emplace();
   }
 
   ++mNestedEventLoopDepth;
@@ -1490,15 +1499,12 @@ nsThread::DoMainThreadSpecificProcessing(bool aReallyWait)
     if (mpPending != MemPressure_None) {
       nsCOMPtr<nsIObserverService> os = services::GetObserverService();
 
-      // Use no-forward to prevent the notifications from being transferred to
-      // the children of this process.
-      NS_NAMED_LITERAL_STRING(lowMem, "low-memory-no-forward");
-      NS_NAMED_LITERAL_STRING(lowMemOngoing, "low-memory-ongoing-no-forward");
-
       if (os) {
+        // Use no-forward to prevent the notifications from being transferred to
+        // the children of this process.
         os->NotifyObservers(nullptr, "memory-pressure",
-                            mpPending == MemPressure_New ? lowMem.get() :
-                            lowMemOngoing.get());
+                            mpPending == MemPressure_New ? u"low-memory-no-forward" :
+                            u"low-memory-ongoing-no-forward");
       } else {
         NS_WARNING("Can't get observer service!");
       }

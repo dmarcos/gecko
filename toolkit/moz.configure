@@ -117,12 +117,12 @@ set_config('L10NBASEDIR', l10n_base)
 # `choices` depending on the target, but that doesn't pan out for the same
 # reason.
 option('--enable-default-toolkit', nargs=1,
-       choices=('cairo-windows', 'cairo-gtk3', 'cairo-cocoa', 'cairo-uikit',
-                'cairo-android', 'cairo-gonk'),
+       choices=('cairo-windows', 'cairo-gtk3', 'cairo-gtk3-wayland',
+                'cairo-cocoa', 'cairo-uikit', 'cairo-android', 'cairo-gonk'),
        help='Select default toolkit')
 
-@depends('--enable-default-toolkit', target)
-def toolkit(value, target):
+@depends('--enable-default-toolkit', target, '--help')
+def toolkit(value, target, _):
     # Define possible choices for each platform. The default is the first one
     # listed when there are several.
     os = target.os
@@ -140,7 +140,7 @@ def toolkit(value, target):
         else:
             platform_choices = ('cairo-android',)
     else:
-        platform_choices = ('cairo-gtk3',)
+        platform_choices = ('cairo-gtk3', 'cairo-gtk3-wayland')
 
     if value:
         if value[0] not in platform_choices:
@@ -150,11 +150,16 @@ def toolkit(value, target):
 
     return platform_choices[0]
 
+@depends(toolkit)
+def wayland(toolkit):
+    return toolkit == 'cairo-gtk3-wayland'
 
 @depends(toolkit)
 def toolkit(toolkit):
     if toolkit == 'cairo-gtk2-x11':
         widget_toolkit = 'gtk2'
+    elif toolkit == 'cairo-gtk3-wayland' :
+        widget_toolkit = 'gtk3'
     else:
         widget_toolkit = toolkit.replace('cairo-', '')
     return widget_toolkit
@@ -198,6 +203,14 @@ set_define('MOZ_ENABLE_XREMOTE', x11)
 set_config('MOZ_X11', x11)
 set_define('MOZ_X11', x11)
 add_old_configure_assignment('MOZ_X11', x11)
+
+# Wayland support
+# ==============================================================
+wayland_headers = pkg_check_modules('MOZ_WAYLAND', 'gtk+-wayland-3.0 >= 3.22',
+                                    when=wayland)
+
+set_config('MOZ_WAYLAND', depends_if(wayland_headers)(lambda _: True))
+set_define('MOZ_WAYLAND', depends_if(wayland_headers)(lambda _: True))
 
 # GL Provider
 # ==============================================================
@@ -574,7 +587,7 @@ option('--enable-stylo', env='STYLO_ENABLED', nargs=0,
 # configure options.  The Windows installer of LLVM/Clang doesn't provide
 # llvm-config, so we need both methods to support all of our tier-1
 # platforms.
-llvm_config = check_prog('LLVM_CONFIG', ('llvm-config',),
+llvm_config = check_prog('LLVM_CONFIG', ('llvm-config-3.9', 'llvm-config',),
                          what='llvm-config', allow_missing=True)
 
 option('--disable-stylo-build-bindgen',
@@ -670,9 +683,11 @@ set_config('MOZ_LIBCLANG_PATH', delayed_getattr(stylo, 'libclang_path'))
 set_config('MOZ_CLANG_PATH', delayed_getattr(stylo, 'clang_path'))
 set_config('MOZ_STYLO_BINDGEN', delayed_getattr(stylo, 'bindgen_enabled'))
 
-@depends(stylo, dmd)
-def jemalloc(stylo, dmd):
-    if stylo:
+@depends(stylo, target, dmd)
+def jemalloc(stylo, target, dmd):
+    if stylo and target.kernel in ('Darwin', 'Linux', 'WINNT'):
+        # Avoid a moving performance target if the default allocator
+        # is changed on Tier1 platforms (see bug 1291356).
         return 'moz'
     elif dmd:
         return True
@@ -690,20 +705,35 @@ def servo_target_dir(value):
 
 set_config('SERVO_TARGET_DIR', servo_target_dir)
 
-# Gecko integrated IPC fuzzer
-# ==============================================================
-option('--enable-ipc-fuzzer', env='MOZ_FAULTY',
-       help='Enable IPC fuzzer')
+# WebRender integration
+option('--enable-webrender', nargs='?', choices=('build',),
+       help='Include WebRender in the build and/or enable it at runtime')
 
-@depends('--enable-ipc-fuzzer', target)
-def ipc_fuzzer(value, target):
-    if value:
-        if target.os == 'WINNT':
-            die('--enable-ipc-fuzzer is not supported on this platform.')
-        return bool(value)
+@depends('--enable-webrender', milestone)
+def webrender(value, milestone):
+    build_webrender = None
+    enable_webrender = None
 
-set_config('MOZ_FAULTY', ipc_fuzzer)
-set_define('MOZ_FAULTY', ipc_fuzzer)
+    if value.origin == 'default':
+        # if nothing is specified, default to just building on Nightly
+        build_webrender = milestone.is_nightly
+    elif value == 'build':
+        # if explicitly set to 'build', then we build but don't enable
+        build_webrender = True
+    elif bool(value):
+        # if set to true, then build and enable
+        build_webrender = True
+        enable_webrender = True
+
+    # in all other cases, don't build it or enable it (defaults are fine)
+    return namespace(
+        build = build_webrender,
+        enable = enable_webrender,
+    )
+
+set_config('MOZ_BUILD_WEBRENDER', delayed_getattr(webrender, 'build'))
+set_define('MOZ_BUILD_WEBRENDER', delayed_getattr(webrender, 'build'))
+set_config('MOZ_ENABLE_WEBRENDER', delayed_getattr(webrender, 'enable'))
 
 # Printing
 # ==============================================================
@@ -796,13 +826,14 @@ include('nss.configure')
 
 # Network protocol support
 # ==============================================================
-@depends(check_build_environment, '--help')
+@depends(check_build_environment, toolkit_gtk, '--help')
 @imports('os')
 @imports(_from='__builtin__', _import='sorted')
-def all_necko_protocols(build_env, _):
+def all_necko_protocols(build_env, toolkit_gtk, _):
     basedir = os.path.join(build_env.topsrcdir, 'netwerk', 'protocol')
     return tuple(sorted(p for p in os.listdir(basedir)
-                        if os.path.isdir(os.path.join(basedir, p))))
+                        if (os.path.isdir(os.path.join(basedir, p)) and
+                            (p != 'gio' or toolkit_gtk))))
 
 default_necko_protocols = all_necko_protocols
 

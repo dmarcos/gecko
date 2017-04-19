@@ -7,6 +7,8 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Printf.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Unused.h"
 
 #include "mozilla/net/CookieServiceChild.h"
@@ -121,13 +123,15 @@ static const char kPrefThirdPartySession[]    = "network.cookie.thirdparty.sessi
 static const char kCookieLeaveSecurityAlone[] = "network.cookie.leave-secure-alone";
 
 // For telemetry COOKIE_LEAVE_SECURE_ALONE
-#define BLOCKED_SECURE_SET_FROM_HTTP 0
-#define BLOCKED_DOWNGRADE_SECURE     1
-#define DOWNGRADE_SECURE_FROM_SECURE 2
-#define EVICTED_NEWER_INSECURE       3
-#define EVICTED_OLDEST_COOKIE        4
-#define EVICTED_PREFERRED_COOKIE     5
-#define EVICTING_SECURE_BLOCKED      6
+#define BLOCKED_SECURE_SET_FROM_HTTP          0
+#define BLOCKED_DOWNGRADE_SECURE_INEXACT      1
+#define DOWNGRADE_SECURE_FROM_SECURE_INEXACT  2
+#define EVICTED_NEWER_INSECURE                3
+#define EVICTED_OLDEST_COOKIE                 4
+#define EVICTED_PREFERRED_COOKIE              5
+#define EVICTING_SECURE_BLOCKED               6
+#define BLOCKED_DOWNGRADE_SECURE_EXACT        7
+#define DOWNGRADE_SECURE_FROM_SECURE_EXACT    8
 
 static void
 bindCookieParameters(mozIStorageBindingParamsArray *aParamsArray,
@@ -269,6 +273,11 @@ LogCookie(nsCookie *aCookie)
 
     MOZ_LOG(gCookieLog, LogLevel::Debug,("is secure: %s\n", aCookie->IsSecure() ? "true" : "false"));
     MOZ_LOG(gCookieLog, LogLevel::Debug,("is httpOnly: %s\n", aCookie->IsHttpOnly() ? "true" : "false"));
+
+    nsAutoCString suffix;
+    aCookie->OriginAttributesRef().CreateSuffix(suffix);
+    MOZ_LOG(gCookieLog, LogLevel::Debug,("origin attributes: %s\n",
+            suffix.IsEmpty() ? "{empty}" : suffix.get()));
   }
 }
 
@@ -325,10 +334,10 @@ LogSuccess(bool aSetCookie, nsIURI *aHostURI, const nsAFlatCString &aCookieStrin
   PR_BEGIN_MACRO                                                             \
   nsresult __rv = res; /* Do not evaluate |res| more than once! */           \
   if (NS_FAILED(__rv)) {                                                     \
-    char *msg = PR_smprintf("NS_ASSERT_SUCCESS(%s) failed with result 0x%X", \
-                            #res, __rv);                                     \
+    char *msg = mozilla::Smprintf("NS_ASSERT_SUCCESS(%s) failed with result 0x%" PRIX32, \
+                           #res, static_cast<uint32_t>(__rv));               \
     NS_ASSERTION(NS_SUCCEEDED(__rv), msg);                                   \
-    PR_smprintf_free(msg);                                                   \
+    mozilla::SmprintfFree(msg);                                                    \
   }                                                                          \
   PR_END_MACRO
 #else
@@ -1742,7 +1751,7 @@ void
 nsCookieService::HandleDBClosed(DBState* aDBState)
 {
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("HandleDBClosed(): DBState %x closed", aDBState));
+    ("HandleDBClosed(): DBState %p closed", aDBState));
 
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
 
@@ -1770,8 +1779,9 @@ nsCookieService::HandleDBClosed(DBState* aDBState)
       NS_LITERAL_CSTRING(COOKIES_FILE ".bak-rebuild"));
 
     COOKIE_LOGSTRING(LogLevel::Warning,
-      ("HandleDBClosed(): DBState %x encountered error rebuilding db; move to "
-       "'cookies.sqlite.bak-rebuild' gave rv 0x%x", aDBState, rv));
+      ("HandleDBClosed(): DBState %p encountered error rebuilding db; move to "
+       "'cookies.sqlite.bak-rebuild' gave rv 0x%" PRIx32,
+       aDBState, static_cast<uint32_t>(rv)));
     if (os) {
       os->NotifyObservers(nullptr, "cookie-db-closed", nullptr);
     }
@@ -1787,12 +1797,12 @@ nsCookieService::HandleCorruptDB(DBState* aDBState)
     // We've either closed the state or we've switched profiles. It's getting
     // a bit late to rebuild -- bail instead.
     COOKIE_LOGSTRING(LogLevel::Warning,
-      ("HandleCorruptDB(): DBState %x is already closed, aborting", aDBState));
+      ("HandleCorruptDB(): DBState %p is already closed, aborting", aDBState));
     return;
   }
 
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("HandleCorruptDB(): DBState %x has corruptFlag %u", aDBState,
+    ("HandleCorruptDB(): DBState %p has corruptFlag %u", aDBState,
       aDBState->corruptFlag));
 
   // Mark the database corrupt, so the close listener can begin reconstructing
@@ -1852,7 +1862,7 @@ nsCookieService::RebuildCorruptDB(DBState* aDBState)
     // on rebuild completion to notify of the db closure, which won't happen --
     // do so now.
     COOKIE_LOGSTRING(LogLevel::Warning,
-      ("RebuildCorruptDB(): DBState %x is stale, aborting", aDBState));
+      ("RebuildCorruptDB(): DBState %p is stale, aborting", aDBState));
     if (os) {
       os->NotifyObservers(nullptr, "cookie-db-closed", nullptr);
     }
@@ -2329,7 +2339,7 @@ nsCookieService::RemoveAll()
     } else {
       // Recreate the database.
       COOKIE_LOGSTRING(LogLevel::Debug,
-        ("RemoveAll(): corruption detected with rv 0x%x", rv));
+                       ("RemoveAll(): corruption detected with rv 0x%" PRIx32, static_cast<uint32_t>(rv)));
       HandleCorruptDB(mDefaultDBState);
     }
   }
@@ -2721,7 +2731,7 @@ nsCookieService::AsyncReadComplete()
   mDefaultDBState->hostArray.Clear();
   mDefaultDBState->readSet.Clear();
 
-  COOKIE_LOGSTRING(LogLevel::Debug, ("Read(): %ld cookies read",
+  COOKIE_LOGSTRING(LogLevel::Debug, ("Read(): %" PRIu32 " cookies read",
                                   mDefaultDBState->cookieCount));
 
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
@@ -2796,7 +2806,7 @@ nsCookieService::EnsureReadDomain(const nsCookieKey &aKey)
       // Recreate the database.
       COOKIE_LOGSTRING(LogLevel::Debug,
         ("EnsureReadDomain(): corruption detected when creating statement "
-         "with rv 0x%x", rv));
+         "with rv 0x%" PRIx32, static_cast<uint32_t>(rv)));
       HandleCorruptDB(mDefaultDBState);
       return;
     }
@@ -2825,7 +2835,7 @@ nsCookieService::EnsureReadDomain(const nsCookieKey &aKey)
       // Recreate the database.
       COOKIE_LOGSTRING(LogLevel::Debug,
         ("EnsureReadDomain(): corruption detected when reading result "
-         "with rv 0x%x", rv));
+         "with rv 0x%" PRIx32, static_cast<uint32_t>(rv)));
       HandleCorruptDB(mDefaultDBState);
       return;
     }
@@ -2847,7 +2857,7 @@ nsCookieService::EnsureReadDomain(const nsCookieKey &aKey)
   mDefaultDBState->readSet.PutEntry(aKey);
 
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("EnsureReadDomain(): %ld cookies read for base domain %s, "
+    ("EnsureReadDomain(): %" PRIuSIZE " cookies read for base domain %s, "
      " originAttributes = %s", array.Length(), aKey.mBaseDomain.get(),
      suffix.get()));
 }
@@ -2888,7 +2898,7 @@ nsCookieService::EnsureReadComplete()
     // Recreate the database.
     COOKIE_LOGSTRING(LogLevel::Debug,
       ("EnsureReadComplete(): corruption detected when creating statement "
-       "with rv 0x%x", rv));
+       "with rv 0x%" PRIx32, static_cast<uint32_t>(rv)));
     HandleCorruptDB(mDefaultDBState);
     return;
   }
@@ -2902,7 +2912,7 @@ nsCookieService::EnsureReadComplete()
       // Recreate the database.
       COOKIE_LOGSTRING(LogLevel::Debug,
         ("EnsureReadComplete(): corruption detected when reading result "
-         "with rv 0x%x", rv));
+         "with rv 0x%" PRIx32, static_cast<uint32_t>(rv)));
       HandleCorruptDB(mDefaultDBState);
       return;
     }
@@ -2941,7 +2951,7 @@ nsCookieService::EnsureReadComplete()
   mDefaultDBState->readSet.Clear();
 
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("EnsureReadComplete(): %ld cookies read", array.Length()));
+    ("EnsureReadComplete(): %" PRIuSIZE " cookies read", array.Length()));
 }
 
 NS_IMETHODIMP
@@ -3114,7 +3124,7 @@ nsCookieService::ImportCookies(nsIFile *aCookieFile)
   }
 
 
-  COOKIE_LOGSTRING(LogLevel::Debug, ("ImportCookies(): %ld cookies imported",
+  COOKIE_LOGSTRING(LogLevel::Debug, ("ImportCookies(): %" PRIu32 " cookies imported",
     mDefaultDBState->cookieCount));
 
   return NS_OK;
@@ -3556,6 +3566,9 @@ nsCookieService::AddInternal(const nsCookieKey             &aKey,
   }
   nsListIter exactIter;
   bool foundCookie = false;
+  foundCookie = FindCookie(aKey, aCookie->Host(),
+                           aCookie->Name(), aCookie->Path(), exactIter);
+  bool foundSecureExact = foundCookie && exactIter.Cookie()->IsSecure();
   if (mLeaveSecureAlone) {
     // Step1, call FindSecureCookie(). FindSecureCookie() would
     // find the existing cookie with the security flag and has
@@ -3567,25 +3580,31 @@ nsCookieService::AddInternal(const nsCookieKey             &aKey,
     // of the "request-uri" does not denote a "secure" protocol,
     // then ignore the new cookie.
     // (draft-ietf-httpbis-cookie-alone section 3.2)
-    foundCookie = FindSecureCookie(aKey, aCookie);
-    if (foundCookie && !aCookie->IsSecure()) {
+    if (!aCookie->IsSecure()
+         && (foundSecureExact || FindSecureCookie(aKey, aCookie))) {
       if (!isSecure) {
         COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, aCookieHeader,
-           "cookie can't save because older cookie is secure cookie but newer cookie is non-secure cookie");
-        Telemetry::Accumulate(Telemetry::COOKIE_LEAVE_SECURE_ALONE,
-                              BLOCKED_DOWNGRADE_SECURE);
+          "cookie can't save because older cookie is secure cookie but newer cookie is non-secure cookie");
+        if (foundSecureExact) {
+          Telemetry::Accumulate(Telemetry::COOKIE_LEAVE_SECURE_ALONE,
+                                BLOCKED_DOWNGRADE_SECURE_EXACT);
+        } else {
+          Telemetry::Accumulate(Telemetry::COOKIE_LEAVE_SECURE_ALONE,
+                                BLOCKED_DOWNGRADE_SECURE_INEXACT);
+        }
         return;
-      } else {
-        // A secure site is allowed to downgrade a secure cookie
-        // but we want to measure anyway
+      }
+      // A secure site is allowed to downgrade a secure cookie
+      // but we want to measure anyway.
+      if (foundSecureExact) {
         Telemetry::Accumulate(Telemetry::COOKIE_LEAVE_SECURE_ALONE,
-                              DOWNGRADE_SECURE_FROM_SECURE);
+                              DOWNGRADE_SECURE_FROM_SECURE_EXACT);
+      } else {
+        Telemetry::Accumulate(Telemetry::COOKIE_LEAVE_SECURE_ALONE,
+                              DOWNGRADE_SECURE_FROM_SECURE_INEXACT);
       }
     }
   }
-
-  foundCookie = FindCookie(aKey, aCookie->Host(),
-                           aCookie->Name(), aCookie->Path(), exactIter);
 
   RefPtr<nsCookie> oldCookie;
   nsCOMPtr<nsIArray> purgedList;
@@ -4426,7 +4445,7 @@ nsCookieService::PurgeCookies(int64_t aCurrentTimeInUsec)
 
   uint32_t initialCookieCount = mDBState->cookieCount;
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("PurgeCookies(): beginning purge with %ld cookies and %lld oldest age",
+    ("PurgeCookies(): beginning purge with %" PRIu32 " cookies and %" PRId64 " oldest age",
      mDBState->cookieCount, aCurrentTimeInUsec - mDBState->cookieOldestTime));
 
   typedef nsTArray<nsListIter> PurgeList;
@@ -4522,7 +4541,8 @@ nsCookieService::PurgeCookies(int64_t aCurrentTimeInUsec)
   mDBState->cookieOldestTime = oldestTime;
 
   COOKIE_LOGSTRING(LogLevel::Debug,
-    ("PurgeCookies(): %ld expired; %ld purged; %ld remain; %lld oldest age",
+    ("PurgeCookies(): %" PRIu32 " expired; %" PRIu32 " purged; %" PRIu32
+     " remain; %" PRId64 " oldest age",
      initialCookieCount - postExpiryCookieCount,
      postExpiryCookieCount - mDBState->cookieCount,
      mDBState->cookieCount,
@@ -4609,17 +4629,9 @@ nsCookieService::FindStaleCookie(nsCookieEntry *aEntry,
 
   const nsCookieEntry::ArrayType &cookies = aEntry->GetCookies();
 
-  int64_t oldestNonMatchingSessionCookieTime = 0;
-  nsListIter oldestNonMatchingSessionCookie;
-  oldestNonMatchingSessionCookie.entry = nullptr;
-
-  int64_t oldestSessionCookieTime = 0;
-  nsListIter oldestSessionCookie;
-  oldestSessionCookie.entry = nullptr;
-
-  int64_t oldestNonMatchingNonSessionCookieTime = 0;
-  nsListIter oldestNonMatchingNonSessionCookie;
-  oldestNonMatchingNonSessionCookie.entry = nullptr;
+  int64_t oldestNonMatchingCookieTime = 0;
+  nsListIter oldestNonMatchingCookie;
+  oldestNonMatchingCookie.entry = nullptr;
 
   int64_t oldestCookieTime = 0;
   nsListIter oldestCookie;
@@ -4652,11 +4664,6 @@ nsCookieService::FindStaleCookie(nsCookieEntry *aEntry,
       }
     }
 
-    // Update our various records of oldest cookies fitting several restrictions:
-    // * session cookies
-    // * non-session cookies
-    // * cookies with paths and domains that don't match the cookie triggering this purge
-
     // This cookie is a candidate for eviction if we have no information about
     // the source request, or if it is not a path or domain match against the
     // source request.
@@ -4665,26 +4672,12 @@ nsCookieService::FindStaleCookie(nsCookieEntry *aEntry,
       isPrimaryEvictionCandidate = !PathMatches(cookie, sourcePath) || !DomainMatches(cookie, sourceHost);
     }
 
-    if (cookie->IsSession()) {
-      if (!oldestSessionCookie.entry || oldestSessionCookieTime > lastAccessed) {
-        oldestSessionCookieTime = lastAccessed;
-        oldestSessionCookie.entry = aEntry;
-        oldestSessionCookie.index = i;
-      }
-
-      if (isPrimaryEvictionCandidate &&
-          (!oldestNonMatchingSessionCookie.entry ||
-           oldestNonMatchingSessionCookieTime > lastAccessed)) {
-        oldestNonMatchingSessionCookieTime = lastAccessed;
-        oldestNonMatchingSessionCookie.entry = aEntry;
-        oldestNonMatchingSessionCookie.index = i;
-      }
-    } else if (isPrimaryEvictionCandidate &&
-               (!oldestNonMatchingNonSessionCookie.entry ||
-                oldestNonMatchingNonSessionCookieTime > lastAccessed)) {
-      oldestNonMatchingNonSessionCookieTime = lastAccessed;
-      oldestNonMatchingNonSessionCookie.entry = aEntry;
-      oldestNonMatchingNonSessionCookie.index = i;
+    if (isPrimaryEvictionCandidate &&
+        (!oldestNonMatchingCookie.entry ||
+         oldestNonMatchingCookieTime > lastAccessed)) {
+      oldestNonMatchingCookieTime = lastAccessed;
+      oldestNonMatchingCookie.entry = aEntry;
+      oldestNonMatchingCookie.index = i;
     }
 
     // Check if we've found the oldest cookie so far.
@@ -4695,16 +4688,10 @@ nsCookieService::FindStaleCookie(nsCookieEntry *aEntry,
     }
   }
 
-  // Prefer to evict the oldest session cookies with a non-matching path/domain,
-  // followed by the oldest session cookie with a matching path/domain,
-  // followed by the oldest non-session cookie with a non-matching path/domain,
-  // resorting to the oldest non-session cookie with a matching path/domain.
-  if (oldestNonMatchingSessionCookie.entry) {
-    aIter = oldestNonMatchingSessionCookie;
-  } else if (oldestSessionCookie.entry) {
-    aIter = oldestSessionCookie;
-  } else if (oldestNonMatchingNonSessionCookie.entry) {
-    aIter = oldestNonMatchingNonSessionCookie;
+  // Prefer to evict the oldest cookie with a non-matching path/domain,
+  // followed by the oldest matching cookie.
+  if (oldestNonMatchingCookie.entry) {
+    aIter = oldestNonMatchingCookie;
   } else {
     aIter = oldestCookie;
   }

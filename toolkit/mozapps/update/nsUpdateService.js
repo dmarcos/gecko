@@ -27,8 +27,13 @@ const PREF_APP_UPDATE_BACKGROUNDMAXERRORS  = "app.update.backgroundMaxErrors";
 const PREF_APP_UPDATE_CANCELATIONS         = "app.update.cancelations";
 const PREF_APP_UPDATE_CANCELATIONS_OSX     = "app.update.cancelations.osx";
 const PREF_APP_UPDATE_CANCELATIONS_OSX_MAX = "app.update.cancelations.osx.max";
+const PREF_APP_UPDATE_DOORHANGER           = "app.update.doorhanger";
+const PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS    = "app.update.download.attempts";
+const PREF_APP_UPDATE_DOWNLOAD_MAXATTEMPTS = "app.update.download.maxAttempts";
 const PREF_APP_UPDATE_ELEVATE_NEVER        = "app.update.elevate.never";
 const PREF_APP_UPDATE_ELEVATE_VERSION      = "app.update.elevate.version";
+const PREF_APP_UPDATE_ELEVATE_ATTEMPTS     = "app.update.elevate.attempts";
+const PREF_APP_UPDATE_ELEVATE_MAXATTEMPTS  = "app.update.elevate.maxAttempts";
 const PREF_APP_UPDATE_ENABLED              = "app.update.enabled";
 const PREF_APP_UPDATE_IDLETIME             = "app.update.idletime";
 const PREF_APP_UPDATE_LOG                  = "app.update.log";
@@ -1190,6 +1195,23 @@ function handleUpdateFailure(update, errorCode) {
   }
 
   if (update.errorCode == ELEVATION_CANCELED) {
+    if (getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false)) {
+      let elevationAttempts = getPref("getIntPref", PREF_APP_UPDATE_ELEVATE_ATTEMPTS, 0);
+      elevationAttempts++;
+      Services.prefs.setIntPref(PREF_APP_UPDATE_ELEVATE_ATTEMPTS, elevationAttempts);
+      let maxAttempts = Math.min(getPref("getIntPref", PREF_APP_UPDATE_ELEVATE_MAXATTEMPTS, 2), 10);
+
+      if (elevationAttempts > maxAttempts) {
+        LOG("handleUpdateFailure - notifying observers of error. " +
+            "topic: update-error, status: elevation-attempts-exceeded");
+        Services.obs.notifyObservers(update, "update-error", "elevation-attempts-exceeded");
+      } else {
+        LOG("handleUpdateFailure - notifying observers of error. " +
+            "topic: update-error, status: elevation-attempt-failed");
+        Services.obs.notifyObservers(update, "update-error", "elevation-attempt-failed");
+      }
+    }
+
     let cancelations = getPref("getIntPref", PREF_APP_UPDATE_CANCELATIONS, 0);
     cancelations++;
     Services.prefs.setIntPref(PREF_APP_UPDATE_CANCELATIONS, cancelations);
@@ -1285,7 +1307,11 @@ function handleFallbackToCompleteUpdate(update, postStaging) {
       cleanupActiveUpdate();
   } else {
     LOG("handleFallbackToCompleteUpdate - install of complete or " +
-        "only one patch offered failed.");
+        "only one patch offered failed. Notifying observers. topic: " +
+        "update-error, status: unknown, " +
+        "update.patchCount: " + update.patchCount +
+        "oldType: " + oldType);
+    Services.obs.notifyObservers(update, "update-error", "unknown");
   }
   update.QueryInterface(Ci.nsIWritablePropertyBag);
   update.setProperty("patchingFailed", oldType);
@@ -1802,13 +1828,13 @@ const UpdateServiceFactory = {
  */
 function UpdateService() {
   LOG("Creating UpdateService");
-  Services.obs.addObserver(this, "xpcom-shutdown", false);
-  Services.prefs.addObserver(PREF_APP_UPDATE_LOG, this, false);
+  Services.obs.addObserver(this, "xpcom-shutdown");
+  Services.prefs.addObserver(PREF_APP_UPDATE_LOG, this);
   if (AppConstants.platform == "gonk") {
     // PowerManagerService::SyncProfile (which is called for Reboot, PowerOff
     // and Restart) sends the profile-change-net-teardown event. We can then
     // pause the download in a similar manner to xpcom-shutdown.
-    Services.obs.addObserver(this, "profile-change-net-teardown", false);
+    Services.obs.addObserver(this, "profile-change-net-teardown");
   }
 }
 
@@ -1867,8 +1893,7 @@ UpdateService.prototype = {
           // Delay post-update processing to ensure that possible update
           // dialogs are shown in front of the app window, if possible.
           // See bug 311614.
-          Services.obs.addObserver(this, APPID_TO_TOPIC[Services.appinfo.ID],
-                                   false);
+          Services.obs.addObserver(this, APPID_TO_TOPIC[Services.appinfo.ID]);
           break;
         }
         // intentional fallthrough
@@ -2078,6 +2103,8 @@ UpdateService.prototype = {
 
       // Done with this update. Clean it up.
       cleanupActiveUpdate();
+
+      Services.prefs.setIntPref(PREF_APP_UPDATE_ELEVATE_ATTEMPTS, 0);
     } else if (status == STATE_PENDING_ELEVATE) {
       let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
                      createInstance(Ci.nsIUpdatePrompt);
@@ -2113,7 +2140,7 @@ UpdateService.prototype = {
     LOG("UpdateService:_registerOnlineObserver - waiting for the network to " +
         "be online, then forcing another check");
 
-    Services.obs.addObserver(this, "network:offline-status-changed", false);
+    Services.obs.addObserver(this, "network:offline-status-changed");
     this._registeredOnlineObserver = true;
   },
 
@@ -2164,9 +2191,15 @@ UpdateService.prototype = {
     if (errCount >= maxErrors) {
       let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
                      createInstance(Ci.nsIUpdatePrompt);
+      LOG("UpdateService:onError - notifying observers of error. " +
+          "topic: update-error, status: check-attempts-exceeded");
+      Services.obs.notifyObservers(update, "update-error", "check-attempts-exceeded");
       prompter.showUpdateError(update);
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_GENERAL_ERROR_PROMPT);
     } else {
+      LOG("UpdateService:onError - notifying observers of error. " +
+          "topic: update-error, status: check-attempt-failed");
+      Services.obs.notifyObservers(update, "update-error", "check-attempt-failed");
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_GENERAL_ERROR_SILENT);
     }
   },
@@ -2518,19 +2551,25 @@ UpdateService.prototype = {
 
     if (update.unsupported) {
       LOG("UpdateService:_selectAndInstallUpdate - update not supported for " +
-          "this system");
+          "this system. Notifying observers. topic: update-available, " +
+          "status: unsupported");
       if (!getPref("getBoolPref", PREF_APP_UPDATE_NOTIFIEDUNSUPPORTED, false)) {
         LOG("UpdateService:_selectAndInstallUpdate - notifying that the " +
             "update is not supported for this system");
         this._showPrompt(update);
       }
+
+      Services.obs.notifyObservers(null, "update-available", "unsupported");
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_UNSUPPORTED);
       return;
     }
 
     if (!getCanApplyUpdates()) {
       LOG("UpdateService:_selectAndInstallUpdate - the user is unable to " +
-          "apply updates... prompting");
+          "apply updates... prompting. Notifying observers. " +
+          "topic: update-available, status: cant-apply");
+
+      Services.obs.notifyObservers(null, "update-available", "cant-apply");
       this._showPrompt(update);
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_UNABLE_TO_APPLY);
       return;
@@ -2554,16 +2593,22 @@ UpdateService.prototype = {
      */
     if (update.showPrompt) {
       LOG("UpdateService:_selectAndInstallUpdate - prompting because the " +
-          "update snippet specified showPrompt");
+          "update snippet specified showPrompt. Notifying observers. " +
+          "topic: update-available, status: showPrompt");
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_SHOWPROMPT_SNIPPET);
+
+      Services.obs.notifyObservers(update, "update-available", "show-prompt");
       this._showPrompt(update);
       return;
     }
 
     if (!getPref("getBoolPref", PREF_APP_UPDATE_AUTO, true)) {
       LOG("UpdateService:_selectAndInstallUpdate - prompting because silent " +
-          "install is disabled");
+          "install is disabled. Notifying observers. topic: update-available, " +
+          "status: show-prompt");
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_SHOWPROMPT_PREF);
+
+      Services.obs.notifyObservers(update, "update-available", "show-prompt");
       this._showPrompt(update);
       return;
     }
@@ -3105,11 +3150,11 @@ UpdateManager.prototype = {
       writeStatusFile(getUpdatesDir(), update.state = STATE_APPLIED_SERVICE);
     }
 
-    // Send an observer notification which the update wizard uses in
-    // order to update its UI.
+    // Send an observer notification which the app update doorhanger uses to
+    // display a restart notification
     LOG("UpdateManager:refreshUpdateStatus - Notifying observers that " +
-        "the update was staged. state: " + update.state + ", status: " + status);
-    Services.obs.notifyObservers(null, "update-staged", update.state);
+        "the update was staged. topic: update-staged, status: " + update.state);
+    Services.obs.notifyObservers(update, "update-staged", update.state);
 
     if (AppConstants.platform == "gonk") {
       // Do this after everything else, since it will likely cause the app to
@@ -3208,14 +3253,10 @@ Checker.prototype = {
   getUpdateURL: function UC_getUpdateURL(force) {
     this._forced = force;
 
-    let url;
-    try {
-      url = Services.prefs.getDefaultBranch(null).
-            getCharPref(PREF_APP_UPDATE_URL);
-    } catch (e) {
-    }
+    let url = Services.prefs.getDefaultBranch(null).
+              getCharPref(PREF_APP_UPDATE_URL, "");
 
-    if (!url || url == "") {
+    if (!url) {
       LOG("Checker:getUpdateURL - update URL not defined");
       return null;
     }
@@ -3237,8 +3278,6 @@ Checker.prototype = {
     LOG("Checker: checkForUpdates, force: " + force);
     if (!listener)
       throw Cr.NS_ERROR_NULL_POINTER;
-
-    Services.obs.notifyObservers(null, "update-check-start", null);
 
     var url = this.getUpdateURL(force);
     if (!url || (!this.enabled && !force))
@@ -3821,9 +3860,9 @@ Downloader.prototype = {
     let interval = this.background ? update.getProperty("backgroundInterval")
                                    : DOWNLOAD_FOREGROUND_INTERVAL;
 
-    var uri = Services.io.newURI(this._patch.URL);
-    LOG("Downloader:downloadUpdate - url: " + uri.spec + ", path: " +
+    LOG("Downloader:downloadUpdate - url: " + this._patch.URL + ", path: " +
         patchFile.path + ", interval: " + interval);
+    var uri = Services.io.newURI(this._patch.URL);
 
     this._request = Cc["@mozilla.org/network/incremental-download;1"].
                     createInstance(Ci.nsIIncrementalDownload);
@@ -4000,7 +4039,8 @@ Downloader.prototype = {
     maxFail = Math.min(maxFail, 20);
     LOG("Downloader:onStopRequest - status: " + status + ", " +
         "current fail: " + this.updateService._consecutiveSocketErrors + ", " +
-        "max fail: " + maxFail + ", " + "retryTimeout: " + retryTimeout);
+        "max fail: " + maxFail + ", " +
+        "retryTimeout: " + retryTimeout);
     if (Components.isSuccessCode(status)) {
       if (this._verifyDownload()) {
         if (shouldUseService()) {
@@ -4020,6 +4060,7 @@ Downloader.prototype = {
         writeVersionFile(getUpdatesDir(), this._update.appVersion);
         this._update.installDate = (new Date()).getTime();
         this._update.statusText = gUpdateBundle.GetStringFromName("installPending");
+        Services.prefs.setIntPref(PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS, 0);
       } else {
         LOG("Downloader:onStopRequest - download verification failed");
         state = STATE_DOWNLOAD_FAILED;
@@ -4139,7 +4180,26 @@ Downloader.prototype = {
       }
 
       if (allFailed) {
-        LOG("Downloader:onStopRequest - all update patch downloads failed");
+        if (getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false)) {
+          let downloadAttempts = getPref("getIntPref", PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS, 0);
+          downloadAttempts++;
+          Services.prefs.setIntPref(PREF_APP_UPDATE_DOWNLOAD_ATTEMPTS, downloadAttempts);
+          let maxAttempts = Math.min(getPref("getIntPref", PREF_APP_UPDATE_DOWNLOAD_MAXATTEMPTS, 2), 10);
+
+          if (downloadAttempts > maxAttempts) {
+            LOG("Downloader:onStopRequest - notifying observers of error. " +
+                "topic: update-error, status: download-attempts-exceeded, " +
+                "downloadAttempts: " + downloadAttempts + " " +
+                "maxAttempts: " + maxAttempts);
+            Services.obs.notifyObservers(this._update, "update-error", "download-attempts-exceeded");
+          } else {
+            this._update.selectedPatch.selected = false;
+            LOG("Downloader:onStopRequest - notifying observers of error. " +
+                "topic: update-error, status: download-attempt-failed");
+            Services.obs.notifyObservers(this._update, "update-error", "download-attempt-failed");
+          }
+        }
+
         // If the update UI is not open (e.g. the user closed the window while
         // downloading) and if at any point this was a foreground download
         // notify the user about the error. If the update was a background
@@ -4265,6 +4325,7 @@ UpdatePrompt.prototype = {
    */
   showUpdateAvailable: function UP_showUpdateAvailable(update) {
     if (getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false) ||
+        getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false) ||
         this._getUpdateWindow() || this._getAltUpdateWindow()) {
       return;
     }
@@ -4280,8 +4341,15 @@ UpdatePrompt.prototype = {
     if (background && getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false)) {
       return;
     }
-    // Trigger the display of the hamburger menu badge.
-    Services.obs.notifyObservers(null, "update-downloaded", update.state);
+
+    // Trigger the display of the hamburger doorhanger.
+    LOG("showUpdateDownloaded - Notifying observers that " +
+        "an update was downloaded. topic: update-downloaded, status: " + update.state);
+    Services.obs.notifyObservers(update, "update-downloaded", update.state);
+
+    if (getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false)) {
+      return;
+    }
 
     if (this._getAltUpdateWindow())
       return;
@@ -4300,6 +4368,7 @@ UpdatePrompt.prototype = {
    */
   showUpdateError: function UP_showUpdateError(update) {
     if (getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false) ||
+        getPref("getBoolPref", PREF_APP_UPDATE_DOORHANGER, false) ||
         this._getAltUpdateWindow())
       return;
 
@@ -4426,7 +4495,7 @@ UpdatePrompt.prototype = {
     }
 
     observer.service = Services.obs;
-    observer.service.addObserver(observer, "quit-application", false);
+    observer.service.addObserver(observer, "quit-application");
 
     // bug 534090 - show the UI when idle for update available notifications.
     if (page == "updatesavailable") {
@@ -4484,7 +4553,7 @@ UpdatePrompt.prototype = {
         }
       };
       idleService.addIdleObserver(observer, IDLE_TIME);
-      Services.obs.addObserver(observer, "quit-application", false);
+      Services.obs.addObserver(observer, "quit-application");
     }
   },
 
@@ -4508,7 +4577,7 @@ UpdatePrompt.prototype = {
     if (update) {
       ary = Cc["@mozilla.org/array;1"].
             createInstance(Ci.nsIMutableArray);
-      ary.appendElement(update, /* weak =*/ false);
+      ary.appendElement(update);
     }
 
     var win = this._getUpdateWindow();

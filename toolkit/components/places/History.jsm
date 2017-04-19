@@ -160,9 +160,7 @@ this.History = Object.freeze({
    *
    * @throws (Error)
    *      If the `url` specified was for a protocol that should not be
-   *      stored (e.g. "chrome:", "mailbox:", "about:", "imap:", "news:",
-   *      "moz-anno:", "view-source:", "resource:", "data:", "wyciwyg:",
-   *      "javascript:", "blob:").
+   *      stored (@see nsNavHistory::CanAddURI).
    * @throws (Error)
    *      If `pageInfo` has an unexpected type.
    * @throws (Error)
@@ -216,9 +214,7 @@ this.History = Object.freeze({
    *
    * @throws (Error)
    *      If the `url` specified was for a protocol that should not be
-   *      stored (e.g. "chrome:", "mailbox:", "about:", "imap:", "news:",
-   *      "moz-anno:", "view-source:", "resource:", "data:", "wyciwyg:",
-   *      "javascript:", "blob:").
+   *      stored (@see nsNavHistory::CanAddURI).
    * @throws (Error)
    *      If `pageInfos` has an unexpected type.
    * @throws (Error)
@@ -697,15 +693,19 @@ var cleanupPages = Task.async(function*(db, pages) {
   if (pageIdsToRemove.length > 0) {
     let idsList = sqlList(pageIdsToRemove);
     // Note, we are already in a transaction, since callers create it.
-    yield db.execute(`DELETE FROM moz_places WHERE id IN ( ${ idsList } )`);
+    // Check relations regardless, to avoid creating orphans in case of
+    // async race conditions.
+    yield db.execute(`DELETE FROM moz_places WHERE id IN ( ${ idsList } )
+                      AND foreign_count = 0 AND last_visit_date ISNULL`);
     // Hosts accumulated during the places delete are updated through a trigger
     // (see nsPlacesTriggers.h).
     yield db.executeCached(`DELETE FROM moz_updatehosts_temp`);
 
     // Expire orphans.
-    yield db.executeCached(`
-      DELETE FROM moz_favicons WHERE NOT EXISTS
-        (SELECT 1 FROM moz_places WHERE favicon_id = moz_favicons.id)`);
+    yield db.executeCached(`DELETE FROM moz_pages_w_icons
+                            WHERE page_url_hash NOT IN (SELECT url_hash FROM moz_places)`);
+    yield db.executeCached(`DELETE FROM moz_icons
+                            WHERE root = 0 AND id NOT IN (SELECT icon_id FROM moz_icons_to_pages)`);
     yield db.execute(`DELETE FROM moz_annos
                       WHERE place_id IN ( ${ idsList } )`);
     yield db.execute(`DELETE FROM moz_inputhistory
@@ -1032,15 +1032,17 @@ var insertMany = Task.async(function*(db, pageInfos, onResult, onError) {
         let pageInfo = mergeUpdateInfoIntoPageInfo(result);
         onResultData.push(pageInfo);
       },
-      handleCompletion: () => {
+      ignoreErrors: !onError,
+      ignoreResults: !onResult,
+      handleCompletion: (updatedCount) => {
         notifyOnResult(onResultData, onResult);
         notifyOnResult(onErrorData, onError);
-        if (onResultData.length) {
+        if (updatedCount > 0) {
           resolve();
         } else {
           reject({message: "No items were added to history."})
         }
       }
-    });
+    }, true);
   });
 });

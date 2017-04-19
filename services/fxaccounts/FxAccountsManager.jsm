@@ -28,8 +28,8 @@ XPCOMUtils.defineLazyServiceGetter(this, "permissionManager",
 this.FxAccountsManager = {
 
   init() {
-    Services.obs.addObserver(this, ONLOGOUT_NOTIFICATION, false);
-    Services.obs.addObserver(this, ON_FXA_UPDATE_NOTIFICATION, false);
+    Services.obs.addObserver(this, ONLOGOUT_NOTIFICATION);
+    Services.obs.addObserver(this, ON_FXA_UPDATE_NOTIFICATION);
   },
 
   observe(aSubject, aTopic, aData) {
@@ -38,7 +38,7 @@ this.FxAccountsManager = {
 
     if (aData == ONVERIFIED_NOTIFICATION) {
       log.debug("FxAccountsManager: cache cleared, broadcasting: " + aData);
-      Services.obs.notifyObservers(null, aData, null);
+      Services.obs.notifyObservers(null, aData);
     }
   },
 
@@ -80,7 +80,7 @@ this.FxAccountsManager = {
 
   _getError(aServerResponse) {
     if (!aServerResponse || !aServerResponse.error || !aServerResponse.error.errno) {
-      return;
+      return null;
     }
     let error = SERVER_ERRNO_TO_ERROR[aServerResponse.error.errno];
     return error;
@@ -619,14 +619,7 @@ this.FxAccountsManager = {
   },
 
   getKeys() {
-    let syncEnabled = false;
-    try {
-      syncEnabled = Services.prefs.getBoolPref("services.sync.enabled");
-    } catch (e) {
-      dump("Sync is disabled, so you won't get the keys. " + e + "\n");
-    }
-
-    if (!syncEnabled) {
+    if (!Services.prefs.getBoolPref("services.sync.enabled", false)) {
       return Promise.reject(ERROR_SYNC_DISABLED);
     }
 

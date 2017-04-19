@@ -19,12 +19,14 @@ import org.mozilla.gecko.SiteIdentity.MixedMode;
 import org.mozilla.gecko.SiteIdentity.SecurityMode;
 import org.mozilla.gecko.SiteIdentity.TrackingMode;
 import org.mozilla.gecko.Tab;
+import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
 import org.mozilla.gecko.toolbar.BrowserToolbarTabletBase.ForwardButtonAnimation;
 import org.mozilla.gecko.Experiments;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.StringUtils;
+import org.mozilla.gecko.util.ViewUtil;
 import org.mozilla.gecko.widget.themed.ThemedLinearLayout;
 import org.mozilla.gecko.widget.themed.ThemedTextView;
 
@@ -169,6 +171,12 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
 
         mIsAttached = true;
 
+        final Tab selectedTab = Tabs.getInstance().getSelectedTab();
+        if (selectedTab != null) {
+            // A tab was selected before we became ready; update to that tab now.
+            updateFromTab(selectedTab, EnumSet.allOf(UpdateFlags.class));
+        }
+
         mSiteIdentityPopup.registerListeners();
 
         mSiteSecurity.setOnClickListener(new Button.OnClickListener() {
@@ -237,6 +245,14 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout {
 
     void setTitle(CharSequence title) {
         mTitle.setText(title);
+
+        if (TextUtils.isEmpty(title)) {
+            //  Reset TextDirection to Locale in order to reveal text hint in correct direction
+            ViewUtil.setTextDirection(mTitle, TEXT_DIRECTION_LOCALE);
+        } else {
+            //  Otherwise, fall back to default first strong strategy
+            ViewUtil.setTextDirection(mTitle, TEXT_DIRECTION_FIRST_STRONG);
+        }
 
         if (mTitleChangeListener != null) {
             mTitleChangeListener.onTitleChange(title);

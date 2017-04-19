@@ -19,17 +19,19 @@
 #include "nsTArray.h"
 
 class nsCSSPropertyIDSet;
+class nsIAtom;
 class nsIFrame;
 class nsIStyleRule;
 class nsPresContext;
 class nsStyleContext;
+struct RawServoAnimationValueMap;
+typedef RawServoAnimationValueMap const* RawServoAnimationValueMapBorrowed;
 
 namespace mozilla {
 
 class EffectSet;
 class RestyleTracker;
 class StyleAnimationValue;
-class ServoAnimationRule;
 struct AnimationPerformanceWarning;
 struct AnimationProperty;
 struct NonOwningAnimationTarget;
@@ -114,11 +116,12 @@ public:
   // posted because updates on the main thread are throttled.
   void PostRestyleForThrottledAnimations();
 
-  // Called when the style context on the specified (pseudo-) element might
+  // Called when computed style on the specified (pseudo-) element might
   // have changed so that any context-sensitive values stored within
   // animation effects (e.g. em-based endpoints used in keyframe effects)
   // can be re-resolved to computed values.
-  void UpdateEffectProperties(nsStyleContext* aStyleContext,
+  template<typename StyleType>
+  void UpdateEffectProperties(StyleType&& aStyleType,
                               dom::Element* aElement,
                               CSSPseudoElementType aPseudoType);
 
@@ -152,19 +155,15 @@ public:
                                  nsStyleContext* aStyleContext);
 
   // Get animation rule for stylo. This is an equivalent of GetAnimationRule
-  // and will be called from servo side. We need to be careful while doing any
-  // modification because it may case some thread-safe issues.
-  ServoAnimationRule* GetServoAnimationRule(const dom::Element* aElement,
-                                            CSSPseudoElementType aPseudoType,
-                                            CascadeLevel aCascadeLevel);
-
-  // Clear mElementsToRestyle hashtable. Unlike GetAnimationRule,
-  // in GetServoAnimationRule, we don't remove the entry of the composed
-  // animation, so we can prevent the thread-safe issues of dom::Element.
-  // Therefore, we need to call Clear mElementsToRestyle until we go back to
-  // Gecko side.
-  // FIXME: we shouldn't clear the animations on the compositor.
-  void ClearElementsToRestyle();
+  // and will be called from servo side.
+  // The animation rule is stored in |RawServoAnimationValueMapBorrowed|.
+  // We need to be careful while doing any modification because it may cause
+  // some thread-safe issues.
+  bool GetServoAnimationRule(
+    const dom::Element* aElement,
+    CSSPseudoElementType aPseudoType,
+    CascadeLevel aCascadeLevel,
+    RawServoAnimationValueMapBorrowed aAnimationValues);
 
   bool HasPendingStyleUpdates() const;
   bool HasThrottledStyleUpdates() const;
@@ -203,6 +202,14 @@ public:
                             CSSPseudoElementType aPseudoType,
                             nsStyleContext* aStyleContext);
 
+  // Variant of MaybeUpdateCascadeResults for the Servo backend.
+  // The Servo backend doesn't use an nsStyleContext to get the rule node
+  // to traverse the style tree to find !important rules and instead
+  // gets the rule node from |aElement|.
+  static void
+  MaybeUpdateCascadeResults(dom::Element* aElement,
+                            CSSPseudoElementType aPseudoType);
+
   // Update the mPropertiesWithImportantRules and
   // mPropertiesForAnimationsLevel members of the corresponding EffectSet.
   //
@@ -233,24 +240,18 @@ public:
     nsCSSPropertyID aProperty,
     const AnimationPerformanceWarning& aWarning);
 
-  // Returns the base style of (pseudo-)element for |aProperty|.
-  // If there is no cached base style for the property, a new base style value
-  // is resolved with |aStyleContext|. The new resolved base style is cached
-  // until ClearBaseStyles is called.
-  static StyleAnimationValue GetBaseStyle(nsCSSPropertyID aProperty,
-                                          nsStyleContext* aStyleContext,
-                                          dom::Element& aElement,
-                                          CSSPseudoElementType aPseudoType);
+  // Do a bunch of stuff that we should avoid doing during the parallel
+  // traversal (e.g. changing member variables) for all elements that we expect
+  // to restyle on the next traversal.
+  // Returns true if there are elements needing a restyle for animation.
+  bool PreTraverse();
 
-  // Returns the base style corresponding to |aFrame|.
-  // This function should be called only after restyle process has done, i.e.
-  // |aFrame| has a resolved style context.
-  static StyleAnimationValue GetBaseStyle(nsCSSPropertyID aProperty,
-                                          const nsIFrame* aFrame);
+  // Similar to the above but only for the (pseudo-)element.
+  bool PreTraverse(dom::Element* aElement, nsIAtom* aPseudoTagOrNull);
 
-  // Clear cached base styles of (pseudo-)element.
-  static void ClearBaseStyles(dom::Element& aElement,
-                              CSSPseudoElementType aPseudoType);
+  // Similar to the above but for all elements in the subtree rooted
+  // at aElement.
+  bool PreTraverseInSubtree(dom::Element* aElement);
 
 private:
   ~EffectCompositor() = default;
@@ -259,8 +260,7 @@ private:
   // EffectSet associated with the specified (pseudo-)element.
   static void ComposeAnimationRule(dom::Element* aElement,
                                    CSSPseudoElementType aPseudoType,
-                                   CascadeLevel aCascadeLevel,
-                                   TimeStamp aRefreshTime);
+                                   CascadeLevel aCascadeLevel);
 
   static dom::Element* GetElementToRestyle(dom::Element* aElement,
                                            CSSPseudoElementType

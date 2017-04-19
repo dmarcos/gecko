@@ -26,7 +26,7 @@ function runPass(getterFile, finishedCallback) {
 
       Services.obs.removeObserver(onStartup, topic);
       executeSoon(callback);
-    }, topic, false);
+    }, topic);
   }
 
   // First, set the cookie in a normal window.
@@ -104,6 +104,9 @@ function runPass(getterFile, finishedCallback) {
     // Remove both of the tabs opened here.
     gBrowser.removeCurrentTab();
     gBrowser.removeCurrentTab();
+
+    privateWin = null;
+    testBrowser = null;
 
     finishedCallback();
   }

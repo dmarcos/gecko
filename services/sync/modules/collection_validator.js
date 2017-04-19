@@ -6,8 +6,6 @@
 
 const Cu = Components.utils;
 
-Cu.import("resource://services-sync/record.js");
-Cu.import("resource://services-sync/main.js");
 
 this.EXPORTED_SYMBOLS = ["CollectionValidator", "CollectionProblemData"];
 
@@ -80,6 +78,15 @@ class CollectionValidator {
   // Should return a promise that resolves to an array of client items.
   getClientItems() {
     return Promise.reject("Must implement");
+  }
+
+  /**
+   * Can we guarantee validation will fail with a reason that isn't actually a
+   * problem? For example, if we know there are pending changes left over from
+   * the last sync, this should resolve to false. By default resolves to true.
+   */
+  async canValidate() {
+    return true;
   }
 
   // Turn the client item into something that can be compared with the server item,

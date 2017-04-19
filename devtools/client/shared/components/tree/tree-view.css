@@ -58,7 +58,7 @@
   overflow: hidden;
   padding-inline-start: 4px;
   white-space: nowrap;
-  unicode-bidi: -moz-plaintext;
+  unicode-bidi: plaintext;
 }
 
 /* No paddding if there is actually no label */
@@ -72,9 +72,36 @@
   text-decoration: underline;
 }
 
+.treeTable .treeRow.selected {
+  background-color: var(--theme-selection-background);
+}
+
+.treeTable .treeRow.selected:not(:hover) *,
+.treeTable .treeRow.selected:not(:hover) .treeLabelCell::after {
+  color: var(--theme-selection-color);
+}
+
 /* Filtering */
 .treeTable .treeRow.hidden {
   display: none;
+}
+
+.treeTable .treeValueCellDivider {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+/* Learn More link */
+.treeTable .treeValueCell .learn-more-link {
+  -moz-user-select: none;
+  color: var(--theme-highlight-blue);
+  cursor: pointer;
+  margin: 0 5px;
+}
+
+.treeTable .treeValueCell .learn-more-link:hover {
+  text-decoration: underline;
 }
 
 /******************************************************************************/

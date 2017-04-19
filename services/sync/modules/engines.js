@@ -250,7 +250,20 @@ Tracker.prototype = {
           this.onEngineEnabledChanged(this.engine.enabled);
         }
     }
-  }
+  },
+
+  async finalize() {
+    // Stop listening for tracking and engine enabled change notifications.
+    // Important for tests where we unregister the engine during cleanup.
+    Svc.Obs.remove("weave:engine:start-tracking", this);
+    Svc.Obs.remove("weave:engine:stop-tracking", this);
+    Svc.Prefs.ignore("engine." + this.engine.prefName, this);
+
+    // Persist all pending tracked changes to disk, and wait for the final write
+    // to finish.
+    this._saveChangedIDs();
+    await this._storage.finalize();
+  },
 };
 
 
@@ -587,7 +600,8 @@ EngineManager.prototype = {
    */
   register(engineObject) {
     if (Array.isArray(engineObject)) {
-      return engineObject.map(this.register, this);
+      engineObject.map(this.register, this);
+      return;
     }
 
     try {
@@ -604,7 +618,6 @@ EngineManager.prototype = {
       name = name.name || "";
 
       this._log.error(`Could not initialize engine ${name}`, ex);
-      return engineObject;
     }
   },
 
@@ -616,13 +629,15 @@ EngineManager.prototype = {
     if (name in this._engines) {
       let engine = this._engines[name];
       delete this._engines[name];
-      engine.finalize();
+      Async.promiseSpinningly(engine.finalize());
     }
   },
 
   clear() {
     for (let name in this._engines) {
+      let engine = this._engines[name];
       delete this._engines[name];
+      Async.promiseSpinningly(engine.finalize());
     }
   },
 };
@@ -641,6 +656,7 @@ this.Engine = function Engine(name, service) {
   let level = Svc.Prefs.get("log.logger.engine." + this.name, "Debug");
   this._log.level = Log.Level[level];
 
+  this._modified = this.emptyChangeset();
   this._tracker; // initialize tracker to load previously changed IDs
   this._log.debug("Engine initialized");
 }
@@ -648,6 +664,11 @@ Engine.prototype = {
   // _storeObj, and _trackerObj should to be overridden in subclasses
   _storeObj: Store,
   _trackerObj: Tracker,
+
+  // Override this method to return a new changeset type.
+  emptyChangeset() {
+    return new Changeset();
+  },
 
   // Local 'constant'.
   // Signal to the engine that processing further records is pointless.
@@ -732,9 +753,8 @@ Engine.prototype = {
     return null;
   },
 
-  finalize() {
-    // Ensure the tracker finishes persisting changed IDs to disk.
-    Async.promiseSpinningly(this._tracker._storage.finalize());
+  async finalize() {
+    await this._tracker.finalize();
   },
 };
 
@@ -743,6 +763,22 @@ this.SyncEngine = function SyncEngine(name, service) {
 
   this.loadToFetch();
   this.loadPreviousFailed();
+  // The set of records needing a weak reupload.
+  // The difference between this and a "normal" reupload is that these records
+  // are only tracked in memory, and if the reupload attempt fails (shutdown,
+  // 412, etc), we abort uploading the "weak" set.
+  //
+  // The rationale here is for the cases where we receive a record from the
+  // server that we know is wrong in some (small) way. For example, the
+  // dateAdded field on bookmarks -- maybe we have a better date, or the server
+  // record is entirely missing the date, etc.
+  //
+  // In these cases, we fix our local copy of the record, and mark it for
+  // weak reupload. A normal ("strong") reupload is problematic here because
+  // in the case of a conflict from the server, there's a window where our
+  // record would be marked as modified more recently than a change that occurs
+  // on another device change, and we lose data from the user.
+  this._needWeakReupload = new Set();
 }
 
 // Enumeration to define approaches to handling bad records.
@@ -895,6 +931,14 @@ SyncEngine.prototype = {
     Svc.Prefs.set(this.name + ".lastSyncLocal", value.toString());
   },
 
+  get maxRecordPayloadBytes() {
+    let serverConfiguration = this.service.serverConfiguration;
+    if (serverConfiguration && serverConfiguration.max_record_payload_bytes) {
+      return serverConfiguration.max_record_payload_bytes;
+    }
+    return DEFAULT_MAX_RECORD_PAYLOAD_BYTES;
+  },
+
   /*
    * Returns a changeset for this sync. Engine implementations can override this
    * method to bypass the tracker for certain or all changed items.
@@ -903,12 +947,21 @@ SyncEngine.prototype = {
     return this._tracker.changedIDs;
   },
 
-  // Create a new record using the store and add in crypto fields.
+  // Create a new record using the store and add in metadata.
   _createRecord(id) {
     let record = this._store.createRecord(id, this.name);
     record.id = id;
     record.collection = this.name;
     return record;
+  },
+
+  // Creates a tombstone Sync record with additional metadata.
+  _createTombstone(id) {
+    let tombstone = new this._recordObj(this.name, id);
+    tombstone.id = id;
+    tombstone.collection = this.name;
+    tombstone.deleted = true;
+    return tombstone;
   },
 
   // Any setup that needs to happen at the beginning of each sync.
@@ -962,12 +1015,14 @@ SyncEngine.prototype = {
     // the end of a sync, or after an error, we add all objects remaining in
     // this._modified to the tracker.
     this.lastSyncLocal = Date.now();
+    let initialChanges;
     if (this.lastSync) {
-      this._modified = this.pullNewChanges();
+      initialChanges = this.pullNewChanges();
     } else {
       this._log.debug("First sync, uploading all items");
-      this._modified = this.pullAllChanges();
+      initialChanges = this.pullAllChanges();
     }
+    this._modified.replace(initialChanges);
     // Clear the tracker now. If the sync fails we'll add the ones we failed
     // to upload back.
     this._tracker.clearChangedIDs();
@@ -977,6 +1032,7 @@ SyncEngine.prototype = {
 
     // Keep track of what to delete at the end of sync
     this._delete = {};
+    this._needWeakReupload.clear();
   },
 
   /**
@@ -1304,6 +1360,13 @@ SyncEngine.prototype = {
     // By default, assume there's no dupe items for the engine
   },
 
+  /**
+   * Called before a remote record is discarded due to failed reconciliation.
+   * Used by bookmark sync to note the child ordering of special folders.
+   */
+  beforeRecordDiscard(record) {
+  },
+
   // Called when the server has a record marked as deleted, but locally we've
   // changed it more recently than the deletion. If we return false, the
   // record will be deleted locally. If we return true, we'll reupload the
@@ -1432,7 +1495,7 @@ SyncEngine.prototype = {
           localAge = this._tracker._now() - this._modified.getModifiedTimestamp(localDupeGUID);
           remoteIsNewer = remoteAge < localAge;
 
-          this._modified.swap(localDupeGUID, item.id);
+          this._modified.changeID(localDupeGUID, item.id);
         } else {
           locallyModified = false;
           localAge = null;
@@ -1513,6 +1576,9 @@ SyncEngine.prototype = {
     // opportunity to merge the records. Bug 720592 tracks this feature.
     this._log.warn("DATA LOSS: Both local and remote changes to record: " +
                    item.id);
+    if (!remoteIsNewer) {
+      this.beforeRecordDiscard(item);
+    }
     return remoteIsNewer;
   },
 
@@ -1520,15 +1586,15 @@ SyncEngine.prototype = {
   _uploadOutgoing() {
     this._log.trace("Uploading local changes to server.");
 
+    // collection we'll upload
+    let up = new Collection(this.engineURL, null, this.service);
     let modifiedIDs = this._modified.ids();
+    let counts = { failed: 0, sent: 0 };
     if (modifiedIDs.length) {
       this._log.trace("Preparing " + modifiedIDs.length +
                       " outgoing records");
 
-      let counts = { sent: modifiedIDs.length, failed: 0 };
-
-      // collection we'll upload
-      let up = new Collection(this.engineURL, null, this.service);
+      counts.sent = modifiedIDs.length;
 
       let failed = [];
       let successful = [];
@@ -1585,6 +1651,13 @@ SyncEngine.prototype = {
             this._log.trace("Outgoing: " + out);
 
           out.encrypt(this.service.collectionKeys.keyForCollection(this.name));
+          let payloadLength = JSON.stringify(out.payload).length;
+          if (payloadLength > this.maxRecordPayloadBytes) {
+            if (this.allowSkippedRecord) {
+              this._modified.delete(id); // Do not attempt to sync that record again
+            }
+            throw new Error(`Payload too big: ${payloadLength} bytes`);
+          }
           ok = true;
         } catch (ex) {
           this._log.warn("Error creating record", ex);
@@ -1594,6 +1667,7 @@ SyncEngine.prototype = {
             throw ex;
           }
         }
+        this._needWeakReupload.delete(id);
         if (ok) {
           let { enqueued, error } = postQueue.enqueue(out);
           if (!enqueued) {
@@ -1608,8 +1682,68 @@ SyncEngine.prototype = {
         this._store._sleep(0);
       }
       postQueue.flush(true);
+    }
+
+    if (this._needWeakReupload.size) {
+      try {
+        const { sent, failed } = this._weakReupload(up);
+        counts.sent += sent;
+        counts.failed += failed;
+      } catch (e) {
+        if (Async.isShutdownException(e)) {
+          throw e;
+        }
+        this._log.warn("Weak reupload failed", e);
+      }
+    }
+    if (counts.sent || counts.failed) {
       Observers.notify("weave:engine:sync:uploaded", counts, this.name);
     }
+  },
+
+  _weakReupload(collection) {
+    const counts = { sent: 0, failed: 0 };
+    let pendingSent = 0;
+    let postQueue = collection.newPostQueue(this._log, this.lastSync, (resp, batchOngoing = false) => {
+      if (!resp.success) {
+        this._needWeakReupload.clear();
+        this._log.warn("Uploading records (weak) failed: " + resp);
+        resp.failureCode = resp.status == 412 ? ENGINE_BATCH_INTERRUPTED : ENGINE_UPLOAD_FAIL;
+        throw resp;
+      }
+      if (!batchOngoing) {
+        counts.sent += pendingSent;
+        pendingSent = 0;
+      }
+    });
+
+    let pendingWeakReupload = this.buildWeakReuploadMap(this._needWeakReupload);
+    for (let [id, encodedRecord] of pendingWeakReupload) {
+      try {
+        this._log.trace("Outgoing (weak)", encodedRecord);
+        encodedRecord.encrypt(this.service.collectionKeys.keyForCollection(this.name));
+      } catch (ex) {
+        if (Async.isShutdownException(ex)) {
+          throw ex;
+        }
+        this._log.warn(`Failed to encrypt record "${id}" during weak reupload`, ex);
+        ++counts.failed;
+        continue;
+      }
+      // Note that general errors (network error, 412, etc.) will throw here.
+      // `enqueued` is only false if the specific item failed to enqueue, but
+      // other items should be/are fine. For example, enqueued will be false if
+      // it is larger than the max post or WBO size.
+      let { enqueued } = postQueue.enqueue(encodedRecord);
+      if (!enqueued) {
+        ++counts.failed;
+      } else {
+        ++pendingSent;
+      }
+      this._store._sleep(0);
+    }
+    postQueue.flush(true);
+    return counts;
   },
 
   _onRecordsWritten(succeeded, failed) {
@@ -1647,6 +1781,7 @@ SyncEngine.prototype = {
   },
 
   _syncCleanup() {
+    this._needWeakReupload.clear();
     if (!this._modified) {
       return;
     }
@@ -1755,11 +1890,11 @@ SyncEngine.prototype = {
    * @return A `Changeset` object.
    */
   pullAllChanges() {
-    let changeset = new Changeset();
+    let changes = {};
     for (let id in this._store.getAllIDs()) {
-      changeset.set(id, 0);
+      changes[id] = 0;
     }
-    return changeset;
+    return changes;
   },
 
   /*
@@ -1770,7 +1905,7 @@ SyncEngine.prototype = {
    * @return A `Changeset` object.
    */
   pullNewChanges() {
-    return new Changeset(this.getChangedIDs());
+    return this.getChangedIDs();
   },
 
   /**
@@ -1783,6 +1918,27 @@ SyncEngine.prototype = {
       this._tracker.addChangedID(id, change);
     }
   },
+
+  /**
+   * Returns a map of (id, unencrypted record) that will be used to perform
+   * the weak reupload. Subclasses may override this to filter out items we
+   * shouldn't upload as part of a weak reupload (items that have changed,
+   * for example).
+   */
+  buildWeakReuploadMap(idSet) {
+    let result = new Map();
+    for (let id of idSet) {
+      try {
+        result.set(id, this._createRecord(id));
+      } catch (ex) {
+        if (Async.isShutdownException(ex)) {
+          throw ex;
+        }
+        this._log.warn("createRecord failed during weak reupload", ex);
+      }
+    }
+    return result;
+  }
 };
 
 /**
@@ -1792,9 +1948,9 @@ SyncEngine.prototype = {
  * data for each entry.
  */
 class Changeset {
-  // Creates a changeset with an initial set of tracked entries.
-  constructor(changes = {}) {
-    this.changes = changes;
+  // Creates an empty changeset.
+  constructor() {
+    this.changes = {};
   }
 
   // Returns the last modified time, in seconds, for an entry in the changeset.
@@ -1808,9 +1964,14 @@ class Changeset {
     this.changes[id] = change;
   }
 
-  // Adds multiple entries to the changeset.
+  // Adds multiple entries to the changeset, preserving existing entries.
   insert(changes) {
     Object.assign(this.changes, changes);
+  }
+
+  // Overwrites the existing set of tracked changes with new entries.
+  replace(changes) {
+    this.changes = changes;
   }
 
   // Indicates whether an entry is in the changeset.
@@ -1824,9 +1985,9 @@ class Changeset {
     delete this.changes[id];
   }
 
-  // Swaps two entries in the changeset. Used when reconciling duplicates that
-  // have local changes.
-  swap(oldID, newID) {
+  // Changes the ID of an entry in the changeset. Used when reconciling
+  // duplicates that have local changes.
+  changeID(oldID, newID) {
     this.changes[newID] = this.changes[oldID];
     delete this.changes[oldID];
   }

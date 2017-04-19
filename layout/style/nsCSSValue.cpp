@@ -8,17 +8,16 @@
 
 #include "nsCSSValue.h"
 
+#include "mozilla/ServoStyleSet.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/Move.h"
 #include "mozilla/css/ImageLoader.h"
 #include "CSSCalc.h"
 #include "gfxFontConstants.h"
 #include "imgIRequest.h"
 #include "imgRequestProxy.h"
 #include "nsIDocument.h"
-#include "nsIPrincipal.h"
 #include "nsCSSProps.h"
 #include "nsNetUtil.h"
 #include "nsPresContext.h"
@@ -31,15 +30,28 @@ using namespace mozilla;
 using namespace mozilla::css;
 
 static bool
-IsLocalRefURL(nsStringBuffer* aString)
+IsLocalRefURL(const nsString& aString)
 {
   // Find the first non-"C0 controls + space" character.
-  char16_t* current = static_cast<char16_t*>(aString->Data());
+  const char16_t* current = aString.get();
   for (; *current != '\0'; current++) {
     if (*current > 0x20) {
       // if the first non-"C0 controls + space" character is '#', this is a
       // local-ref URL.
       return *current == '#';
+    }
+  }
+
+  return false;
+}
+
+static bool
+MightHaveRef(const nsString& aString)
+{
+  const char16_t* current = aString.get();
+  for (; *current != '\0'; current++) {
+    if (*current == '#') {
+      return true;
     }
   }
 
@@ -225,6 +237,10 @@ nsCSSValue::nsCSSValue(const nsCSSValue& aCopy)
     mValue.mFontFamilyList = aCopy.mValue.mFontFamilyList;
     mValue.mFontFamilyList->AddRef();
   }
+  else if (eCSSUnit_AtomIdent == mUnit) {
+    mValue.mAtom = aCopy.mValue.mAtom;
+    mValue.mAtom->AddRef();
+  }
   else {
     MOZ_ASSERT(false, "unknown unit");
   }
@@ -320,6 +336,9 @@ bool nsCSSValue::operator==(const nsCSSValue& aOther) const
     else if (eCSSUnit_FontFamilyList == mUnit) {
       return *mValue.mFontFamilyList == *aOther.mValue.mFontFamilyList;
     }
+    else if (eCSSUnit_AtomIdent == mUnit) {
+      return mValue.mAtom == aOther.mValue.mAtom;
+    }
     else {
       return mValue.mFloat == aOther.mValue.mFloat;
     }
@@ -408,43 +427,57 @@ nscoord nsCSSValue::GetPixelLength() const
   return nsPresContext::CSSPixelsToAppUnits(float(mValue.mFloat*scaleFactor));
 }
 
+// Assert against resetting non-trivial CSS values from the parallel Servo
+// traversal, since the refcounts aren't thread-safe.
+// Note that the caller might be an OMTA thread, which is allowed to operate off
+// main thread because it owns all of the corresponding nsCSSValues and any that
+// they might be sharing members with.
+#define DO_RELEASE(member) {                                                     \
+  MOZ_ASSERT(NS_IsInCompositorThread() || !ServoStyleSet::IsInServoTraversal()); \
+  mValue.member->Release();                                                      \
+}
+
 void nsCSSValue::DoReset()
 {
   if (UnitHasStringValue()) {
     mValue.mString->Release();
   } else if (IsFloatColorUnit()) {
-    mValue.mFloatColor->Release();
+    DO_RELEASE(mFloatColor);
   } else if (eCSSUnit_ComplexColor == mUnit) {
-    mValue.mComplexColor->Release();
+    DO_RELEASE(mComplexColor);
   } else if (UnitHasArrayValue()) {
-    mValue.mArray->Release();
+    DO_RELEASE(mArray);
   } else if (eCSSUnit_URL == mUnit) {
-    mValue.mURL->Release();
+    DO_RELEASE(mURL);
   } else if (eCSSUnit_Image == mUnit) {
-    mValue.mImage->Release();
+    DO_RELEASE(mImage);
   } else if (eCSSUnit_Gradient == mUnit) {
-    mValue.mGradient->Release();
+    DO_RELEASE(mGradient);
   } else if (eCSSUnit_TokenStream == mUnit) {
-    mValue.mTokenStream->Release();
+    DO_RELEASE(mTokenStream);
   } else if (eCSSUnit_Pair == mUnit) {
-    mValue.mPair->Release();
+    DO_RELEASE(mPair);
   } else if (eCSSUnit_Triplet == mUnit) {
-    mValue.mTriplet->Release();
+    DO_RELEASE(mTriplet);
   } else if (eCSSUnit_Rect == mUnit) {
-    mValue.mRect->Release();
+    DO_RELEASE(mRect);
   } else if (eCSSUnit_List == mUnit) {
-    mValue.mList->Release();
+    DO_RELEASE(mList);
   } else if (eCSSUnit_SharedList == mUnit) {
-    mValue.mSharedList->Release();
+    DO_RELEASE(mSharedList);
   } else if (eCSSUnit_PairList == mUnit) {
-    mValue.mPairList->Release();
+    DO_RELEASE(mPairList);
   } else if (eCSSUnit_GridTemplateAreas == mUnit) {
-    mValue.mGridTemplateAreas->Release();
+    DO_RELEASE(mGridTemplateAreas);
   } else if (eCSSUnit_FontFamilyList == mUnit) {
-    mValue.mFontFamilyList->Release();
+    DO_RELEASE(mFontFamilyList);
+  } else if (eCSSUnit_AtomIdent == mUnit) {
+    DO_RELEASE(mAtom);
   }
   mUnit = eCSSUnit_Null;
 }
+
+#undef DO_RELEASE
 
 void nsCSSValue::SetIntValue(int32_t aValue, nsCSSUnit aUnit)
 {
@@ -833,15 +866,53 @@ void nsCSSValue::SetCalcValue(const nsStyleCoord::CalcValue* aCalc)
   SetArrayValue(arr, eCSSUnit_Calc);
 }
 
+nsStyleCoord::CalcValue
+nsCSSValue::GetCalcValue() const
+{
+  MOZ_ASSERT(mUnit == eCSSUnit_Calc,
+             "The unit should be eCSSUnit_Calc");
+
+  const nsCSSValue::Array* array = GetArrayValue();
+  MOZ_ASSERT(array->Count() == 1,
+             "There should be a 1-length array");
+
+  const nsCSSValue& rootValue = array->Item(0);
+
+  nsStyleCoord::CalcValue result;
+
+  if (rootValue.GetUnit() == eCSSUnit_Pixel) {
+    result.mLength = rootValue.GetFloatValue();
+    result.mPercent = 0.0f;
+    result.mHasPercent = false;
+  } else {
+    MOZ_ASSERT(rootValue.GetUnit() == eCSSUnit_Calc_Plus,
+               "Calc unit should be eCSSUnit_Calc_Plus");
+
+    const nsCSSValue::Array *calcPlusArray = rootValue.GetArrayValue();
+    MOZ_ASSERT(array->Count() == 2,
+               "eCSSUnit_Calc_Plus should have a 2-length array");
+
+    const nsCSSValue& length = calcPlusArray->Item(0);
+    const nsCSSValue& percent = calcPlusArray->Item(1);
+    MOZ_ASSERT(length.GetUnit() == eCSSUnit_Pixel,
+               "The first value should be eCSSUnit_Pixel");
+    MOZ_ASSERT(percent.GetUnit() == eCSSUnit_Percent,
+               "The first value should be eCSSUnit_Percent");
+    result.mLength = length.GetFloatValue();
+    result.mPercent = percent.GetPercentValue();
+    result.mHasPercent = true;
+  }
+
+  return result;
+}
+
 void nsCSSValue::StartImageLoad(nsIDocument* aDocument) const
 {
   MOZ_ASSERT(eCSSUnit_URL == mUnit, "Not a URL value!");
   mozilla::css::ImageValue* image =
     new mozilla::css::ImageValue(mValue.mURL->GetURI(),
                                  mValue.mURL->mString,
-                                 mValue.mURL->mBaseURI,
-                                 mValue.mURL->mReferrer,
-                                 mValue.mURL->mOriginPrincipal,
+                                 do_AddRef(mValue.mURL->mExtraData),
                                  aDocument);
 
   nsCSSValue* writable = const_cast<nsCSSValue*>(this);
@@ -920,6 +991,16 @@ nsCSSValue::BufferFromString(const nsString& aValue)
   // Null-terminate.
   data[length] = 0;
   return buffer.forget();
+}
+
+void
+nsCSSValue::AtomizeIdentValue()
+{
+  MOZ_ASSERT(mUnit == eCSSUnit_Ident);
+  nsCOMPtr<nsIAtom> atom = NS_Atomize(GetStringBufferValue());
+  Reset();
+  mUnit = eCSSUnit_AtomIdent;
+  mValue.mAtom = atom.forget().take();
 }
 
 namespace {
@@ -1457,7 +1538,7 @@ nsCSSValue::AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
         nsStyleUtil::AppendBitmaskCSSValue(
           aProperty, intValue,
           NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE,
-          NS_STYLE_TEXT_DECORATION_LINE_PREF_ANCHORS,
+          NS_STYLE_TEXT_DECORATION_LINE_BLINK,
           aResult);
       }
       break;
@@ -1607,38 +1688,35 @@ nsCSSValue::AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
         unit == eCSSUnit_RGBColor ||
         unit == eCSSUnit_RGBAColor) {
       nscolor color = GetColorValue();
-      if (aSerialization == eNormalized &&
-          color == NS_RGBA(0, 0, 0, 0)) {
-        // Use the strictest match for 'transparent' so we do correct
-        // round-tripping of all other rgba() values.
-        aResult.AppendLiteral("transparent");
+      // For brevity, we omit the alpha component if it's equal to 255 (full
+      // opaque). Also, we use "rgba" rather than "rgb" when the color includes
+      // the non-opaque alpha value, for backwards-compat (even though they're
+      // aliases as of css-color-4).
+      // e.g.:
+      //   rgba(1, 2, 3, 1.0) => rgb(1, 2, 3)
+      //   rgba(1, 2, 3, 0.5) => rgba(1, 2, 3, 0.5)
+
+      uint8_t a = NS_GET_A(color);
+      bool showAlpha = (a != 255);
+
+      if (showAlpha) {
+        aResult.AppendLiteral("rgba(");
       } else {
-        // For brevity, we omit the alpha component if it's equal to 255 (full
-        // opaque). Also, we try to preserve the author-specified function name,
-        // unless it's rgba() and we're omitting the alpha component - then we
-        // use rgb().
-        uint8_t a = NS_GET_A(color);
-        bool showAlpha = (a != 255);
-
-        if (unit == eCSSUnit_RGBAColor && showAlpha) {
-          aResult.AppendLiteral("rgba(");
-        } else {
-          aResult.AppendLiteral("rgb(");
-        }
-
-        NS_NAMED_LITERAL_STRING(comma, ", ");
-
-        aResult.AppendInt(NS_GET_R(color), 10);
-        aResult.Append(comma);
-        aResult.AppendInt(NS_GET_G(color), 10);
-        aResult.Append(comma);
-        aResult.AppendInt(NS_GET_B(color), 10);
-        if (showAlpha) {
-          aResult.Append(comma);
-          aResult.AppendFloat(nsStyleUtil::ColorComponentToFloat(a));
-        }
-        aResult.Append(char16_t(')'));
+        aResult.AppendLiteral("rgb(");
       }
+
+      NS_NAMED_LITERAL_STRING(comma, ", ");
+
+      aResult.AppendInt(NS_GET_R(color), 10);
+      aResult.Append(comma);
+      aResult.AppendInt(NS_GET_G(color), 10);
+      aResult.Append(comma);
+      aResult.AppendInt(NS_GET_B(color), 10);
+      if (showAlpha) {
+        aResult.Append(comma);
+        aResult.AppendFloat(nsStyleUtil::ColorComponentToFloat(a));
+      }
+      aResult.Append(char16_t(')'));
     } else if (eCSSUnit_HexColor == unit ||
                eCSSUnit_HexColorAlpha == unit) {
       nscolor color = GetColorValue();
@@ -1920,6 +1998,9 @@ nsCSSValue::AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
   } else if (eCSSUnit_FontFamilyList == unit) {
     nsStyleUtil::AppendEscapedCSSFontFamilyList(*mValue.mFontFamilyList,
                                                 aResult);
+  } else if (eCSSUnit_AtomIdent == unit) {
+    nsDependentAtomString buffer(GetAtomValue());
+    nsStyleUtil::AppendEscapedCSSIdent(buffer, aResult);
   }
 
   switch (unit) {
@@ -1940,6 +2021,7 @@ nsCSSValue::AppendToString(nsCSSPropertyID aProperty, nsAString& aResult,
     case eCSSUnit_FontFamilyList: break;
     case eCSSUnit_String:       break;
     case eCSSUnit_Ident:        break;
+    case eCSSUnit_AtomIdent:    break;
     case eCSSUnit_URL:          break;
     case eCSSUnit_Image:        break;
     case eCSSUnit_Element:      break;
@@ -2135,6 +2217,10 @@ nsCSSValue::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 
     case eCSSUnit_FontFamilyList:
       n += mValue.mFontFamilyList->SizeOfIncludingThis(aMallocSizeOf);
+      break;
+
+    // Atom is always shared, and thus should not be counted.
+    case eCSSUnit_AtomIdent:
       break;
 
     // Int: nothing extra to measure.
@@ -2709,39 +2795,25 @@ nsCSSValue::Array::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) cons
 }
 
 css::URLValueData::URLValueData(already_AddRefed<PtrHolder<nsIURI>> aURI,
-                                nsStringBuffer* aString,
-                                already_AddRefed<PtrHolder<nsIURI>> aBaseURI,
-                                already_AddRefed<PtrHolder<nsIURI>> aReferrer,
-                                already_AddRefed<PtrHolder<nsIPrincipal>>
-                                  aOriginPrincipal)
+                                const nsAString& aString,
+                                already_AddRefed<URLExtraData> aExtraData)
   : mURI(Move(aURI))
-  , mBaseURI(Move(aBaseURI))
   , mString(aString)
-  , mReferrer(Move(aReferrer))
-  , mOriginPrincipal(Move(aOriginPrincipal))
+  , mExtraData(Move(aExtraData))
   , mURIResolved(true)
-  , mIsLocalRef(IsLocalRefURL(aString))
 {
-  MOZ_ASSERT(mString);
-  MOZ_ASSERT(mBaseURI);
-  MOZ_ASSERT(mOriginPrincipal);
+  MOZ_ASSERT(mExtraData);
+  MOZ_ASSERT(mExtraData->GetPrincipal());
 }
 
-css::URLValueData::URLValueData(nsStringBuffer* aString,
-                                already_AddRefed<PtrHolder<nsIURI>> aBaseURI,
-                                already_AddRefed<PtrHolder<nsIURI>> aReferrer,
-                                already_AddRefed<PtrHolder<nsIPrincipal>>
-                                  aOriginPrincipal)
-  : mBaseURI(Move(aBaseURI))
-  , mString(aString)
-  , mReferrer(Move(aReferrer))
-  , mOriginPrincipal(Move(aOriginPrincipal))
+css::URLValueData::URLValueData(const nsAString& aString,
+                                already_AddRefed<URLExtraData> aExtraData)
+  : mString(aString)
+  , mExtraData(Move(aExtraData))
   , mURIResolved(false)
-  , mIsLocalRef(IsLocalRefURL(aString))
 {
-  MOZ_ASSERT(aString);
-  MOZ_ASSERT(mBaseURI);
-  MOZ_ASSERT(mOriginPrincipal);
+  MOZ_ASSERT(mExtraData);
+  MOZ_ASSERT(mExtraData->GetPrincipal());
 }
 
 bool
@@ -2750,37 +2822,33 @@ css::URLValueData::Equals(const URLValueData& aOther) const
   MOZ_ASSERT(NS_IsMainThread());
 
   bool eq;
-  // Cast away const so we can call nsIPrincipal::Equals.
-  auto& self = *const_cast<URLValueData*>(this);
-  auto& other = const_cast<URLValueData&>(aOther);
-  return NS_strcmp(nsCSSValue::GetBufferValue(mString),
-                   nsCSSValue::GetBufferValue(aOther.mString)) == 0 &&
+  const URLExtraData* self = mExtraData;
+  const URLExtraData* other = aOther.mExtraData;
+  return mString == aOther.mString &&
           (GetURI() == aOther.GetURI() || // handles null == null
            (mURI && aOther.mURI &&
             NS_SUCCEEDED(mURI->Equals(aOther.mURI, &eq)) &&
             eq)) &&
-          (mBaseURI == aOther.mBaseURI ||
-           (NS_SUCCEEDED(self.mBaseURI.get()->Equals(other.mBaseURI.get(), &eq)) &&
+          (self->BaseURI() == other->BaseURI() ||
+           (NS_SUCCEEDED(self->BaseURI()->Equals(other->BaseURI(), &eq)) &&
             eq)) &&
-          (mOriginPrincipal == aOther.mOriginPrincipal ||
-           self.mOriginPrincipal.get()->Equals(other.mOriginPrincipal.get())) &&
-          mIsLocalRef == aOther.mIsLocalRef;
+          (self->GetPrincipal() == other->GetPrincipal() ||
+           self->GetPrincipal()->Equals(other->GetPrincipal())) &&
+          IsLocalRef() == aOther.IsLocalRef();
 }
 
 bool
 css::URLValueData::DefinitelyEqualURIs(const URLValueData& aOther) const
 {
-  return mBaseURI == aOther.mBaseURI &&
-         (mString == aOther.mString ||
-          NS_strcmp(nsCSSValue::GetBufferValue(mString),
-                    nsCSSValue::GetBufferValue(aOther.mString)) == 0);
+  return mExtraData->BaseURI() == aOther.mExtraData->BaseURI() &&
+         mString == aOther.mString;
 }
 
 bool
 css::URLValueData::DefinitelyEqualURIsAndPrincipal(
     const URLValueData& aOther) const
 {
-  return mOriginPrincipal == aOther.mOriginPrincipal &&
+  return mExtraData->GetPrincipal() == aOther.mExtraData->GetPrincipal() &&
          DefinitelyEqualURIs(aOther);
 }
 
@@ -2793,8 +2861,8 @@ css::URLValueData::GetURI() const
     MOZ_ASSERT(!mURI);
     nsCOMPtr<nsIURI> newURI;
     NS_NewURI(getter_AddRefs(newURI),
-              NS_ConvertUTF16toUTF8(nsCSSValue::GetBufferValue(mString)),
-              nullptr, const_cast<nsIURI*>(mBaseURI.get()));
+              NS_ConvertUTF16toUTF8(mString),
+              nullptr, mExtraData->BaseURI());
     mURI = new PtrHolder<nsIURI>(newURI.forget());
     mURIResolved = true;
   }
@@ -2802,12 +2870,56 @@ css::URLValueData::GetURI() const
   return mURI;
 }
 
+bool
+css::URLValueData::IsLocalRef() const
+{
+  if (mIsLocalRef.isNothing()) {
+    // IsLocalRefURL is O(N), use it only when IsLocalRef is called.
+    mIsLocalRef.emplace(IsLocalRefURL(mString));
+  }
+
+  return mIsLocalRef.value();
+}
+
+bool
+css::URLValueData::HasRef() const
+{
+  if (IsLocalRef()) {
+    return true;
+  }
+
+  nsIURI* uri = GetURI();
+  if (!uri) {
+    return false;
+  }
+
+  nsAutoCString ref;
+  nsresult rv = uri->GetRef(ref);
+  if (NS_SUCCEEDED(rv) && !ref.IsEmpty()) {
+    return true;
+  }
+
+  return false;
+}
+
+bool
+css::URLValueData::MightHaveRef() const
+{
+  if (mMightHaveRef.isNothing()) {
+    // ::MightHaveRef is O(N), use it only use it only when MightHaveRef is
+    // called.
+    mMightHaveRef.emplace(::MightHaveRef(mString));
+  }
+
+  return mMightHaveRef.value();
+}
+
 already_AddRefed<nsIURI>
 css::URLValueData::ResolveLocalRef(nsIURI* aURI) const
 {
   nsCOMPtr<nsIURI> result = GetURI();
 
-  if (result && mIsLocalRef) {
+  if (result && IsLocalRef()) {
     nsCString ref;
     mURI->GetRef(ref);
 
@@ -2835,7 +2947,7 @@ css::URLValueData::GetSourceString(nsString& aRef) const
   }
 
   nsCString cref;
-  if (mIsLocalRef) {
+  if (IsLocalRef()) {
     // XXXheycam It's possible we can just return mString in this case, since
     // it should be the "#fragment" string the URLValueData was created with.
     uri->GetRef(cref);
@@ -2869,33 +2981,29 @@ size_t
 css::URLValueData::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   size_t n = 0;
-  n += mString->SizeOfIncludingThisIfUnshared(aMallocSizeOf);
+  n += mString.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
 
   // Measurement of the following members may be added later if DMD finds it
   // is worthwhile:
   // - mURI
-  // - mReferrer
-  // - mOriginPrincipal
+  // - mExtraData
   return n;
 }
 
-URLValue::URLValue(nsStringBuffer* aString, nsIURI* aBaseURI, nsIURI* aReferrer,
+URLValue::URLValue(const nsAString& aString, nsIURI* aBaseURI, nsIURI* aReferrer,
                    nsIPrincipal* aOriginPrincipal)
-  : URLValueData(aString,
-                 do_AddRef(new PtrHolder<nsIURI>(aBaseURI)),
-                 do_AddRef(new PtrHolder<nsIURI>(aReferrer)),
-                 do_AddRef(new PtrHolder<nsIPrincipal>(aOriginPrincipal)))
+  : URLValueData(aString, do_AddRef(new URLExtraData(aBaseURI, aReferrer,
+                                                     aOriginPrincipal)))
 {
   MOZ_ASSERT(NS_IsMainThread());
 }
 
-URLValue::URLValue(nsIURI* aURI, nsStringBuffer* aString, nsIURI* aBaseURI,
+URLValue::URLValue(nsIURI* aURI, const nsAString& aString, nsIURI* aBaseURI,
                    nsIURI* aReferrer, nsIPrincipal* aOriginPrincipal)
   : URLValueData(do_AddRef(new PtrHolder<nsIURI>(aURI)),
                  aString,
-                 do_AddRef(new PtrHolder<nsIURI>(aBaseURI)),
-                 do_AddRef(new PtrHolder<nsIURI>(aReferrer)),
-                 do_AddRef(new PtrHolder<nsIPrincipal>(aOriginPrincipal)))
+                 do_AddRef(new URLExtraData(aBaseURI, aReferrer,
+                                            aOriginPrincipal)))
 {
   MOZ_ASSERT(NS_IsMainThread());
 }
@@ -2912,26 +3020,18 @@ css::URLValue::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   return n;
 }
 
-css::ImageValue::ImageValue(nsIURI* aURI, nsStringBuffer* aString,
-                            nsIURI* aBaseURI, nsIURI* aReferrer,
-                            nsIPrincipal* aOriginPrincipal,
+css::ImageValue::ImageValue(nsIURI* aURI, const nsAString& aString,
+                            already_AddRefed<URLExtraData> aExtraData,
                             nsIDocument* aDocument)
   : URLValueData(do_AddRef(new PtrHolder<nsIURI>(aURI)),
-                 aString,
-                 do_AddRef(new PtrHolder<nsIURI>(aBaseURI, false)),
-                 do_AddRef(new PtrHolder<nsIURI>(aReferrer)),
-                 do_AddRef(new PtrHolder<nsIPrincipal>(aOriginPrincipal)))
+                 aString, Move(aExtraData))
 {
   Initialize(aDocument);
 }
 
-css::ImageValue::ImageValue(
-    nsStringBuffer* aString,
-    already_AddRefed<PtrHolder<nsIURI>> aBaseURI,
-    already_AddRefed<PtrHolder<nsIURI>> aReferrer,
-    already_AddRefed<PtrHolder<nsIPrincipal>> aOriginPrincipal)
-  : URLValueData(aString, Move(aBaseURI), Move(aReferrer),
-                 Move(aOriginPrincipal))
+css::ImageValue::ImageValue(const nsAString& aString,
+                            already_AddRefed<URLExtraData> aExtraData)
+  : URLValueData(aString, Move(aExtraData))
 {
 }
 
@@ -2949,8 +3049,9 @@ css::ImageValue::Initialize(nsIDocument* aDocument)
     loadingDoc = aDocument;
   }
 
-  loadingDoc->StyleImageLoader()->LoadImage(GetURI(), mOriginPrincipal,
-                                            mReferrer, this);
+  loadingDoc->StyleImageLoader()->LoadImage(GetURI(),
+                                            mExtraData->GetPrincipal(),
+                                            mExtraData->GetReferrer(), this);
 
   if (loadingDoc != aDocument) {
     aDocument->StyleImageLoader()->MaybeRegisterCSSImage(this);
@@ -2963,7 +3064,9 @@ css::ImageValue::Initialize(nsIDocument* aDocument)
 
 css::ImageValue::~ImageValue()
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(NS_IsMainThread() || mRequests.Count() == 0,
+             "Destructor should run on main thread, or on non-main thread "
+             "when mRequest is empty!");
 
   for (auto iter = mRequests.Iter(); !iter.Done(); iter.Next()) {
     nsIDocument* doc = iter.Key();

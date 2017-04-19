@@ -1,5 +1,8 @@
 "use strict";
 
+// This file expects these globals to be defined by the test case.
+/* global gTestTab:true, gContentAPI:true, gContentWindow:true, tests:false */
+
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITour",

@@ -10,6 +10,7 @@
 #include "nsInputStreamPump.h"
 #include "nsIPipe.h"
 #include "nsIStreamListener.h"
+#include "nsITimedChannel.h"
 #include "nsHttpChannel.h"
 #include "HttpChannelChild.h"
 #include "nsHttpResponseHead.h"
@@ -20,9 +21,6 @@
 
 namespace mozilla {
 namespace net {
-
-extern bool
-WillRedirect(const nsHttpResponseHead * response);
 
 extern nsresult
 DoUpdateExpirationTime(nsHttpChannel* aSelf,
@@ -132,6 +130,40 @@ InterceptedChannelBase::SetReleaseHandle(nsISupports* aHandle)
   // We need to keep it and mChannel alive until destructor clear it up.
   mReleaseHandle = aHandle;
   return NS_OK;
+}
+
+NS_IMETHODIMP
+InterceptedChannelBase::SaveTimeStampsToUnderlyingChannel()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsCOMPtr<nsIChannel> underlyingChannel;
+  nsresult rv = GetChannel(getter_AddRefs(underlyingChannel));
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  nsCOMPtr<nsITimedChannel> timedChannel =
+    do_QueryInterface(underlyingChannel);
+  MOZ_ASSERT(timedChannel);
+
+  rv = timedChannel->SetLaunchServiceWorkerStart(mLaunchServiceWorkerStart);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  rv = timedChannel->SetLaunchServiceWorkerEnd(mLaunchServiceWorkerEnd);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  rv = timedChannel->SetDispatchFetchEventStart(mDispatchFetchEventStart);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  rv = timedChannel->SetDispatchFetchEventEnd(mDispatchFetchEventEnd);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  rv = timedChannel->SetHandleFetchEventStart(mHandleFetchEventStart);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  rv = timedChannel->SetHandleFetchEventEnd(mHandleFetchEventEnd);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  return rv;
 }
 
 /* static */
@@ -246,7 +278,7 @@ InterceptedChannelChrome::FinishSynthesizedResponse(const nsACString& aFinalURLS
 
   // If the synthesized response is a redirect, then we want to respect
   // the encoding of whatever is loaded as a result.
-  if (WillRedirect(mSynthesizedResponseHead.ref())) {
+  if (nsHttpChannel::WillRedirect(mSynthesizedResponseHead.ref())) {
     nsresult rv = mChannel->SetApplyConversion(mOldApplyConversion);
     NS_ENSURE_SUCCESS(rv, rv);
   }
@@ -346,8 +378,9 @@ InterceptedChannelChrome::GetInternalContentPolicyType(nsContentPolicyType* aPol
   nsCOMPtr<nsILoadInfo> loadInfo;
   nsresult rv = mChannel->GetLoadInfo(getter_AddRefs(loadInfo));
   NS_ENSURE_SUCCESS(rv, rv);
-
-  *aPolicyType = loadInfo->InternalContentPolicyType();
+  if (loadInfo) {
+    *aPolicyType = loadInfo->InternalContentPolicyType();
+  }
   return NS_OK;
 }
 
@@ -515,7 +548,9 @@ InterceptedChannelContent::GetInternalContentPolicyType(nsContentPolicyType* aPo
   nsresult rv = mChannel->GetLoadInfo(getter_AddRefs(loadInfo));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  *aPolicyType = loadInfo->InternalContentPolicyType();
+  if (loadInfo) {
+    *aPolicyType = loadInfo->InternalContentPolicyType();
+  }
   return NS_OK;
 }
 

@@ -17,6 +17,7 @@
 #include "nsIDocument.h"
 #include "nsIDOMMutationEvent.h"
 #include "mozilla/InternalMutationEvent.h"
+#include "mozAutoDocUpdate.h"
 #include "nsError.h"
 #include "nsIPresShell.h"
 #include "nsGkAtoms.h"
@@ -47,7 +48,6 @@
 #include "nsIFrame.h"
 #include "nsQueryObject.h"
 #include <stdarg.h>
-#include "nsSMILMappedAttribute.h"
 #include "SVGMotionSMILAttr.h"
 #include "nsAttrValueOrString.h"
 #include "nsSMILAnimationController.h"
@@ -55,8 +55,8 @@
 #include "mozilla/DeclarationBlock.h"
 #include "mozilla/DeclarationBlockInlines.h"
 #include "mozilla/Unused.h"
-#include "mozilla/RestyleManagerHandle.h"
-#include "mozilla/RestyleManagerHandleInlines.h"
+#include "mozilla/RestyleManager.h"
+#include "mozilla/RestyleManagerInlines.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -97,6 +97,7 @@ nsSVGElement::nsSVGElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
 
 nsSVGElement::~nsSVGElement()
 {
+  OwnerDoc()->UnscheduleSVGForPresAttrEvaluation(this);
 }
 
 JSObject*
@@ -303,6 +304,9 @@ nsSVGElement::AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
   // just delete the style rule and lazily reconstruct it as needed).
   if (aNamespaceID == kNameSpaceID_None && IsAttributeMapped(aName)) {
     mContentDeclarationBlock = nullptr;
+    if (OwnerDoc()->GetStyleBackendType() == StyleBackendType::Servo) {
+      OwnerDoc()->ScheduleSVGForPresAttrEvaluation(this);
+    }
   }
 
   if (IsEventAttributeName(aName) && aValue) {
@@ -903,6 +907,15 @@ nsSVGElement::IsNodeOfType(uint32_t aFlags) const
   return !(aFlags & ~eCONTENT);
 }
 
+void
+nsSVGElement::NodeInfoChanged(nsIDocument* aOldDoc)
+{
+  nsSVGElementBase::NodeInfoChanged(aOldDoc);
+  aOldDoc->UnscheduleSVGForPresAttrEvaluation(this);
+  mContentDeclarationBlock = nullptr;
+  OwnerDoc()->ScheduleSVGForPresAttrEvaluation(this);
+}
+
 NS_IMETHODIMP
 nsSVGElement::WalkContentStyleRules(nsRuleWalker* aRuleWalker)
 {
@@ -910,7 +923,7 @@ nsSVGElement::WalkContentStyleRules(nsRuleWalker* aRuleWalker)
 //  printf("nsSVGElement(%p)::WalkContentStyleRules()\n", this);
 #endif
   if (!mContentDeclarationBlock) {
-    UpdateContentDeclarationBlock();
+    UpdateContentDeclarationBlock(StyleBackendType::Gecko);
   }
 
   if (mContentDeclarationBlock) {
@@ -920,34 +933,6 @@ nsSVGElement::WalkContentStyleRules(nsRuleWalker* aRuleWalker)
   }
 
   return NS_OK;
-}
-
-void
-nsSVGElement::WalkAnimatedContentStyleRules(nsRuleWalker* aRuleWalker)
-{
-  // Update & walk the animated content style rule, to include style from
-  // animated mapped attributes.  But first, get nsPresContext to check
-  // whether this is a "no-animation restyle". (This should match the check
-  // in nsHTMLCSSStyleSheet::RulesMatching(), where we determine whether to
-  // apply the SMILOverrideStyle.)
-  RestyleManagerHandle restyleManager =
-    aRuleWalker->PresContext()->RestyleManager();
-  MOZ_ASSERT(restyleManager->IsGecko(),
-             "stylo: Servo-backed style system should not be calling "
-             "WalkAnimatedContentStyleRules");
-  if (!restyleManager->AsGecko()->SkipAnimationRules()) {
-    // update/walk the animated content style rule.
-    DeclarationBlock* animContentDeclBlock = GetAnimatedContentDeclarationBlock();
-    if (!animContentDeclBlock) {
-      UpdateAnimatedContentDeclarationBlock();
-      animContentDeclBlock = GetAnimatedContentDeclarationBlock();
-    }
-    if (animContentDeclBlock) {
-      css::Declaration* declaration = animContentDeclBlock->AsGecko();
-      declaration->SetImmutable();
-      aRuleWalker->Forward(declaration);
-    }
-  }
 }
 
 NS_IMETHODIMP_(bool)
@@ -1131,16 +1116,39 @@ nsSVGElement::ClassName()
 }
 
 bool
-nsSVGElement::IsFocusableInternal(int32_t* aTabIndex, bool)
+nsSVGElement::IsSVGFocusable(bool* aIsFocusable, int32_t* aTabIndex)
 {
-  int32_t index = TabIndex();
+  nsIDocument* doc = GetComposedDoc();
+  if (!doc || doc->HasFlag(NODE_IS_EDITABLE)) {
+    // In designMode documents we only allow focusing the document.
+    if (aTabIndex) {
+      *aTabIndex = -1;
+    }
 
-  if (index == -1) {
-    return false;
+    *aIsFocusable = false;
+
+    return true;
   }
 
-  *aTabIndex = index;
-  return true;
+  int32_t tabIndex = TabIndex();
+
+  if (aTabIndex) {
+    *aTabIndex = tabIndex;
+  }
+
+  // If a tabindex is specified at all, or the default tabindex is 0, we're focusable
+  *aIsFocusable =
+    tabIndex >= 0 || HasAttr(kNameSpaceID_None, nsGkAtoms::tabindex);
+
+  return false;
+}
+
+bool
+nsSVGElement::IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse)
+{
+  bool isFocusable = false;
+  IsSVGFocusable(&isFocusable, aTabIndex);
+  return isFocusable;
 }
 
 //------------------------------------------------------------------------
@@ -1153,7 +1161,8 @@ public:
   MappedAttrParser(css::Loader* aLoader,
                    nsIURI* aDocURI,
                    already_AddRefed<nsIURI> aBaseURI,
-                   nsSVGElement* aElement);
+                   nsSVGElement* aElement,
+                   StyleBackendType aBackend);
   ~MappedAttrParser();
 
   // Parses a mapped attribute value.
@@ -1163,7 +1172,7 @@ public:
   // If we've parsed any values for mapped attributes, this method returns the
   // already_AddRefed css::Declaration that incorporates the parsed
   // values. Otherwise, this method returns null.
-  already_AddRefed<css::Declaration> GetDeclarationBlock();
+  already_AddRefed<DeclarationBlock> GetDeclarationBlock();
 
 private:
   // MEMBER DATA
@@ -1175,18 +1184,21 @@ private:
   nsCOMPtr<nsIURI>  mBaseURI;
 
   // Declaration for storing parsed values (lazily initialized)
-  RefPtr<css::Declaration> mDecl;
+  RefPtr<DeclarationBlock> mDecl;
 
   // For reporting use counters
   nsSVGElement*     mElement;
+
+  StyleBackendType mBackend;
 };
 
 MappedAttrParser::MappedAttrParser(css::Loader* aLoader,
                                    nsIURI* aDocURI,
                                    already_AddRefed<nsIURI> aBaseURI,
-                                   nsSVGElement* aElement)
+                                   nsSVGElement* aElement,
+                                   StyleBackendType aBackend)
   : mParser(aLoader), mDocURI(aDocURI), mBaseURI(aBaseURI),
-    mElement(aElement)
+    mElement(aElement), mBackend(aBackend)
 {
 }
 
@@ -1202,8 +1214,12 @@ MappedAttrParser::ParseMappedAttrValue(nsIAtom* aMappedAttrName,
                                        const nsAString& aMappedAttrValue)
 {
   if (!mDecl) {
-    mDecl = new css::Declaration();
-    mDecl->InitializeEmpty();
+    if (mBackend == StyleBackendType::Gecko) {
+      mDecl = new css::Declaration();
+      mDecl->AsGecko()->InitializeEmpty();
+    } else {
+      mDecl = new ServoDeclarationBlock();
+    }
   }
 
   // Get the nsCSSPropertyID ID for our mapped attribute.
@@ -1212,8 +1228,20 @@ MappedAttrParser::ParseMappedAttrValue(nsIAtom* aMappedAttrName,
                                CSSEnabledState::eForAllContent);
   if (propertyID != eCSSProperty_UNKNOWN) {
     bool changed = false; // outparam for ParseProperty.
-    mParser.ParseProperty(propertyID, aMappedAttrValue, mDocURI, mBaseURI,
-                          mElement->NodePrincipal(), mDecl, &changed, false, true);
+    if (mBackend == StyleBackendType::Gecko) {
+      mParser.ParseProperty(propertyID, aMappedAttrValue, mDocURI, mBaseURI,
+                            mElement->NodePrincipal(), mDecl->AsGecko(), &changed, false, true);
+    } else {
+      NS_ConvertUTF16toUTF8 value(aMappedAttrValue);
+      // FIXME (bug 1343964): Figure out a better solution for sending the base uri to servo
+      RefPtr<URLExtraData> data = new URLExtraData(mBaseURI, mDocURI,
+                                                   mElement->NodePrincipal());
+      // FIXME (bug 1342559): Set SVG parsing mode for lengths
+      changed = Servo_DeclarationBlock_SetPropertyById(
+        mDecl->AsServo()->Raw(), propertyID, &value, false, data,
+        LengthParsingMode::SVG);
+    }
+
     if (changed) {
       // The normal reporting of use counters by the nsCSSParser won't happen
       // since it doesn't have a sheet.
@@ -1239,16 +1267,21 @@ MappedAttrParser::ParseMappedAttrValue(nsIAtom* aMappedAttrName,
   // nsCSSParser doesn't know about 'lang', so we need to handle it specially.
   if (aMappedAttrName == nsGkAtoms::lang) {
     propertyID = eCSSProperty__x_lang;
-    nsCSSExpandedDataBlock block;
-    mDecl->ExpandTo(&block);
-    nsCSSValue cssValue(PromiseFlatString(aMappedAttrValue), eCSSUnit_Ident);
-    block.AddLonghandProperty(propertyID, cssValue);
-    mDecl->ValueAppended(propertyID);
-    mDecl->CompressFrom(&block);
+    if (mBackend == StyleBackendType::Gecko) {
+      nsCSSExpandedDataBlock block;
+      mDecl->AsGecko()->ExpandTo(&block);
+      nsCSSValue cssValue(PromiseFlatString(aMappedAttrValue), eCSSUnit_Ident);
+      block.AddLonghandProperty(propertyID, cssValue);
+      mDecl->AsGecko()->ValueAppended(propertyID);
+      mDecl->AsGecko()->CompressFrom(&block);
+    } else {
+      nsCOMPtr<nsIAtom> atom = NS_Atomize(aMappedAttrValue);
+      Servo_DeclarationBlock_SetIdentStringValue(mDecl->AsServo()->Raw(), propertyID, atom);
+    }
   }
 }
 
-already_AddRefed<css::Declaration>
+already_AddRefed<DeclarationBlock>
 MappedAttrParser::GetDeclarationBlock()
 {
   return mDecl.forget();
@@ -1260,7 +1293,7 @@ MappedAttrParser::GetDeclarationBlock()
 // Implementation Helpers:
 
 void
-nsSVGElement::UpdateContentDeclarationBlock()
+nsSVGElement::UpdateContentDeclarationBlock(mozilla::StyleBackendType aBackend)
 {
   NS_ASSERTION(!mContentDeclarationBlock,
                "we already have a content declaration block");
@@ -1273,7 +1306,7 @@ nsSVGElement::UpdateContentDeclarationBlock()
 
   nsIDocument* doc = OwnerDoc();
   MappedAttrParser mappedAttrParser(doc->CSSLoader(), doc->GetDocumentURI(),
-                                    GetBaseURI(), this);
+                                    GetBaseURI(), this, aBackend);
 
   for (uint32_t i = 0; i < attrCount; ++i) {
     const nsAttrName* attrName = mAttrsAndChildren.AttrNameAt(i);
@@ -1315,82 +1348,10 @@ nsSVGElement::UpdateContentDeclarationBlock()
   mContentDeclarationBlock = mappedAttrParser.GetDeclarationBlock();
 }
 
-static void
-ParseMappedAttrAnimValueCallback(void*    aObject,
-                                 nsIAtom* aPropertyName,
-                                 void*    aPropertyValue,
-                                 void*    aData)
+const DeclarationBlock*
+nsSVGElement::GetContentDeclarationBlock() const
 {
-  MOZ_ASSERT(aPropertyName != SMIL_MAPPED_ATTR_STYLEDECL_ATOM,
-             "animated content style rule should have been removed "
-             "from properties table already (we're rebuilding it now)");
-
-  MappedAttrParser* mappedAttrParser = static_cast<MappedAttrParser*>(aData);
-  MOZ_ASSERT(mappedAttrParser, "parser should be non-null");
-
-  nsStringBuffer* animValBuf = static_cast<nsStringBuffer*>(aPropertyValue);
-  MOZ_ASSERT(animValBuf, "animated value should be non-null");
-
-  nsString animValStr;
-  nsContentUtils::PopulateStringFromStringBuffer(animValBuf, animValStr);
-
-  mappedAttrParser->ParseMappedAttrValue(aPropertyName, animValStr);
-}
-
-// Callback for freeing animated content decl block, in property table.
-static void
-ReleaseDeclBlock(void*    aObject,       /* unused */
-                 nsIAtom* aPropertyName,
-                 void*    aPropertyValue,
-                 void*    aData          /* unused */)
-{
-  MOZ_ASSERT(aPropertyName == SMIL_MAPPED_ATTR_STYLEDECL_ATOM,
-             "unexpected property name, for animated content style rule");
-  auto decl = static_cast<DeclarationBlock*>(aPropertyValue);
-  MOZ_ASSERT(decl, "unexpected null decl");
-  decl->Release();
-}
-
-void
-nsSVGElement::UpdateAnimatedContentDeclarationBlock()
-{
-  MOZ_ASSERT(!GetAnimatedContentDeclarationBlock(),
-             "Animated content declaration block already set");
-
-  nsIDocument* doc = OwnerDoc();
-  if (!doc) {
-    NS_ERROR("SVG element without owner document");
-    return;
-  }
-
-  MappedAttrParser mappedAttrParser(doc->CSSLoader(), doc->GetDocumentURI(),
-                                    GetBaseURI(), this);
-  doc->PropertyTable(SMIL_MAPPED_ATTR_ANIMVAL)->
-    Enumerate(this, ParseMappedAttrAnimValueCallback, &mappedAttrParser);
- 
-  RefPtr<DeclarationBlock> animContentDeclBlock =
-    mappedAttrParser.GetDeclarationBlock();
-
-  if (animContentDeclBlock) {
-#ifdef DEBUG
-    nsresult rv =
-#endif
-      SetProperty(SMIL_MAPPED_ATTR_ANIMVAL,
-                  SMIL_MAPPED_ATTR_STYLEDECL_ATOM,
-                  animContentDeclBlock.forget().take(),
-                  ReleaseDeclBlock);
-    MOZ_ASSERT(rv == NS_OK,
-               "SetProperty failed (or overwrote something)");
-  }
-}
-
-DeclarationBlock*
-nsSVGElement::GetAnimatedContentDeclarationBlock()
-{
-  return
-    static_cast<DeclarationBlock*>(GetProperty(SMIL_MAPPED_ATTR_ANIMVAL,
-                                               SMIL_MAPPED_ATTR_STYLEDECL_ATOM,
-                                               nullptr));
+  return mContentDeclarationBlock;
 }
 
 /**
@@ -1442,26 +1403,15 @@ nsSVGElement::WillChangeValue(nsIAtom* aName)
   // We need an empty attr value:
   //   a) to pass to BeforeSetAttr when GetParsedAttr returns nullptr
   //   b) to store the old value in the case we have mutation listeners
-  // We can use the same value for both purposes since (a) happens before (b).
+  //
+  // We can use the same value for both purposes, because if GetParsedAttr
+  // returns non-null its return value is what will get passed to BeforeSetAttr,
+  // not matter what our mutation listener situation is.
+  //
   // Also, we should be careful to always return this value to benefit from
   // return value optimization.
   nsAttrValue emptyOrOldAttrValue;
   const nsAttrValue* attrValue = GetParsedAttr(aName);
-
-  // This is not strictly correct--the attribute value parameter for
-  // BeforeSetAttr should reflect the value that *will* be set but that implies
-  // allocating, e.g. an extra nsSVGLength2, and isn't necessary at the moment
-  // since no SVG elements overload BeforeSetAttr. For now we just pass the
-  // current value.
-  nsAttrValueOrString attrStringOrValue(attrValue ? *attrValue
-                                                  : emptyOrOldAttrValue);
-  DebugOnly<nsresult> rv =
-    BeforeSetAttr(kNameSpaceID_None, aName, &attrStringOrValue,
-                  kNotifyDocumentObservers);
-  // SVG elements aren't expected to overload BeforeSetAttr in such a way that
-  // it may fail. So long as this is the case we don't need to check and pass on
-  // the return value which simplifies the calling code significantly.
-  MOZ_ASSERT(NS_SUCCEEDED(rv), "Unexpected failure from BeforeSetAttr");
 
   // We only need to set the old value if we have listeners since otherwise it
   // isn't used.
@@ -1477,6 +1427,21 @@ nsSVGElement::WillChangeValue(nsIAtom* aName)
                   : static_cast<uint8_t>(nsIDOMMutationEvent::ADDITION);
   nsNodeUtils::AttributeWillChange(this, kNameSpaceID_None, aName, modType,
                                    nullptr);
+
+  // This is not strictly correct--the attribute value parameter for
+  // BeforeSetAttr should reflect the value that *will* be set but that implies
+  // allocating, e.g. an extra nsSVGLength2, and isn't necessary at the moment
+  // since no SVG elements overload BeforeSetAttr. For now we just pass the
+  // current value.
+  nsAttrValueOrString attrStringOrValue(attrValue ? *attrValue
+                                                  : emptyOrOldAttrValue);
+  DebugOnly<nsresult> rv =
+    BeforeSetAttr(kNameSpaceID_None, aName, &attrStringOrValue,
+                  kNotifyDocumentObservers);
+  // SVG elements aren't expected to overload BeforeSetAttr in such a way that
+  // it may fail. So long as this is the case we don't need to check and pass on
+  // the return value which simplifies the calling code significantly.
+  MOZ_ASSERT(NS_SUCCEEDED(rv), "Unexpected failure from BeforeSetAttr");
 
   return emptyOrOldAttrValue;
 }
@@ -1506,9 +1471,13 @@ nsSVGElement::DidChangeValue(nsIAtom* aName,
   uint8_t modType = HasAttr(kNameSpaceID_None, aName)
                   ? static_cast<uint8_t>(nsIDOMMutationEvent::MODIFICATION)
                   : static_cast<uint8_t>(nsIDOMMutationEvent::ADDITION);
+
+  nsIDocument* document = GetComposedDoc();
+  mozAutoDocUpdate updateBatch(document, UPDATE_CONTENT_MODEL,
+                               kNotifyDocumentObservers);
   SetAttrAndNotify(kNameSpaceID_None, aName, nullptr, aEmptyOrOldValue,
                    aNewValue, modType, hasListeners, kNotifyDocumentObservers,
-                   kCallAfterSetAttr);
+                   kCallAfterSetAttr, document, updateBatch);
 }
 
 void
@@ -2548,28 +2517,10 @@ nsSVGElement::RecompileScriptEventListeners()
   }
 }
 
-nsISMILAttr*
+UniquePtr<nsISMILAttr>
 nsSVGElement::GetAnimatedAttr(int32_t aNamespaceID, nsIAtom* aName)
 {
   if (aNamespaceID == kNameSpaceID_None) {
-    // We check mapped-into-style attributes first so that animations
-    // targeting width/height on outer-<svg> don't appear to be ignored
-    // because we returned a nsISMILAttr for the corresponding
-    // SVGAnimatedLength.
-
-    // Mapped attributes:
-    if (IsAttributeMapped(aName)) {
-      nsCSSPropertyID prop =
-        nsCSSProps::LookupProperty(nsDependentAtomString(aName),
-                                   CSSEnabledState::eForAllContent);
-      // Check IsPropertyAnimatable to avoid attributes that...
-      //  - map to explicitly unanimatable properties (e.g. 'direction')
-      //  - map to unsupported attributes (e.g. 'glyph-orientation-horizontal')
-      if (nsSMILCSSProperty::IsPropertyAnimatable(prop)) {
-        return new nsSMILMappedAttribute(prop, this);
-      }
-    }
-
     // Transforms:
     if (GetTransformListAttrName() == aName) {
       // The transform attribute is being animated, so we must ensure that the
@@ -2579,7 +2530,7 @@ nsSVGElement::GetAnimatedAttr(int32_t aNamespaceID, nsIAtom* aName)
 
     // Motion (fake 'attribute' for animateMotion)
     if (aName == nsGkAtoms::mozAnimateMotionDummyAttr) {
-      return new SVGMotionSMILAttr(this);
+      return MakeUnique<SVGMotionSMILAttr>(this);
     }
 
     // Lengths:

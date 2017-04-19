@@ -105,6 +105,8 @@ class WidgetRenderingContext;
 - (void)setTransparent:(BOOL)transparent; // Method of NSTitlebarView and
                                           // NSTitlebarContainerView
 
+// Available since 10.7.4:
+- (void)viewDidChangeBackingProperties;
 @end
 
 @interface ChildView : NSView<
@@ -396,7 +398,6 @@ public:
                       void* aCallbackData,
                       uint32_t aGeckoKeyCode,
                       uint32_t aCocoaKeyCode);
-  virtual nsIMEUpdatePreference GetIMEUpdatePreference() override;
 
   virtual nsTransparencyMode GetTransparencyMode() override;
   virtual void                SetTransparencyMode(nsTransparencyMode aMode) override;
@@ -492,6 +493,9 @@ public:
   }
   LayoutDeviceIntPoint CocoaPointsToDevPixels(const NSPoint& aPt) const {
     return nsCocoaUtils::CocoaPointsToDevPixels(aPt, BackingScaleFactor());
+  }
+  LayoutDeviceIntPoint CocoaPointsToDevPixelsRoundDown(const NSPoint& aPt) const {
+    return nsCocoaUtils::CocoaPointsToDevPixelsRoundDown(aPt, BackingScaleFactor());
   }
   LayoutDeviceIntRect CocoaPointsToDevPixels(const NSRect& aRect) const {
     return nsCocoaUtils::CocoaPointsToDevPixels(aRect, BackingScaleFactor());

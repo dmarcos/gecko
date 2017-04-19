@@ -36,6 +36,12 @@ this.SelectContentHelper = function(aElement, aOptions, aGlobal) {
   this.global = aGlobal;
   this.closedWithEnter = false;
   this.isOpenedViaTouch = aOptions.isOpenedViaTouch;
+  this._selectBackgroundColor = null;
+  this._selectColor = null;
+  this._uaBackgroundColor = null;
+  this._uaColor = null;
+  this._uaSelectBackgroundColor = null;
+  this._uaSelectColor = null;
   this.init();
   this.showDropDown();
   this._updateTimer = new DeferredTask(this._update.bind(this), 0);
@@ -54,8 +60,10 @@ this.SelectContentHelper.prototype = {
     this.global.addMessageListener("Forms:MouseOver", this);
     this.global.addMessageListener("Forms:MouseOut", this);
     this.global.addMessageListener("Forms:MouseUp", this);
-    this.global.addEventListener("pagehide", this);
-    this.global.addEventListener("mozhidedropdown", this);
+    this.global.addEventListener("pagehide", this, { mozSystemGroup: true });
+    this.global.addEventListener("mozhidedropdown", this, { mozSystemGroup: true });
+    this.element.addEventListener("blur", this, { mozSystemGroup: true });
+    this.element.addEventListener("transitionend", this, { mozSystemGroup: true });
     let MutationObserver = this.element.ownerGlobal.MutationObserver;
     this.mut = new MutationObserver(mutations => {
       // Something changed the <select> while it was open, so
@@ -63,7 +71,7 @@ this.SelectContentHelper.prototype = {
       // in the very near future.
       this._updateTimer.arm();
     });
-    this.mut.observe(this.element, {childList: true, subtree: true});
+    this.mut.observe(this.element, {childList: true, subtree: true, attributes: true});
   },
 
   uninit() {
@@ -73,8 +81,10 @@ this.SelectContentHelper.prototype = {
     this.global.removeMessageListener("Forms:MouseOver", this);
     this.global.removeMessageListener("Forms:MouseOut", this);
     this.global.removeMessageListener("Forms:MouseUp", this);
-    this.global.removeEventListener("pagehide", this);
-    this.global.removeEventListener("mozhidedropdown", this);
+    this.global.removeEventListener("pagehide", this, { mozSystemGroup: true });
+    this.global.removeEventListener("mozhidedropdown", this, { mozSystemGroup: true });
+    this.element.removeEventListener("blur", this, { mozSystemGroup: true });
+    this.element.removeEventListener("transitionend", this, { mozSystemGroup: true });
     this.element = null;
     this.global = null;
     this.mut.disconnect();
@@ -86,12 +96,25 @@ this.SelectContentHelper.prototype = {
   showDropDown() {
     this.element.openInParentProcess = true;
     let rect = this._getBoundingContentRect();
+    DOMUtils.addPseudoClassLock(this.element, ":focus");
+    let computedStyles = getComputedStyles(this.element);
+    this._selectBackgroundColor = computedStyles.backgroundColor;
+    this._selectColor = computedStyles.color;
+    this._selectTextShadow = computedStyles.textShadow;
+    DOMUtils.clearPseudoClassLocks(this.element);
     this.global.sendAsyncMessage("Forms:ShowDropDown", {
-      rect,
+      direction: computedStyles.direction,
+      isOpenedViaTouch: this.isOpenedViaTouch,
       options: this._buildOptionList(),
+      rect,
       selectedIndex: this.element.selectedIndex,
-      direction: getComputedStyles(this.element).direction,
-      isOpenedViaTouch: this.isOpenedViaTouch
+      selectBackgroundColor: this._selectBackgroundColor,
+      selectColor: this._selectColor,
+      selectTextShadow: this._selectTextShadow,
+      uaBackgroundColor: this.uaBackgroundColor,
+      uaColor: this.uaColor,
+      uaSelectBackgroundColor: this.uaSelectBackgroundColor,
+      uaSelectColor: this.uaSelectColor
     });
     gOpen = true;
   },
@@ -101,16 +124,81 @@ this.SelectContentHelper.prototype = {
   },
 
   _buildOptionList() {
-    return buildOptionListForChildren(this.element);
+    DOMUtils.addPseudoClassLock(this.element, ":focus");
+    let result = buildOptionListForChildren(this.element);
+    DOMUtils.clearPseudoClassLocks(this.element);
+    return result;
   },
 
   _update() {
     // The <select> was updated while the dropdown was open.
     // Let's send up a new list of options.
+    // Technically we might not need to set this pseudo-class
+    // during _update() since the element should organically
+    // have :focus, though it is here for belt-and-suspenders.
+    DOMUtils.addPseudoClassLock(this.element, ":focus");
+    let computedStyles = getComputedStyles(this.element);
+    this._selectBackgroundColor = computedStyles.backgroundColor;
+    this._selectColor = computedStyles.color;
+    this._selectTextShadow = computedStyles.textShadow;
+    DOMUtils.clearPseudoClassLocks(this.element);
     this.global.sendAsyncMessage("Forms:UpdateDropDown", {
       options: this._buildOptionList(),
       selectedIndex: this.element.selectedIndex,
+      selectBackgroundColor: this._selectBackgroundColor,
+      selectColor: this._selectColor,
+      selectTextShadow: this._selectTextShadow,
+      uaBackgroundColor: this.uaBackgroundColor,
+      uaColor: this.uaColor,
+      uaSelectBackgroundColor: this.uaSelectBackgroundColor,
+      uaSelectColor: this.uaSelectColor
     });
+  },
+
+  // Determine user agent background-color and color.
+  // This is used to skip applying the custom color if it matches
+  // the user agent values.
+  _calculateUAColors() {
+    let dummyOption = this.element.ownerDocument.createElement("option");
+    dummyOption.style.setProperty("color", "-moz-comboboxtext", "important");
+    dummyOption.style.setProperty("background-color", "-moz-combobox", "important");
+    let optionCS = this.element.ownerGlobal.getComputedStyle(dummyOption);
+    this._uaBackgroundColor = optionCS.backgroundColor;
+    this._uaColor = optionCS.color;
+    let dummySelect = this.element.ownerDocument.createElement("select");
+    dummySelect.style.setProperty("color", "-moz-fieldtext", "important");
+    dummySelect.style.setProperty("background-color", "-moz-field", "important");
+    let selectCS = this.element.ownerGlobal.getComputedStyle(dummySelect);
+    this._uaSelectBackgroundColor = selectCS.backgroundColor;
+    this._uaSelectColor = selectCS.color;
+  },
+
+  get uaBackgroundColor() {
+    if (!this._uaBackgroundColor) {
+      this._calculateUAColors();
+    }
+    return this._uaBackgroundColor;
+  },
+
+  get uaColor() {
+    if (!this._uaColor) {
+      this._calculateUAColors();
+    }
+    return this._uaColor;
+  },
+
+  get uaSelectBackgroundColor() {
+    if (!this._selectBackgroundColor) {
+      this._calculateUAColors();
+    }
+    return this._uaSelectBackgroundColor;
+  },
+
+  get uaSelectColor() {
+    if (!this._selectBackgroundColor) {
+      this._calculateUAColors();
+    }
+    return this._uaSelectColor;
   },
 
   dispatchMouseEvent(win, target, eventName) {
@@ -192,11 +280,15 @@ this.SelectContentHelper.prototype = {
           this.uninit();
         }
         break;
+      case "blur":
       case "mozhidedropdown":
         if (this.element === event.target) {
           this.global.sendAsyncMessage("Forms:HideDropDown", {});
           this.uninit();
         }
+        break;
+      case "transitionend":
+        this._update();
         break;
     }
   }
@@ -246,6 +338,10 @@ function buildOptionListForChildren(node) {
         color: cs.color,
         children: tagName == "OPTGROUP" ? buildOptionListForChildren(child) : []
       };
+
+      if (cs.textShadow != "none") {
+        info.textShadow = cs.textShadow;
+      }
 
       // We must wait until all computedStyles have been
       // read before we clear the locks.

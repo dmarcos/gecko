@@ -10,27 +10,37 @@ const { connect } = require("devtools/client/shared/vendor/react-redux");
 
 const { LocalizationHelper } = require("devtools/shared/l10n");
 
-const Accordion = createFactory(require("./Accordion"));
-const BoxModel = createFactory(require("./BoxModel"));
-const Grid = createFactory(require("./Grid"));
+const BoxModel = createFactory(require("devtools/client/inspector/boxmodel/components/BoxModel"));
+const Grid = createFactory(require("devtools/client/inspector/grids/components/Grid"));
 
-const Types = require("../types");
-const { getStr } = require("../utils/l10n");
+const BoxModelTypes = require("devtools/client/inspector/boxmodel/types");
+const GridTypes = require("devtools/client/inspector/grids/types");
+
+const Accordion = createFactory(require("./Accordion"));
 
 const BOXMODEL_STRINGS_URI = "devtools/client/locales/boxmodel.properties";
 const BOXMODEL_L10N = new LocalizationHelper(BOXMODEL_STRINGS_URI);
+
+const LAYOUT_STRINGS_URI = "devtools/client/locales/layout.properties";
+const LAYOUT_L10N = new LocalizationHelper(LAYOUT_STRINGS_URI);
 
 const App = createClass({
 
   displayName: "App",
 
   propTypes: {
-    boxModel: PropTypes.shape(Types.boxModel).isRequired,
-    grids: PropTypes.arrayOf(PropTypes.shape(Types.grid)).isRequired,
-    highlighterSettings: PropTypes.shape(Types.highlighterSettings).isRequired,
-    onShowBoxModelEditor: PropTypes.func.isRequired,
+    boxModel: PropTypes.shape(BoxModelTypes.boxModel).isRequired,
+    getSwatchColorPickerTooltip: PropTypes.func.isRequired,
+    grids: PropTypes.arrayOf(PropTypes.shape(GridTypes.grid)).isRequired,
+    highlighterSettings: PropTypes.shape(GridTypes.highlighterSettings).isRequired,
+    setSelectedNode: PropTypes.func.isRequired,
+    showBoxModelProperties: PropTypes.bool.isRequired,
+    showGridOutline: PropTypes.bool.isRequired,
     onHideBoxModelHighlighter: PropTypes.func.isRequired,
+    onSetGridOverlayColor: PropTypes.func.isRequired,
+    onShowBoxModelEditor: PropTypes.func.isRequired,
     onShowBoxModelHighlighter: PropTypes.func.isRequired,
+    onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
     onToggleGridHighlighter: PropTypes.func.isRequired,
     onToggleShowGridLineNumbers: PropTypes.func.isRequired,
     onToggleShowInfiniteLines: PropTypes.func.isRequired,
@@ -42,6 +52,7 @@ const App = createClass({
     return dom.div(
       {
         id: "layout-container",
+        className: "devtools-monospace",
       },
       Accordion({
         items: [
@@ -52,7 +63,7 @@ const App = createClass({
             opened: true,
           },
           {
-            header: getStr("layout.header"),
+            header: LAYOUT_L10N.getStr("layout.header"),
             component: Grid,
             componentProps: this.props,
             opened: true,

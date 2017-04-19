@@ -10,14 +10,14 @@ add_task(function init() {
 /**
  * Test logging of file descriptors leaks.
  */
-add_task(function system_shutdown() {
+add_task(function* system_shutdown() {
 
   // Test that unclosed files cause warnings
   // Test that unclosed directories cause warnings
   // Test that closed files do not cause warnings
   // Test that closed directories do not cause warnings
   function testLeaksOf(resource, topic) {
-    return Task.spawn(function() {
+    return Task.spawn(function*() {
       let deferred = Promise.defer();
 
       // Register observer
@@ -50,7 +50,7 @@ add_task(function system_shutdown() {
         }
       };
       Services.console.registerListener(observer);
-      Services.obs.notifyObservers(null, topic, null);
+      Services.obs.notifyObservers(null, topic);
       do_timeout(1000, function() {
         do_print("Timeout while waiting for resource: " + resource);
         deferred.reject("timeout");
@@ -69,7 +69,7 @@ add_task(function system_shutdown() {
       Services.prefs.clearUserPref("toolkit.osfile.test.shutdown.observer");
       Services.prefs.clearUserPref("toolkit.async_shutdown.testing");
 
-      throw new Task.Result(resolved);
+      return resolved;
     });
   }
 

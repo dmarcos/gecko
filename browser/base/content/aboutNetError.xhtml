@@ -77,12 +77,6 @@
         buttonEl.disabled = true;
       }
 
-      function doOverride(buttonEl) {
-        var event = new CustomEvent("AboutNetErrorOverride", {bubbles:true});
-        document.dispatchEvent(event);
-        retryThis(buttonEl);
-      }
-
       function toggleDisplay(node) {
         const toggle = {
           "": "block",
@@ -102,15 +96,15 @@
         panel.style.display = "block";
         document.getElementById("netErrorButtonContainer").style.display = "none";
         document.getElementById("prefResetButton").addEventListener("click", function resetPreferences(e) {
-          const event = new CustomEvent("AboutNetErrorResetPreferences", {bubbles:true});
+          const event = new CustomEvent("AboutNetErrorResetPreferences", {bubbles: true});
           document.dispatchEvent(event);
         });
+        addAutofocus("prefResetButton", "beforeend");
       }
 
-      function setupAdvancedButton(allowOverride) {
+      function setupAdvancedButton() {
         // Get the hostname and add it to the panel
-        var panelId = gIsCertError ? "badCertAdvancedPanel" : "weakCryptoAdvancedPanel";
-        var panel = document.getElementById(panelId);
+        var panel = document.getElementById("badCertAdvancedPanel");
         for (var span of panel.querySelectorAll("span.hostname")) {
           span.textContent = document.location.hostname;
         }
@@ -133,16 +127,10 @@
 
           if (panel.style.display == "block") {
             // send event to trigger telemetry ping
-            var event = new CustomEvent("AboutNetErrorUIExpanded", {bubbles:true});
+            var event = new CustomEvent("AboutNetErrorUIExpanded", {bubbles: true});
             document.dispatchEvent(event);
           }
         });
-
-        if (allowOverride) {
-          document.getElementById("overrideWeakCryptoPanel").style.display = "flex";
-          var overrideLink = document.getElementById("overrideWeakCrypto");
-          overrideLink.addEventListener("click", () => doOverride(overrideLink));
-        }
 
         if (!gIsCertError) {
           return;
@@ -211,6 +199,7 @@
           initPageCertError();
           return;
         }
+        addAutofocus("errorTryAgain");
 
         document.body.className = "neterror";
 
@@ -223,10 +212,6 @@
           document.getElementById("learnMoreContainer").style.display = "block";
           let learnMoreLink = document.getElementById("learnMoreLink");
           learnMoreLink.href = "https://support.mozilla.org/kb/how-resolve-sslv3-error-messages-firefox";
-          document.body.className = "certerror";
-        }
-
-        if (err == "weakCryptoUsed") {
           document.body.className = "certerror";
         }
 
@@ -265,16 +250,13 @@
 
         window.addEventListener("AboutNetErrorOptions", function(evt) {
         // Pinning errors are of type nssFailure2
-          if (getErrorCode() == "nssFailure2" || getErrorCode() == "weakCryptoUsed") {
+          if (getErrorCode() == "nssFailure2") {
             document.getElementById("learnMoreContainer").style.display = "block";
             let learnMoreLink = document.getElementById("learnMoreLink");
             // nssFailure2 also gets us other non-overrideable errors. Choose
             // a "learn more" link based on description:
-            if (getDescription().includes("mozilla_pkix_error_key_pinning_failure")) {
+            if (getDescription().includes("MOZILLA_PKIX_ERROR_KEY_PINNING_FAILURE")) {
               learnMoreLink.href = "https://support.mozilla.org/kb/certificate-pinning-reports";
-            }
-            if (getErrorCode() == "weakCryptoUsed") {
-              learnMoreLink.href = "https://support.mozilla.org/kb/how-resolve-weak-crypto-error-messages-firefox";
             }
 
             var options = JSON.parse(evt.detail);
@@ -305,12 +287,12 @@
               showPrefChangeContainer();
             }
           }
-          if (getErrorCode() == "weakCryptoUsed" || getErrorCode() == "sslv3Used") {
-            setupAdvancedButton(getErrorCode() == "weakCryptoUsed");
+          if (getErrorCode() == "sslv3Used") {
+            setupAdvancedButton();
           }
         }, true, true);
 
-        var event = new CustomEvent("AboutNetErrorLoad", {bubbles:true});
+        var event = new CustomEvent("AboutNetErrorLoad", {bubbles: true});
         document.dispatchEvent(event);
 
         if (err == "inadequateSecurityError") {
@@ -333,11 +315,12 @@
 
         document.getElementById("openPortalLoginPageButton")
                 .addEventListener("click", () => {
-          let event = new CustomEvent("AboutNetErrorOpenCaptivePortal", {bubbles:true});
+          let event = new CustomEvent("AboutNetErrorOpenCaptivePortal", {bubbles: true});
           document.dispatchEvent(event);
         });
 
-        setupAdvancedButton(true);
+        addAutofocus("openPortalLoginPageButton");
+        setupAdvancedButton();
 
         addDomainErrorLinks();
 
@@ -351,8 +334,12 @@
       function initPageCertError() {
         document.body.className = "certerror";
         document.title = document.getElementById("certErrorPageTitle").textContent;
+        for (let host of document.querySelectorAll(".hostname")) {
+          host.textContent = document.location.hostname;
+        }
 
-        setupAdvancedButton(true);
+        addAutofocus("returnButton");
+        setupAdvancedButton();
 
         document.getElementById("learnMoreContainer").style.display = "block";
 
@@ -375,10 +362,26 @@
           }
         }, true, true);
 
-        let event = new CustomEvent("AboutNetErrorLoad", {bubbles:true});
+        let event = new CustomEvent("AboutNetErrorLoad", {bubbles: true});
         document.getElementById("advancedButton").dispatchEvent(event);
 
         addDomainErrorLinks();
+      }
+
+      /* Only do autofocus if we're the toplevel frame; otherwise we
+         don't want to call attention to ourselves!  The key part is
+         that autofocus happens on insertion into the tree, so we
+         can remove the button, add @autofocus, and reinsert the
+         button.
+      */
+      function addAutofocus(buttonId, position = "afterbegin") {
+        if (window.top == window) {
+            var button = document.getElementById(buttonId);
+            var parent = button.parentNode;
+            button.remove();
+            button.setAttribute("autofocus", "true");
+            parent.insertAdjacentElement(position, button);
+        }
       }
 
       /* Try to preserve the links contained in the error description, like
@@ -486,8 +489,7 @@
         // If we set a link, meaning there's something helpful for
         // the user here, expand the section by default
         if (link.href && getCSSClass() != "expertBadCert") {
-          var panelId = gIsCertError ? "badCertAdvancedPanel" : "weakCryptoAdvancedPanel"
-          toggleDisplay(document.getElementById(panelId));
+          toggleDisplay(document.getElementById("badCertAdvancedPanel"));
           if (gIsCertError) {
             // Toggling the advanced panel must ensure that the debugging
             // information panel is hidden as well, since it's opened by the
@@ -542,7 +544,6 @@
         <h1 id="et_remoteXUL">&remoteXUL.title;</h1>
         <h1 id="et_corruptedContentErrorv2">&corruptedContentErrorv2.title;</h1>
         <h1 id="et_sslv3Used">&sslv3Used.title;</h1>
-        <h1 id="et_weakCryptoUsed">&weakCryptoUsed.title;</h1>
         <h1 id="et_inadequateSecurityError">&inadequateSecurityError.title;</h1>
       </div>
       <div id="errorDescriptionsContainer">
@@ -572,7 +573,6 @@
         <div id="ed_remoteXUL">&remoteXUL.longDesc;</div>
         <div id="ed_corruptedContentErrorv2">&corruptedContentErrorv2.longDesc;</div>
         <div id="ed_sslv3Used">&sslv3Used.longDesc2;</div>
-        <div id="ed_weakCryptoUsed">&weakCryptoUsed.longDesc2;</div>
         <div id="ed_inadequateSecurityError">&inadequateSecurityError.longDesc;</div>
       </div>
     </div>
@@ -615,10 +615,10 @@
         </div>
 
         <div id="certErrorAndCaptivePortalButtonContainer" class="button-container">
-          <button id="returnButton" class="primary" autocomplete="off" autofocus="true">&returnToPreviousPage.label;</button>
-          <button id="openPortalLoginPageButton" class="primary" autocomplete="off" autofocus="true">&openPortalLoginPage.label2;</button>
+          <button id="returnButton" class="primary" autocomplete="off">&returnToPreviousPage.label;</button>
+          <button id="openPortalLoginPageButton" class="primary" autocomplete="off">&openPortalLoginPage.label2;</button>
           <div class="button-spacer"></div>
-          <button id="advancedButton" autocomplete="off" autofocus="true">&advanced.label;</button>
+          <button id="advancedButton" autocomplete="off">&advanced.label;</button>
         </div>
       </div>
 
@@ -626,41 +626,16 @@
         <button id="errorTryAgain" class="primary" autocomplete="off" onclick="retryThis(this);">&retry.label;</button>
       </div>
 
-      <script>
-        // Only do autofocus if we're the toplevel frame; otherwise we
-        // don't want to call attention to ourselves!  The key part is
-        // that autofocus happens on insertion into the tree, so we
-        // can remove the button, add @autofocus, and reinsert the
-        // button.
-        if (window.top == window) {
-            var button = document.getElementById("errorTryAgain");
-            var parent = button.parentNode;
-            button.remove();
-            button.setAttribute("autofocus", "true");
-            parent.appendChild(button);
-        }
-      </script>
-
       <!-- UI for option to report certificate errors to Mozilla. Removed on
            init for other error types .-->
       <div id="certificateErrorReporting">
         <p class="toggle-container-with-text">
-          <input type="checkbox" id="automaticallyReportInFuture" />
+          <input type="checkbox" id="automaticallyReportInFuture" role="checkbox" />
           <label for="automaticallyReportInFuture" id="automaticallyReportInFuture">&errorReporting.automatic2;</label>
         </p>
       </div>
 
       <div id="advancedPanelContainer">
-        <div id="weakCryptoAdvancedPanel" class="advanced-panel">
-          <div id="weakCryptoAdvancedDescription">
-            <p>&weakCryptoAdvanced.longDesc;</p>
-          </div>
-          <div id="advancedLongDesc" />
-          <div id="overrideWeakCryptoPanel">
-            <a id="overrideWeakCrypto" href="#">&weakCryptoAdvanced.override;</a>
-          </div>
-        </div>
-
         <div id="badCertAdvancedPanel" class="advanced-panel">
           <p id="badCertTechnicalInfo"/>
           <button id="exceptionDialogButton">&securityOverride.exceptionButtonLabel;</button>

@@ -74,9 +74,9 @@ load 420697-2.svg
 load 429774-1.svg
 load 441368-1.svg
 load 453754-1.svg
-load 455314-1.xhtml
+pref(layout.css.moz-appearance.enabled,true) load 455314-1.xhtml
 load 458453.html
-skip-if(stylo) load 459666-1.html # bug 1323652
+load 459666-1.html # bug 1323652
 load 459883.xhtml
 load 461289-1.svg
 load 464374-1.svg
@@ -105,7 +105,7 @@ load 587336-1.html
 load 590291-1.svg
 load 601999-1.html
 load 605626-1.svg
-asserts(2) asserts-if(stylo,0) load 606914.xhtml # bug 606914
+asserts(2) load 606914.xhtml # bug 606914, bug 1340561 tracks the stylo bit
 load 610594-1.html
 load 610954-1.html
 load 612662-1.svg
@@ -149,11 +149,11 @@ load 780963-1.html
 load 782141-1.svg
 load 784061-1.svg
 load 788831-1.svg
-skip-if(stylo) load 789390-1.html # bug 1323652
+load 789390-1.html # bug 1323652
 load 790072.svg
 load 791826-1.svg
 load 808318-1.svg
-load 803562-1.svg
+pref(layout.css.moz-appearance.enabled,true) load 803562-1.svg
 load 813420-1.svg
 load 841163-1.svg
 load 841812-1.svg
@@ -198,4 +198,5 @@ load 1156581-1.svg
 load 1182496-1.html
 load 1209525-1.svg
 load 1223281-1.svg
+load 1348564.svg
 load extref-test-1.xhtml

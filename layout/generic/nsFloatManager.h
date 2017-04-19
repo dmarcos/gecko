@@ -348,11 +348,9 @@ private:
   public:
     virtual ~ShapeInfo() {}
 
-    virtual nscoord LineLeft(mozilla::WritingMode aWM,
-                             const nscoord aBStart,
+    virtual nscoord LineLeft(const nscoord aBStart,
                              const nscoord aBEnd) const = 0;
-    virtual nscoord LineRight(mozilla::WritingMode aWM,
-                              const nscoord aBStart,
+    virtual nscoord LineRight(const nscoord aBStart,
                               const nscoord aBEnd) const = 0;
     virtual nscoord BStart() const = 0;
     virtual nscoord BEnd() const = 0;
@@ -361,8 +359,42 @@ private:
     // Translate the current origin by the specified offsets.
     virtual void Translate(nscoord aLineLeft, nscoord aBlockStart) = 0;
 
+    static mozilla::LogicalRect ComputeShapeBoxRect(
+      const mozilla::StyleShapeSource& aShapeOutside,
+      nsIFrame* const aFrame,
+      const mozilla::LogicalRect& aMarginRect,
+      mozilla::WritingMode aWM);
+
+    // Convert the LogicalRect to the special logical coordinate space used
+    // in float manager.
+    static nsRect ConvertToFloatLogical(const mozilla::LogicalRect& aRect,
+                                        mozilla::WritingMode aWM,
+                                        const nsSize& aContainerSize)
+    {
+      return nsRect(aRect.LineLeft(aWM, aContainerSize), aRect.BStart(aWM),
+                    aRect.ISize(aWM), aRect.BSize(aWM));
+    }
+
+    static mozilla::UniquePtr<ShapeInfo> CreateShapeBox(
+      nsIFrame* const aFrame,
+      const mozilla::LogicalRect& aShapeBoxRect,
+      mozilla::WritingMode aWM,
+      const nsSize& aContainerSize);
+
+    static mozilla::UniquePtr<ShapeInfo> CreateInset(
+      const mozilla::StyleBasicShape* aBasicShape,
+      const mozilla::LogicalRect& aShapeBoxRect,
+      mozilla::WritingMode aWM,
+      const nsSize& aContainerSize);
+
     static mozilla::UniquePtr<ShapeInfo> CreateCircleOrEllipse(
-      mozilla::StyleBasicShape* const aBasicShape,
+      const mozilla::StyleBasicShape* aBasicShape,
+      const mozilla::LogicalRect& aShapeBoxRect,
+      mozilla::WritingMode aWM,
+      const nsSize& aContainerSize);
+
+    static mozilla::UniquePtr<ShapeInfo> CreatePolygon(
+      const mozilla::StyleBasicShape* aBasicShape,
       const mozilla::LogicalRect& aShapeBoxRect,
       mozilla::WritingMode aWM,
       const nsSize& aContainerSize);
@@ -385,49 +417,54 @@ private:
     static nscoord XInterceptAtY(const nscoord aY, const nscoord aRadiusX,
                                  const nscoord aRadiusY);
 
-    // Convert the coordinate space from physical to the logical space used
-    // in nsFloatManager, which is the same as FloatInfo::mRect.
-    static nsPoint ConvertPhysicalToLogical(mozilla::WritingMode aWM,
-                                            const nsPoint& aPoint,
-                                            const nsSize& aContainerSize);
+    // Convert the physical point to the special logical coordinate space
+    // used in float manager.
+    static nsPoint ConvertToFloatLogical(const nsPoint& aPoint,
+                                         mozilla::WritingMode aWM,
+                                         const nsSize& aContainerSize);
+
+    // Convert the half corner radii (nscoord[8]) to the special logical
+    // coordinate space used in float manager.
+    static mozilla::UniquePtr<nscoord[]> ConvertToFloatLogical(
+      const nscoord aRadii[8],
+      mozilla::WritingMode aWM);
   };
 
-  // Implements shape-outside: <shape-box>.
-  class BoxShapeInfo final : public ShapeInfo
+  // Implements shape-outside: <shape-box> and shape-outside: inset().
+  class RoundedBoxShapeInfo final : public ShapeInfo
   {
   public:
-    BoxShapeInfo(const nsRect& aShapeBoxRect, nsIFrame* const aFrame)
-      : mShapeBoxRect(aShapeBoxRect)
-      , mFrame(aFrame)
-    {
-    }
+    RoundedBoxShapeInfo(const nsRect& aRect,
+                        mozilla::UniquePtr<nscoord[]> aRadii)
+      : mRect(aRect)
+      , mRadii(Move(aRadii))
+    {}
 
-    nscoord LineLeft(mozilla::WritingMode aWM,
-                     const nscoord aBStart,
+    nscoord LineLeft(const nscoord aBStart,
                      const nscoord aBEnd) const override;
-    nscoord LineRight(mozilla::WritingMode aWM,
-                      const nscoord aBStart,
+    nscoord LineRight(const nscoord aBStart,
                       const nscoord aBEnd) const override;
-    nscoord BStart() const override { return mShapeBoxRect.y; }
-    nscoord BEnd() const override { return mShapeBoxRect.YMost(); }
-    bool IsEmpty() const override { return mShapeBoxRect.IsEmpty(); };
+    nscoord BStart() const override { return mRect.y; }
+    nscoord BEnd() const override { return mRect.YMost(); }
+    bool IsEmpty() const override { return mRect.IsEmpty(); };
 
     void Translate(nscoord aLineLeft, nscoord aBlockStart) override
     {
-      mShapeBoxRect.MoveBy(aLineLeft, aBlockStart);
+      mRect.MoveBy(aLineLeft, aBlockStart);
     }
 
   private:
-    // This is the reference box of css shape-outside if specified, which
-    // implements the <shape-box> value in the CSS Shapes Module Level 1.
-    // The coordinate space is the same as FloatInfo::mRect.
-    nsRect mShapeBoxRect;
-    // The frame of the float.
-    nsIFrame* const mFrame;
+    // The rect of the rounded box shape in the float manager's coordinate
+    // space.
+    nsRect mRect;
+    // The half corner radii of the reference box. It's an nscoord[8] array
+    // in the float manager's coordinate space. If there are no radii, it's
+    // nullptr.
+    mozilla::UniquePtr<nscoord[]> mRadii;
   };
 
   // Implements shape-outside: circle() and shape-outside: ellipse().
-  class EllipseShapeInfo : public ShapeInfo
+  class EllipseShapeInfo final : public ShapeInfo
   {
   public:
     EllipseShapeInfo(const nsPoint& aCenter,
@@ -436,11 +473,9 @@ private:
       , mRadii(aRadii)
     {}
 
-    nscoord LineLeft(mozilla::WritingMode aWM,
-                     const nscoord aBStart,
+    nscoord LineLeft(const nscoord aBStart,
                      const nscoord aBEnd) const override;
-    nscoord LineRight(mozilla::WritingMode aWM,
-                      const nscoord aBStart,
+    nscoord LineRight(const nscoord aBStart,
                       const nscoord aBEnd) const override;
     nscoord BStart() const override { return mCenter.y - mRadii.height; }
     nscoord BEnd() const override { return mCenter.y + mRadii.height; }
@@ -451,13 +486,60 @@ private:
       mCenter.MoveBy(aLineLeft, aBlockStart);
     }
 
-  protected:
+  private:
     // The position of the center of the ellipse. The coordinate space is the
     // same as FloatInfo::mRect.
     nsPoint mCenter;
     // The radii of the ellipse in app units. The width and height represent
     // the line-axis and block-axis radii of the ellipse.
     nsSize mRadii;
+  };
+
+  // Implements shape-outside: polygon().
+  class PolygonShapeInfo final : public ShapeInfo
+  {
+  public:
+    explicit PolygonShapeInfo(nsTArray<nsPoint>&& aVertices);
+
+    nscoord LineLeft(const nscoord aBStart,
+                     const nscoord aBEnd) const override;
+    nscoord LineRight(const nscoord aBStart,
+                      const nscoord aBEnd) const override;
+    nscoord BStart() const override { return mBStart; }
+    nscoord BEnd() const override { return mBEnd; }
+    bool IsEmpty() const override { return mEmpty; }
+
+    void Translate(nscoord aLineLeft, nscoord aBlockStart) override;
+
+  private:
+    // Helper method for implementing LineLeft() and LineRight().
+    nscoord ComputeLineIntercept(
+      const nscoord aBStart,
+      const nscoord aBEnd,
+      nscoord (*aCompareOp) (std::initializer_list<nscoord>),
+      const nscoord aLineInterceptInitialValue) const;
+
+    // Given a horizontal line y, and two points p1 and p2 forming a line
+    // segment L. Solve x for the intersection of y and L. This method
+    // assumes y and L do intersect, and L is *not* horizontal.
+    static nscoord XInterceptAtY(const nscoord aY,
+                                 const nsPoint& aP1,
+                                 const nsPoint& aP2);
+
+    // The vertices of the polygon in the float manager's coordinate space.
+    nsTArray<nsPoint> mVertices;
+
+    // If mEmpty is true, that means the polygon encloses no area.
+    bool mEmpty = false;
+
+    // Computed block start and block end value of the polygon shape.
+    //
+    // If mEmpty is false, their initial values nscoord_MAX and nscoord_MIN
+    // are used as sentinels for computing min() and max() in the
+    // constructor, and mBStart is guaranteed to be less than or equal to
+    // mBEnd. If mEmpty is true, their values do not matter.
+    nscoord mBStart = nscoord_MAX;
+    nscoord mBEnd = nscoord_MIN;
   };
 
   struct FloatInfo {
@@ -481,9 +563,9 @@ private:
     // aBStart and aBEnd are the starting and ending coordinate of a band.
     // LineLeft() and LineRight() return the innermost line-left extent and
     // line-right extent within the given band, respectively.
-    nscoord LineLeft(mozilla::WritingMode aWM, ShapeType aShapeType,
+    nscoord LineLeft(ShapeType aShapeType,
                      const nscoord aBStart, const nscoord aBEnd) const;
-    nscoord LineRight(mozilla::WritingMode aWM, ShapeType aShapeType,
+    nscoord LineRight(ShapeType aShapeType,
                       const nscoord aBStart, const nscoord aBEnd) const;
     nscoord BStart(ShapeType aShapeType) const;
     nscoord BEnd(ShapeType aShapeType) const;
@@ -549,9 +631,9 @@ class nsAutoFloatManager {
 
 public:
   explicit nsAutoFloatManager(ReflowInput& aReflowInput)
-    : mReflowInput(aReflowInput),
-      mNew(nullptr),
-      mOld(nullptr) {}
+    : mReflowInput(aReflowInput)
+    , mOld(nullptr)
+  {}
 
   ~nsAutoFloatManager();
 
@@ -565,8 +647,11 @@ public:
 
 protected:
   ReflowInput &mReflowInput;
-  nsFloatManager *mNew;
-  nsFloatManager *mOld;
+  mozilla::UniquePtr<nsFloatManager> mNew;
+
+  // A non-owning pointer, which points to the object owned by
+  // nsAutoFloatManager::mNew.
+  nsFloatManager* mOld;
 };
 
 #endif /* !defined(nsFloatManager_h_) */

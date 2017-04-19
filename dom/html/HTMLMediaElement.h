@@ -175,6 +175,11 @@ public:
   // resource has a decode error during metadata loading or decoding.
   virtual void DecodeError(const MediaResult& aError) final override;
 
+  // Called by the decoder object, on the main thread, when the
+  // resource has a decode issue during metadata loading or decoding, but can
+  // continue decoding.
+  virtual void DecodeWarning(const MediaResult& aError) final override;
+
   // Return true if error attribute is not null.
   virtual bool HasError() const final override;
 
@@ -281,6 +286,8 @@ public:
 
   // called to notify that the principal of the decoder's media resource has changed.
   void NotifyDecoderPrincipalChanged() final override;
+
+  void GetEMEInfo(nsString& aEMEInfo);
 
   // An interface for observing principal changes on the media elements
   // MediaDecoder. This will also be notified if the active CORSMode changes.
@@ -604,9 +611,25 @@ public:
   // data. Used for debugging purposes.
   void GetMozDebugReaderData(nsAString& aString);
 
+  // Returns a promise which will be resolved after collecting debugging
+  // data from decoder/reader/MDSM. Used for debugging purposes.
+  already_AddRefed<Promise> MozRequestDebugInfo(ErrorResult& aRv);
+
   void MozDumpDebugInfo();
 
+  // For use by mochitests. Enabling pref "media.test.video-suspend"
   void SetVisible(bool aVisible);
+
+  // For use by mochitests. Enabling pref "media.test.video-suspend"
+  bool HasSuspendTaint() const;
+
+  // Synchronously, return the next video frame and mark the element unable to
+  // participate in decode suspending.
+  //
+  // This function is synchronous for cases where decoding has been suspended
+  // and JS needs a frame to use in, eg., nsLayoutUtils::SurfaceFromElement()
+  // via drawImage().
+  already_AddRefed<layers::Image> GetCurrentImage();
 
   already_AddRefed<DOMMediaStream> GetSrcObject() const;
   void SetSrcObject(DOMMediaStream& aValue);
@@ -738,6 +761,8 @@ public:
 
   void SetMediaInfo(const MediaInfo& aInfo);
 
+  virtual AbstractThread* AbstractMainThread() const final override;
+
   // Telemetry: to record the usage of a {visible / invisible} video element as
   // the source of {drawImage(), createPattern(), createImageBitmap() and
   // captureStream()} APIs.
@@ -748,6 +773,25 @@ public:
     CAPTURE_STREAM,
   };
   void MarkAsContentSource(CallerAPI aAPI);
+
+  nsIDocument* GetDocument() const override;
+
+  void ConstructMediaTracks(const MediaInfo* aInfo) override;
+
+  void RemoveMediaTracks() override;
+
+  already_AddRefed<GMPCrashHelper> CreateGMPCrashHelper() override;
+
+  // The promise resolving/rejection is queued as a "micro-task" which will be
+  // handled immediately after the current JS task and before any pending JS
+  // tasks.
+  // At the time we are going to resolve/reject a promise, the "seeking" event
+  // task should already be queued but might yet be processed, so we queue one
+  // more task to file the promise resolving/rejection micro-tasks
+  // asynchronously to make sure that the micro-tasks are processed after the
+  // "seeking" event task.
+  void AsyncResolveSeekDOMPromiseIfExists() override;
+  void AsyncRejectSeekDOMPromiseIfExists() override;
 
 protected:
   virtual ~HTMLMediaElement();
@@ -1177,8 +1221,6 @@ protected:
     return this;
   }
 
-  virtual AbstractThread* AbstractMainThread() const final override;
-
   // Return true if decoding should be paused
   virtual bool GetPaused() final override
   {
@@ -1275,6 +1317,13 @@ protected:
   void NotifyAboutPlaying();
 
   already_AddRefed<Promise> CreateDOMPromise(ErrorResult& aRv) const;
+
+  // Pass information for deciding the video decode mode to decoder.
+  void NotifyDecoderActivityChanges() const;
+
+  // Mark the decoder owned by the element as tainted so that the
+  // suspend-video-decoder is disabled.
+  void MarkAsTainted();
 
   // The current decoder. Load() has been called on this decoder.
   // At most one of mDecoder and mSrcStream can be non-null.
@@ -1703,6 +1752,10 @@ private:
   // True if the audio track is not silent.
   bool mIsAudioTrackAudible;
 
+  // True if media element has been marked as 'tainted' and can't
+  // participate in video decoder suspending.
+  bool mHasSuspendTaint;
+
   Visibility mVisibilityState;
 
   UniquePtr<ErrorSink> mErrorSink;
@@ -1722,7 +1775,15 @@ private:
   // We keep track of these because the load algorithm resolves/rejects all
   // already-dispatched pending play promises.
   nsTArray<nsResolveOrRejectPendingPlayPromisesRunner*> mPendingPlayPromisesRunners;
+
+  // A pending seek promise which is created at Seek() method call and is
+  // resolved/rejected at AsyncResolveSeekDOMPromiseIfExists()/
+  // AsyncRejectSeekDOMPromiseIfExists() methods.
+  RefPtr<dom::Promise> mSeekDOMPromise;
 };
+
+// Check if the context is chrome or has the debugger permission
+bool HasDebuggerPrivilege(JSContext* aCx, JSObject* aObj);
 
 } // namespace dom
 } // namespace mozilla

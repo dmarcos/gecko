@@ -142,8 +142,6 @@ FOR_EACH_PUBLIC_TAGGED_GC_POINTER_TYPE(DECLARE_IS_HEAP_CONSTRUCTIBLE_TYPE)
 template <typename T, typename Wrapper>
 class PersistentRootedBase : public MutableWrappedPtrOperations<T, Wrapper> {};
 
-static void* const ConstNullValue = nullptr;
-
 namespace gc {
 struct Cell;
 template<typename T>
@@ -325,18 +323,30 @@ ObjectIsMarkedGray(const JS::Heap<JSObject*>& obj)
     return ObjectIsMarkedGray(obj.unbarrieredGet());
 }
 
-static MOZ_ALWAYS_INLINE bool
-ScriptIsMarkedGray(JSScript* script)
+// The following *IsNotGray functions are for use in assertions and take account
+// of the eventual gray marking state at the end of any ongoing incremental GC.
+#ifdef DEBUG
+inline bool
+CellIsNotGray(js::gc::Cell* maybeCell)
 {
-    auto cell = reinterpret_cast<js::gc::Cell*>(script);
-    return js::gc::detail::CellIsMarkedGrayIfKnown(cell);
+    if (!maybeCell)
+        return true;
+
+    return js::gc::detail::CellIsNotGray(maybeCell);
 }
 
-static MOZ_ALWAYS_INLINE bool
-ScriptIsMarkedGray(const Heap<JSScript*>& script)
+inline bool
+ObjectIsNotGray(JSObject* maybeObj)
 {
-    return ScriptIsMarkedGray(script.unbarrieredGet());
+    return CellIsNotGray(reinterpret_cast<js::gc::Cell*>(maybeObj));
 }
+
+inline bool
+ObjectIsNotGray(const JS::Heap<JSObject*>& obj)
+{
+    return ObjectIsNotGray(obj.unbarrieredGet());
+}
+#endif
 
 /**
  * The TenuredHeap<T> class is similar to the Heap<T> class above in that it
@@ -471,7 +481,8 @@ class MOZ_NONHEAP_CLASS Handle : public js::HandleBase<T, Handle<T>>
     MOZ_IMPLICIT Handle(decltype(nullptr)) {
         static_assert(mozilla::IsPointer<T>::value,
                       "nullptr_t overload not valid for non-pointer types");
-        ptr = reinterpret_cast<const T*>(&js::ConstNullValue);
+        static void* const ConstNullValue = nullptr;
+        ptr = reinterpret_cast<const T*>(&ConstNullValue);
     }
 
     MOZ_IMPLICIT Handle(MutableHandle<T> handle) {
@@ -744,6 +755,24 @@ class alignas(8) DispatchWrapper
 
 namespace JS {
 
+namespace detail {
+
+/*
+ * For pointer types, the TraceKind for tracing is based on the list it is
+ * in (selected via MapTypeToRootKind), so no additional storage is
+ * required here. Non-pointer types, however, share the same list, so the
+ * function to call for tracing is stored adjacent to the struct. Since C++
+ * cannot templatize on storage class, this is implemented via the wrapper
+ * class DispatchWrapper.
+ */
+template <typename T>
+using MaybeWrapped = typename mozilla::Conditional<
+    MapTypeToRootKind<T>::kind == JS::RootKind::Traceable,
+    js::DispatchWrapper<T>,
+    T>::Type;
+
+} /* namespace detail */
+
 /**
  * Local variable of type T whose value is always rooted. This is typically
  * used for local variables, or for non-rooted values being passed to a
@@ -755,23 +784,17 @@ namespace JS {
 template <typename T>
 class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
 {
-    inline void registerWithRootLists(js::RootedListHeads& roots) {
+    inline void registerWithRootLists(RootedListHeads& roots) {
         this->stack = &roots[JS::MapTypeToRootKind<T>::kind];
         this->prev = *stack;
         *stack = reinterpret_cast<Rooted<void*>*>(this);
     }
 
-    inline js::RootedListHeads& rootLists(JS::RootingContext* cx) {
-        return rootLists(static_cast<js::ContextFriendFields*>(cx));
+    inline RootedListHeads& rootLists(RootingContext* cx) {
+        return cx->stackRoots_;
     }
-    inline js::RootedListHeads& rootLists(js::ContextFriendFields* cx) {
-        if (JS::Zone* zone = cx->zone_)
-            return JS::shadow::Zone::asShadowZone(zone)->stackRoots_;
-        MOZ_ASSERT(cx->isJSContext);
-        return cx->roots.stackRoots_;
-    }
-    inline js::RootedListHeads& rootLists(JSContext* cx) {
-        return rootLists(js::ContextFriendFields::get(cx));
+    inline RootedListHeads& rootLists(JSContext* cx) {
+        return rootLists(RootingContext::get(cx));
     }
 
   public:
@@ -820,19 +843,7 @@ class MOZ_RAII Rooted : public js::RootedBase<T, Rooted<T>>
     Rooted<void*>** stack;
     Rooted<void*>* prev;
 
-    /*
-     * For pointer types, the TraceKind for tracing is based on the list it is
-     * in (selected via MapTypeToRootKind), so no additional storage is
-     * required here. Non-pointer types, however, share the same list, so the
-     * function to call for tracing is stored adjacent to the struct. Since C++
-     * cannot templatize on storage class, this is implemented via the wrapper
-     * class DispatchWrapper.
-     */
-    using MaybeWrapped = typename mozilla::Conditional<
-        MapTypeToRootKind<T>::kind == JS::RootKind::Traceable,
-        js::DispatchWrapper<T>,
-        T>::Type;
-    MaybeWrapped ptr;
+    detail::MaybeWrapped<T> ptr;
 
     Rooted(const Rooted&) = delete;
 } JS_HAZ_ROOTED;
@@ -1041,6 +1052,9 @@ MutableHandle<T>::MutableHandle(PersistentRooted<T>* root)
     ptr = root->address();
 }
 
+JS_PUBLIC_API(void)
+AddPersistentRoot(RootingContext* cx, RootKind kind, PersistentRooted<void*>* root);
+
 /**
  * A copyable, assignable global GC root type with arbitrary lifetime, an
  * infallible constructor, and automatic unrooting on destruction.
@@ -1084,40 +1098,41 @@ class PersistentRooted : public js::RootedBase<T, PersistentRooted<T>>,
     friend class mozilla::LinkedList<PersistentRooted>;
     friend class mozilla::LinkedListElement<PersistentRooted>;
 
-    void registerWithRootLists(js::RootLists& roots) {
+    void registerWithRootLists(RootingContext* cx) {
         MOZ_ASSERT(!initialized());
         JS::RootKind kind = JS::MapTypeToRootKind<T>::kind;
-        roots.heapRoots_[kind].insertBack(reinterpret_cast<JS::PersistentRooted<void*>*>(this));
+        AddPersistentRoot(cx, kind, reinterpret_cast<JS::PersistentRooted<void*>*>(this));
     }
-
-    js::RootLists& rootLists(JSContext* cx) {
-        return rootLists(JS::RootingContext::get(cx));
-    }
-    js::RootLists& rootLists(JS::RootingContext* cx) {
-        MOZ_ASSERT(cx->isJSContext);
-        return cx->roots;
-    }
-
-    // Disallow ExclusiveContext*.
-    js::RootLists& rootLists(js::ContextFriendFields* cx) = delete;
 
   public:
     using ElementType = T;
 
     PersistentRooted() : ptr(GCPolicy<T>::initial()) {}
 
-    template <typename RootingContext>
-    explicit PersistentRooted(const RootingContext& cx)
+    explicit PersistentRooted(RootingContext* cx)
       : ptr(GCPolicy<T>::initial())
     {
-        registerWithRootLists(rootLists(cx));
+        registerWithRootLists(cx);
     }
 
-    template <typename RootingContext, typename U>
-    PersistentRooted(const RootingContext& cx, U&& initial)
+    explicit PersistentRooted(JSContext* cx)
+      : ptr(GCPolicy<T>::initial())
+    {
+        registerWithRootLists(RootingContext::get(cx));
+    }
+
+    template <typename U>
+    PersistentRooted(RootingContext* cx, U&& initial)
       : ptr(mozilla::Forward<U>(initial))
     {
-        registerWithRootLists(rootLists(cx));
+        registerWithRootLists(cx);
+    }
+
+    template <typename U>
+    PersistentRooted(JSContext* cx, U&& initial)
+      : ptr(mozilla::Forward<U>(initial))
+    {
+        registerWithRootLists(RootingContext::get(cx));
     }
 
     PersistentRooted(const PersistentRooted& rhs)
@@ -1139,15 +1154,14 @@ class PersistentRooted : public js::RootedBase<T, PersistentRooted<T>>,
         return ListBase::isInList();
     }
 
-    template <typename RootingContext>
-    void init(const RootingContext& cx) {
+    void init(JSContext* cx) {
         init(cx, GCPolicy<T>::initial());
     }
 
-    template <typename RootingContext, typename U>
-    void init(const RootingContext& cx, U&& initial) {
+    template <typename U>
+    void init(JSContext* cx, U&& initial) {
         ptr = mozilla::Forward<U>(initial);
-        registerWithRootLists(rootLists(cx));
+        registerWithRootLists(RootingContext::get(cx));
     }
 
     void reset() {
@@ -1180,12 +1194,7 @@ class PersistentRooted : public js::RootedBase<T, PersistentRooted<T>>,
         ptr = mozilla::Forward<U>(value);
     }
 
-    // See the comment above Rooted::ptr.
-    using MaybeWrapped = typename mozilla::Conditional<
-        MapTypeToRootKind<T>::kind == JS::RootKind::Traceable,
-        js::DispatchWrapper<T>,
-        T>::Type;
-    MaybeWrapped ptr;
+    detail::MaybeWrapped<T> ptr;
 } JS_HAZ_ROOTED;
 
 class JS_PUBLIC_API(ObjectPtr)
@@ -1211,13 +1220,13 @@ class JS_PUBLIC_API(ObjectPtr)
     JSObject* unbarrieredGet() const { return value.unbarrieredGet(); }
 
     void writeBarrierPre(JSContext* cx) {
-        IncrementalObjectBarrier(value);
+        IncrementalPreWriteBarrier(value);
     }
 
     void updateWeakPointerAfterGC();
 
     ObjectPtr& operator=(JSObject* obj) {
-        IncrementalObjectBarrier(value);
+        IncrementalPreWriteBarrier(value);
         value = obj;
         return *this;
     }

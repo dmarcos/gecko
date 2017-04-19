@@ -263,9 +263,9 @@ var Observer = {
     throw "Can't handle topic "+topic;
   },
   add_observers: function (services, include_on_modify = false) {
-    services.obs.addObserver(Observer, "console-api-log-event", false);
-    services.obs.addObserver(Observer, "http-on-examine-response", false);
-    services.obs.addObserver(Observer, "http-on-modify-request", false);
+    services.obs.addObserver(Observer, "console-api-log-event");
+    services.obs.addObserver(Observer, "http-on-examine-response");
+    services.obs.addObserver(Observer, "http-on-modify-request");
   },
   cleanup: function () {
     this.listeners = {};
@@ -297,7 +297,7 @@ var Observer = {
   },
   get_current_test: function(uri) {
     for (let item in test_servers) {
-      let re = RegExp('https?://'+test_servers[item].host);
+      let re = RegExp('https?://'+test_servers[item].host+'.*\/browser/dom/security/test/hsts/file_testserver.sjs');
       if (re.test(uri)) {
         return test_servers[item];
       }
@@ -426,16 +426,10 @@ function build_test_uri(base_uri, host, test_id, type, timeout) {
 }
 
 // open a new tab, load the test, and wait for it to finish
-function execute_test(test, mimetype) {
+async function execute_test(test, mimetype) {
   var src = build_test_uri(TOP_URI, test_servers[test].host,
       test, test_settings[which_test].type,
       test_settings[which_test].timeout);
 
-  let tab = openTab(src);
-  test_servers[test]['tab'] = tab;
-
-  let browser = gBrowser.getBrowserForTab(tab);
-  yield BrowserTestUtils.browserLoaded(browser);
-
-  yield BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.withNewTab(src, () => {});
 }

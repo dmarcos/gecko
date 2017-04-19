@@ -41,7 +41,6 @@
         'tls_connect.cc',
         'tls_filter.cc',
         'tls_hkdf_unittest.cc',
-        'tls_parser.cc',
         'tls_protect.cc'
       ],
       'dependencies': [
@@ -59,7 +58,8 @@
         '<(DEPTH)/lib/pki/pki.gyp:nsspki',
         '<(DEPTH)/lib/dev/dev.gyp:nssdev',
         '<(DEPTH)/lib/base/base.gyp:nssb',
-        '<(DEPTH)/lib/zlib/zlib.gyp:nss_zlib'
+        '<(DEPTH)/lib/zlib/zlib.gyp:nss_zlib',
+        '<(DEPTH)/cpputil/cpputil.gyp:cpputil',
       ],
       'conditions': [
         [ 'test_build==1', {
@@ -99,8 +99,6 @@
   ],
   'target_defaults': {
     'include_dirs': [
-      '../../gtests/google_test/gtest/include',
-      '../../gtests/common',
       '../../lib/ssl'
     ],
     'defines': [

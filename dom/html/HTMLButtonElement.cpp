@@ -57,8 +57,7 @@ static const nsAttrValue::EnumTable* kButtonDefaultType = &kButtonTypeTable[2];
 // Construction, destruction
 HTMLButtonElement::HTMLButtonElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                                      FromParser aFromParser)
-  : nsGenericHTMLFormElementWithState(aNodeInfo),
-    mType(kButtonDefaultType->value),
+  : nsGenericHTMLFormElementWithState(aNodeInfo, kButtonDefaultType->value),
     mDisabledChanged(false),
     mInInternalActivate(false),
     mInhibitStateRestoration(!!(aFromParser & FROM_PARSER_FRAGMENT))
@@ -423,7 +422,7 @@ HTMLButtonElement::DoneCreatingElement()
 
 nsresult
 HTMLButtonElement::BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 nsAttrValueOrString* aValue,
+                                 const nsAttrValueOrString* aValue,
                                  bool aNotify)
 {
   if (aNotify && aName == nsGkAtoms::disabled &&
@@ -448,7 +447,6 @@ HTMLButtonElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
 
     if (aName == nsGkAtoms::type || aName == nsGkAtoms::disabled) {
       UpdateBarredFromConstraintValidation();
-      UpdateState(aNotify); 
     }
   }
 

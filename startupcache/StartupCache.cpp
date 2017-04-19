@@ -6,7 +6,6 @@
 
 #include "prio.h"
 #include "PLDHashTable.h"
-#include "nsXPCOMStrings.h"
 #include "mozilla/IOInterposer.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/scache/StartupCache.h"
@@ -456,8 +455,6 @@ StartupCache::WriteToDisk()
 
   // Our reader's view of the archive is outdated now, reload it.
   LoadArchive();
-  
-  return;
 }
 
 void
@@ -591,8 +588,9 @@ StartupCache::ResetStartupWriteTimer()
     rv = mTimer->Cancel();
   NS_ENSURE_SUCCESS(rv, rv);
   // Wait for 10 seconds, then write out the cache.
-  mTimer->InitWithFuncCallback(StartupCache::WriteTimeout, this, 60000,
-                               nsITimer::TYPE_ONE_SHOT);
+  mTimer->InitWithNamedFuncCallback(StartupCache::WriteTimeout, this, 60000,
+                                    nsITimer::TYPE_ONE_SHOT,
+                                    "StartupCache::WriteTimeout");
   return NS_OK;
 }
 

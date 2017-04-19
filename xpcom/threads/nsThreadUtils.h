@@ -175,6 +175,15 @@ extern bool NS_HasPendingEvents(nsIThread* aThread = nullptr);
 extern bool NS_ProcessNextEvent(nsIThread* aThread = nullptr,
                                 bool aMayWait = true);
 
+/**
+ * Returns true if we're in the compositor thread.
+ *
+ * We declare this here because the headers required to invoke
+ * CompositorThreadHolder::IsInCompositorThread() also pull in a bunch of system
+ * headers that #define various tokens in a way that can break the build.
+ */
+extern bool NS_IsInCompositorThread();
+
 //-----------------------------------------------------------------------------
 // Helpers that work with nsCOMPtr:
 
@@ -318,6 +327,22 @@ private:
   StoredFunction mFunction;
 };
 
+// Type alias for NS_NewRunnableFunction
+template<typename Function>
+using RunnableFunctionImpl =
+  // Make sure we store a non-reference in nsRunnableFunction.
+  typename detail::RunnableFunction<typename RemoveReference<Function>::Type>;
+
+template <typename T>
+inline already_AddRefed<T>
+SetRunnableName(already_AddRefed<T>&& aObj, const char* aName)
+{
+  MOZ_RELEASE_ASSERT(aName);
+  RefPtr<T> ref(aObj);
+  ref->SetName(aName);
+  return ref.forget();
+}
+
 } // namespace detail
 
 namespace detail {
@@ -410,11 +435,18 @@ template<typename Function>
 already_AddRefed<mozilla::Runnable>
 NS_NewRunnableFunction(Function&& aFunction)
 {
-  return do_AddRef(new mozilla::detail::RunnableFunction
-                   // Make sure we store a non-reference in nsRunnableFunction.
-                   <typename mozilla::RemoveReference<Function>::Type>
-                   // But still forward aFunction to move if possible.
-                   (mozilla::Forward<Function>(aFunction)));
+  // We store a non-reference in RunnableFunction, but still forward aFunction
+  // to move if possible.
+  return do_AddRef(new mozilla::detail::RunnableFunctionImpl<Function>
+    (mozilla::Forward<Function>(aFunction)));
+}
+
+template<typename Function>
+already_AddRefed<mozilla::Runnable>
+NS_NewRunnableFunction(const char* aName, Function&& aFunction)
+{
+  return mozilla::detail::SetRunnableName(
+    NS_NewRunnableFunction(mozilla::Forward<Function>(aFunction)), aName);
 }
 
 // An event that can be used to call a method on a class.  The class type must
@@ -876,65 +908,193 @@ public:
   void Revoke() { mReceiver.Revoke(); }
 };
 
+// Type aliases for NewRunnableMethod.
+template<typename PtrType, typename Method>
+using OwningRunnableMethod = typename ::nsRunnableMethodTraits<
+  typename RemoveReference<PtrType>::Type, Method, true, false>::base_type;
+template<typename PtrType, typename Method, typename... Storages>
+using OwningRunnableMethodImpl = RunnableMethodImpl<
+  typename RemoveReference<PtrType>::Type, Method, true, false, Storages...>;
+
+// Type aliases for NewCancelableRunnableMethod.
+template<typename PtrType, typename Method>
+using CancelableRunnableMethod = typename ::nsRunnableMethodTraits<
+  typename RemoveReference<PtrType>::Type, Method, true, true>::base_type;
+template<typename PtrType, typename Method, typename... Storages>
+using CancelableRunnableMethodImpl = RunnableMethodImpl<
+  typename RemoveReference<PtrType>::Type, Method, true, true, Storages...>;
+
+// Type aliases for NewNonOwningRunnableMethod.
+template<typename PtrType, typename Method>
+using NonOwningRunnableMethod = typename ::nsRunnableMethodTraits<
+  typename RemoveReference<PtrType>::Type, Method, false, false>::base_type;
+template<typename PtrType, typename Method, typename... Storages>
+using NonOwningRunnableMethodImpl = RunnableMethodImpl<
+  typename RemoveReference<PtrType>::Type, Method, false, false, Storages...>;
+
+// Type aliases for NonOwningCancelableRunnableMethod
+template<typename PtrType, typename Method>
+using NonOwningCancelableRunnableMethod = typename ::nsRunnableMethodTraits<
+  typename RemoveReference<PtrType>::Type, Method, false, true>::base_type;
+template<typename PtrType, typename Method, typename... Storages>
+using NonOwningCancelableRunnableMethodImpl = RunnableMethodImpl<
+  typename RemoveReference<PtrType>::Type, Method, false, true, Storages...>;
+
 } // namespace detail
 
-// Use this template function like so:
+// NewRunnableMethod and friends
+//
+// Very often in Gecko, you'll find yourself in a situation where you want
+// to invoke a method (with or without arguments) asynchronously.  You
+// could write a small helper class inheriting from nsRunnable to handle
+// all these details, or you could let NewRunnableMethod take care of all
+// those details for you.
+//
+// The simplest use of NewRunnableMethod looks like:
 //
 //   nsCOMPtr<nsIRunnable> event =
-//     mozilla::NewRunnableMethod(myObject, &MyClass::HandleEvent);
+//     mozilla::NewRunnableMethod("description", myObject, &MyClass::HandleEvent);
 //   NS_DispatchToCurrentThread(event);
 //
 // Statically enforced constraints:
 //  - myObject must be of (or implicitly convertible to) type MyClass
 //  - MyClass must define AddRef and Release methods
 //
+// The "description" string should specify a human-readable name for the
+// runnable; the provided string is used by various introspection tools
+// in the browser.
+//
+// The created runnable will take a strong reference to `myObject`.  For
+// non-refcounted objects, or refcounted objects with unusual refcounting
+// requirements, and if and only if you are 110% certain that `myObject`
+// will live long enough, you can use NewNonOwningRunnableMethod instead,
+// which will, as its name implies, take a non-owning reference.  If you
+// find yourself having to use this function, you should accompany your use
+// with a proof comment describing why the runnable will not lead to
+// use-after-frees.
+//
+// (If you find yourself writing contorted code to Release() an object
+// asynchronously on a different thread, you should use the
+// NS_ProxyRelease function.)
+//
+// Invoking a method with arguments takes a little more care.  The
+// natural extension of the above:
+//
+//   nsCOMPtr<nsIRunnable> event =
+//     mozilla::NewRunnableMethod("description", myObject, &MyClass::HandleEvent,
+//                                arg1, arg2, ...);
+//
+// can lead to security hazards (e.g. passing in raw pointers to refcounted
+// objects and storing those raw pointers in the runnable).  We therefore
+// require you to specify the storage types used by the runnable, just as
+// you would if you were writing out the class by hand:
+//
+//   nsCOMPtr<nsIRunnable> event =
+//     mozilla::NewRunnableMethod<RefPtr<T>, nsTArray<U>>
+//         ("description", myObject, &MyClass::HandleEvent, arg1, arg2);
+//
+// Please note that you do not have to pass the same argument type as you
+// specify in the template arguments.  For example, if you want to transfer
+// ownership to a runnable, you can write:
+//
+//   RefPtr<T> ptr = ...;
+//   nsTArray<U> array = ...;
+//   nsCOMPtr<nsIRunnable> event =
+//     mozilla::NewRunnableMethod<RefPtr<T>, nsTArray<U>>
+//         ("description", myObject, &MyClass::DoSomething,
+//          Move(ptr), Move(array));
+//
+// and there will be no extra AddRef/Release traffic, or copying of the array.
+//
+// Each type that you specify as a template argument to NewRunnableMethod
+// comes with its own style of storage in the runnable and its own style
+// of argument passing to the invoked method.  See the comment for
+// ParameterStorage above for more details.
+//
+// If you need to customize the storage type and/or argument passing type,
+// you can write your own class to use as a template argument to
+// NewRunnableMethod.  If you find yourself having to do that frequently,
+// please file a bug in Core::XPCOM about adding the custom type to the
+// core code in this file, and/or for custom rules for ParameterStorage
+// to select that strategy.
+//
+// For places that require you to use cancelable runnables, such as
+// workers, there's also NewCancelableRunnableMethod and its non-owning
+// counterpart.  The runnables returned by these methods additionally
+// implement nsICancelableRunnable.
+//
+// Finally, all of the functions discussed above have additional overloads
+// that do not take a `const char*` as their first parameter; you may see
+// these in older code.  The `const char*` overload is preferred and
+// should be used in new code exclusively.
 
 template<typename PtrType, typename Method>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, true, false>::base_type>
+already_AddRefed<detail::OwningRunnableMethod<PtrType, Method>>
 NewRunnableMethod(PtrType&& aPtr, Method aMethod)
 {
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, true, false>
+    new detail::OwningRunnableMethodImpl<PtrType, Method>
       (Forward<PtrType>(aPtr), aMethod));
 }
 
 template<typename PtrType, typename Method>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, true, true>::base_type>
+already_AddRefed<detail::OwningRunnableMethod<PtrType, Method>>
+NewRunnableMethod(const char* aName, PtrType&& aPtr, Method aMethod)
+{
+  return detail::SetRunnableName(
+    NewRunnableMethod(Forward<PtrType>(aPtr), aMethod), aName);
+}
+
+template<typename PtrType, typename Method>
+already_AddRefed<detail::CancelableRunnableMethod<PtrType, Method>>
 NewCancelableRunnableMethod(PtrType&& aPtr, Method aMethod)
 {
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, true, true>
+    new detail::CancelableRunnableMethodImpl<PtrType, Method>
       (Forward<PtrType>(aPtr), aMethod));
 }
 
 template<typename PtrType, typename Method>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, false, false>::base_type>
+already_AddRefed<detail::CancelableRunnableMethod<PtrType, Method>>
+NewCancelableRunnableMethod(const char* aName, PtrType&& aPtr, Method aMethod)
+{
+  return detail::SetRunnableName(
+    NewCancelableRunnableMethod(Forward<PtrType>(aPtr), aMethod), aName);
+}
+
+template<typename PtrType, typename Method>
+already_AddRefed<detail::NonOwningRunnableMethod<PtrType, Method>>
 NewNonOwningRunnableMethod(PtrType&& aPtr, Method aMethod)
 {
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, false, false>
+    new detail::NonOwningRunnableMethodImpl<PtrType, Method>
       (Forward<PtrType>(aPtr), aMethod));
 }
 
 template<typename PtrType, typename Method>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, false, true>::base_type>
+already_AddRefed<detail::NonOwningRunnableMethod<PtrType, Method>>
+NewNonOwningRunnableMethod(const char* aName, PtrType&& aPtr, Method aMethod)
+{
+  return detail::SetRunnableName(
+    NewNonOwningRunnableMethod(Forward<PtrType>(aPtr), aMethod), aName);
+}
+
+template<typename PtrType, typename Method>
+already_AddRefed<detail::NonOwningCancelableRunnableMethod<PtrType, Method>>
 NewNonOwningCancelableRunnableMethod(PtrType&& aPtr, Method aMethod)
 {
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, false, true>
+    new detail::NonOwningCancelableRunnableMethodImpl<PtrType, Method>
       (Forward<PtrType>(aPtr), aMethod));
+}
+
+template<typename PtrType, typename Method>
+already_AddRefed<detail::NonOwningCancelableRunnableMethod<PtrType, Method>>
+NewNonOwningCancelableRunnableMethod(const char* aName, PtrType&& aPtr,
+                                     Method aMethod)
+{
+  return detail::SetRunnableName(
+    NewNonOwningCancelableRunnableMethod(Forward<PtrType>(aPtr), aMethod), aName);
 }
 
 // Similar to NewRunnableMethod. Call like so:
@@ -942,60 +1102,95 @@ NewNonOwningCancelableRunnableMethod(PtrType&& aPtr, Method aMethod)
 //   NewRunnableMethod<Types,...>(myObject, &MyClass::HandleEvent, myArg1,...);
 // 'Types' are the stored type for each argument, see ParameterStorage for details.
 template<typename... Storages, typename PtrType, typename Method, typename... Args>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, true, false>::base_type>
+already_AddRefed<detail::OwningRunnableMethod<PtrType, Method>>
 NewRunnableMethod(PtrType&& aPtr, Method aMethod, Args&&... aArgs)
 {
   static_assert(sizeof...(Storages) == sizeof...(Args),
                 "<Storages...> size should be equal to number of arguments");
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, true, false, Storages...>
+    new detail::OwningRunnableMethodImpl<PtrType, Method, Storages...>
       (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...));
 }
 
 template<typename... Storages, typename PtrType, typename Method, typename... Args>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, false, false>::base_type>
+already_AddRefed<detail::OwningRunnableMethod<PtrType, Method>>
+NewRunnableMethod(const char* aName, PtrType&& aPtr, Method aMethod, Args&&... aArgs)
+{
+  static_assert(sizeof...(Storages) == sizeof...(Args),
+                "<Storages...> size should be equal to number of arguments");
+  return detail::SetRunnableName(
+    NewRunnableMethod<Storages...>
+      (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...), aName);
+}
+
+template<typename... Storages, typename PtrType, typename Method, typename... Args>
+already_AddRefed<detail::NonOwningRunnableMethod<PtrType, Method>>
 NewNonOwningRunnableMethod(PtrType&& aPtr, Method aMethod, Args&&... aArgs)
 {
   static_assert(sizeof...(Storages) == sizeof...(Args),
                 "<Storages...> size should be equal to number of arguments");
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, false, false, Storages...>
+      new detail::NonOwningRunnableMethodImpl<PtrType, Method, Storages...>
       (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...));
 }
 
 template<typename... Storages, typename PtrType, typename Method, typename... Args>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, true, true>::base_type>
+already_AddRefed<detail::NonOwningRunnableMethod<PtrType, Method>>
+NewNonOwningRunnableMethod(const char* aName, PtrType&& aPtr, Method aMethod,
+                           Args&&... aArgs)
+{
+  static_assert(sizeof...(Storages) == sizeof...(Args),
+                "<Storages...> size should be equal to number of arguments");
+  return detail::SetRunnableName(
+    NewNonOwningRunnableMethod<Storages...>
+      (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...), aName);
+}
+
+template<typename... Storages, typename PtrType, typename Method, typename... Args>
+already_AddRefed<detail::CancelableRunnableMethod<PtrType, Method>>
 NewCancelableRunnableMethod(PtrType&& aPtr, Method aMethod, Args&&... aArgs)
 {
   static_assert(sizeof...(Storages) == sizeof...(Args),
                 "<Storages...> size should be equal to number of arguments");
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, true, true, Storages...>
+    new detail::CancelableRunnableMethodImpl<PtrType, Method, Storages...>
       (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...));
 }
 
 template<typename... Storages, typename PtrType, typename Method, typename... Args>
-already_AddRefed<
-  typename ::nsRunnableMethodTraits<
-    typename RemoveReference<PtrType>::Type, Method, false, true>::base_type>
+already_AddRefed<detail::CancelableRunnableMethod<PtrType, Method>>
+NewCancelableRunnableMethod(const char* aName, PtrType&& aPtr, Method aMethod,
+                            Args&&... aArgs)
+{
+  static_assert(sizeof...(Storages) == sizeof...(Args),
+                "<Storages...> size should be equal to number of arguments");
+  return detail::SetRunnableName(
+    NewCancelableRunnableMethod<Storages...>
+      (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...), aName);
+}
+
+template<typename... Storages, typename PtrType, typename Method, typename... Args>
+already_AddRefed<detail::NonOwningCancelableRunnableMethod<PtrType, Method>>
 NewNonOwningCancelableRunnableMethod(PtrType&& aPtr, Method aMethod,
-                                                Args&&... aArgs)
+                                     Args&&... aArgs)
 {
   static_assert(sizeof...(Storages) == sizeof...(Args),
                 "<Storages...> size should be equal to number of arguments");
   return do_AddRef(
-    new detail::RunnableMethodImpl
-      <typename RemoveReference<PtrType>::Type, Method, false, true, Storages...>
+    new detail::NonOwningCancelableRunnableMethodImpl<PtrType, Method, Storages...>
       (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...));
+}
+
+template<typename... Storages, typename PtrType, typename Method, typename... Args>
+already_AddRefed<detail::NonOwningCancelableRunnableMethod<PtrType, Method>>
+NewNonOwningCancelableRunnableMethod(const char* aName, PtrType&& aPtr,
+                                     Method aMethod, Args&&... aArgs)
+{
+  static_assert(sizeof...(Storages) == sizeof...(Args),
+                "<Storages...> size should be equal to number of arguments");
+  return detail::SetRunnableName(
+    NewNonOwningCancelableRunnableMethod<Storages...>
+      (Forward<PtrType>(aPtr), aMethod, mozilla::Forward<Args>(aArgs)...), aName);
 }
 
 } // namespace mozilla

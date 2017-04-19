@@ -159,13 +159,11 @@ class DataViewObject : public NativeObject
     static bool fun_setFloat64(JSContext* cx, unsigned argc, Value* vp);
 
     static bool initClass(JSContext* cx);
-    static void notifyBufferDetached(JSObject* view);
     template<typename NativeType>
-    static bool read(JSContext* cx, Handle<DataViewObject*> obj,
-                     const CallArgs& args, NativeType* val, const char* method);
+    static bool read(JSContext* cx, Handle<DataViewObject*> obj, const CallArgs& args,
+                     NativeType* val);
     template<typename NativeType>
-    static bool write(JSContext* cx, Handle<DataViewObject*> obj,
-                      const CallArgs& args, const char* method);
+    static bool write(JSContext* cx, Handle<DataViewObject*> obj, const CallArgs& args);
 
     void notifyBufferDetached(void* newData);
 

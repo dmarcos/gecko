@@ -14,7 +14,6 @@
 #include "nsNetUtil.h"
 #include "nsUnicharUtils.h"
 #include "nsPrintfCString.h"
-#include "prprf.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/storage.h"
 
@@ -339,6 +338,40 @@ nsNavBookmarks::AdjustIndices(int64_t aFolderId,
 }
 
 
+nsresult
+nsNavBookmarks::AdjustSeparatorsSyncCounter(int64_t aFolderId,
+                                            int32_t aStartIndex,
+                                            int64_t aSyncChangeDelta)
+{
+  MOZ_ASSERT(aStartIndex >= 0, "Bad start position");
+  if (!aSyncChangeDelta) {
+    return NS_OK;
+  }
+
+  nsCOMPtr<mozIStorageStatement> stmt = mDB->GetStatement(
+    "UPDATE moz_bookmarks SET syncChangeCounter = syncChangeCounter + :delta "
+      "WHERE parent = :parent AND position >= :start_index "
+      "AND type = :item_type "
+  );
+  NS_ENSURE_STATE(stmt);
+  mozStorageStatementScoper scoper(stmt);
+
+  nsresult rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("delta"), aSyncChangeDelta);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("parent"), aFolderId);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = stmt->BindInt32ByName(NS_LITERAL_CSTRING("start_index"), aStartIndex);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = stmt->BindInt32ByName(NS_LITERAL_CSTRING("item_type"), TYPE_SEPARATOR);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = stmt->Execute();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+
 NS_IMETHODIMP
 nsNavBookmarks::GetPlacesRoot(int64_t* aRoot)
 {
@@ -513,6 +546,10 @@ nsNavBookmarks::InsertBookmarkInDB(int64_t aPlaceId,
     rv = AddSyncChangesForBookmarksWithURI(aURI, syncChangeDelta);
     NS_ENSURE_SUCCESS(rv, rv);
   }
+
+  // Mark all affected separators as changed
+  rv = AdjustSeparatorsSyncCounter(aParentId, aIndex + 1, syncChangeDelta);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   // Add a cache entry since we know everything about this bookmark.
   BookmarkData bookmark;
@@ -703,6 +740,10 @@ nsNavBookmarks::RemoveItem(int64_t aItemId, uint16_t aSource)
   bookmark.lastModified = RoundedPRNow();
   rv = SetItemDateInternal(LAST_MODIFIED, syncChangeDelta,
                            bookmark.parentId, bookmark.lastModified);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Mark all affected separators as changed
+  rv = AdjustSeparatorsSyncCounter(bookmark.parentId, bookmark.position, syncChangeDelta);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (isUntagging) {
@@ -1067,12 +1108,11 @@ nsNavBookmarks::GetDescendantChildren(int64_t aFolderId,
     // item_child, and folder_child from moz_bookmarks.
     nsCOMPtr<mozIStorageStatement> stmt = mDB->GetStatement(
       "SELECT h.id, h.url, IFNULL(b.title, h.title), h.rev_host, h.visit_count, "
-             "h.last_visit_date, f.url, b.id, b.dateAdded, b.lastModified, "
+             "h.last_visit_date, null, b.id, b.dateAdded, b.lastModified, "
              "b.parent, null, h.frecency, h.hidden, h.guid, null, null, null, "
              "b.guid, b.position, b.type, b.fk, b.syncStatus "
       "FROM moz_bookmarks b "
       "LEFT JOIN moz_places h ON b.fk = h.id "
-      "LEFT JOIN moz_favicons f ON h.favicon_id = f.id "
       "WHERE b.parent = :parent "
       "ORDER BY b.position ASC"
     );
@@ -1414,12 +1454,23 @@ nsNavBookmarks::MoveItem(int64_t aItemId,
     // change. Update the item's last modified date without bumping its counter.
     rv = SetItemDateInternal(LAST_MODIFIED, 0, bookmark.id, now);
     NS_ENSURE_SUCCESS(rv, rv);
+
+    // Mark all affected separators as changed
+    int32_t startIndex = std::min(bookmark.position, newIndex);
+    rv = AdjustSeparatorsSyncCounter(bookmark.parentId, startIndex, syncChangeDelta);
+    NS_ENSURE_SUCCESS(rv, rv);
   } else {
     // Otherwise, if we're moving between containers, both parents and the child
     // need sync changes.
     rv = SetItemDateInternal(LAST_MODIFIED, syncChangeDelta, aNewParent, now);
     NS_ENSURE_SUCCESS(rv, rv);
     rv = SetItemDateInternal(LAST_MODIFIED, syncChangeDelta, bookmark.id, now);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // Mark all affected separators as changed
+    rv = AdjustSeparatorsSyncCounter(bookmark.parentId, bookmark.position, syncChangeDelta);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = AdjustSeparatorsSyncCounter(aNewParent, newIndex, syncChangeDelta);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -1614,7 +1665,7 @@ nsNavBookmarks::SetItemDateAdded(int64_t aItemId, PRTime aDateAdded,
                    OnItemChanged(bookmark.id,
                                  NS_LITERAL_CSTRING("dateAdded"),
                                  false,
-                                 nsPrintfCString("%lld", bookmark.dateAdded),
+                                 nsPrintfCString("%" PRId64, bookmark.dateAdded),
                                  bookmark.dateAdded,
                                  bookmark.type,
                                  bookmark.parentId,
@@ -1684,7 +1735,7 @@ nsNavBookmarks::SetItemLastModified(int64_t aItemId, PRTime aLastModified,
                    OnItemChanged(bookmark.id,
                                  NS_LITERAL_CSTRING("lastModified"),
                                  false,
-                                 nsPrintfCString("%lld", bookmark.lastModified),
+                                 nsPrintfCString("%" PRId64, bookmark.lastModified),
                                  bookmark.lastModified,
                                  bookmark.type,
                                  bookmark.parentId,
@@ -2095,12 +2146,11 @@ nsNavBookmarks::QueryFolderChildren(
   // item_child, and folder_child from moz_bookmarks.
   nsCOMPtr<mozIStorageStatement> stmt = mDB->GetStatement(
     "SELECT h.id, h.url, IFNULL(b.title, h.title), h.rev_host, h.visit_count, "
-           "h.last_visit_date, f.url, b.id, b.dateAdded, b.lastModified, "
+           "h.last_visit_date, null, b.id, b.dateAdded, b.lastModified, "
            "b.parent, null, h.frecency, h.hidden, h.guid, null, null, null, "
            "b.guid, b.position, b.type, b.fk "
     "FROM moz_bookmarks b "
     "LEFT JOIN moz_places h ON b.fk = h.id "
-    "LEFT JOIN moz_favicons f ON h.favicon_id = f.id "
     "WHERE b.parent = :parent "
     "ORDER BY b.position ASC"
   );
@@ -2233,12 +2283,11 @@ nsNavBookmarks::QueryFolderChildrenAsync(
   // item_child, and folder_child from moz_bookmarks.
   nsCOMPtr<mozIStorageAsyncStatement> stmt = mDB->GetAsyncStatement(
     "SELECT h.id, h.url, IFNULL(b.title, h.title), h.rev_host, h.visit_count, "
-           "h.last_visit_date, f.url, b.id, b.dateAdded, b.lastModified, "
+           "h.last_visit_date, null, b.id, b.dateAdded, b.lastModified, "
            "b.parent, null, h.frecency, h.hidden, h.guid, null, null, null, "
            "b.guid, b.position, b.type, b.fk "
     "FROM moz_bookmarks b "
     "LEFT JOIN moz_places h ON b.fk = h.id "
-    "LEFT JOIN moz_favicons f ON h.favicon_id = f.id "
     "WHERE b.parent = :parent "
     "ORDER BY b.position ASC"
   );
@@ -2739,6 +2788,9 @@ nsNavBookmarks::SetItemIndex(int64_t aItemId,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
+  rv = AdjustSeparatorsSyncCounter(bookmark.parentId, aNewIndex, syncChangeDelta);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   rv = PreventSyncReparenting(bookmark);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -3221,7 +3273,8 @@ NS_IMETHODIMP
 nsNavBookmarks::OnVisit(nsIURI* aURI, int64_t aVisitId, PRTime aTime,
                         int64_t aSessionID, int64_t aReferringID,
                         uint32_t aTransitionType, const nsACString& aGUID,
-                        bool aHidden, uint32_t aVisitCount, uint32_t aTyped)
+                        bool aHidden, uint32_t aVisitCount, uint32_t aTyped,
+                        const nsAString& aLastKnownTitle)
 {
   NS_ENSURE_ARG(aURI);
 
@@ -3245,17 +3298,6 @@ nsNavBookmarks::OnDeleteURI(nsIURI* aURI,
                             const nsACString& aGUID,
                             uint16_t aReason)
 {
-  NS_ENSURE_ARG(aURI);
-
-#ifdef DEBUG
-  nsNavHistory* history = nsNavHistory::GetHistoryService();
-  int64_t placeId;
-  nsAutoCString placeGuid;
-  MOZ_ASSERT(
-    history && NS_SUCCEEDED(history->GetIdForPage(aURI, &placeId, placeGuid)) && !placeId,
-    "OnDeleteURI was notified for a page that still exists?"
-  );
-#endif
   return NS_OK;
 }
 

@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* eslint no-undef:2 */
-
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 Components.utils.import("resource://gre/modules/AppConstants.jsm");
@@ -98,20 +96,14 @@ const OVERRIDE_NEW_BUILD_ID = 3;
  *  OVERRIDE_NONE otherwise.
  */
 function needHomepageOverride(prefb) {
-  var savedmstone = null;
-  try {
-    savedmstone = prefb.getCharPref("browser.startup.homepage_override.mstone");
-  } catch (e) {}
+  var savedmstone = prefb.getCharPref("browser.startup.homepage_override.mstone", "");
 
   if (savedmstone == "ignore")
     return OVERRIDE_NONE;
 
   var mstone = Services.appinfo.platformVersion;
 
-  var savedBuildID = null;
-  try {
-    savedBuildID = prefb.getCharPref("browser.startup.homepage_override.buildID");
-  } catch (e) {}
+  var savedBuildID = prefb.getCharPref("browser.startup.homepage_override.buildID", "");
 
   var buildID = Services.appinfo.platformBuildID;
 
@@ -205,20 +197,20 @@ function openWindow(parent, url, target, features, args, noExternalArgs) {
       var sstring = Components.classes["@mozilla.org/supports-string;1"]
                               .createInstance(nsISupportsString);
       sstring.data = uri;
-      uriArray.appendElement(sstring, /* weak = */ false);
+      uriArray.appendElement(sstring);
     });
-    argArray.appendElement(uriArray, /* weak =*/ false);
+    argArray.appendElement(uriArray);
   } else {
-    argArray.appendElement(null, /* weak =*/ false);
+    argArray.appendElement(null);
   }
 
   // Pass these as null to ensure that we always trigger the "single URL"
   // behavior in browser.js's gBrowserInit.onLoad (which handles the window
   // arguments)
-  argArray.appendElement(null, /* weak =*/ false); // charset
-  argArray.appendElement(null, /* weak =*/ false); // referer
-  argArray.appendElement(null, /* weak =*/ false); // postData
-  argArray.appendElement(null, /* weak =*/ false); // allowThirdPartyFixup
+  argArray.appendElement(null); // charset
+  argArray.appendElement(null); // referer
+  argArray.appendElement(null); // postData
+  argArray.appendElement(null); // allowThirdPartyFixup
 
   return Services.ww.openWindow(parent, url, target, features, argArray);
 }
@@ -231,7 +223,7 @@ function openPreferences() {
                        .createInstance(Components.interfaces.nsISupportsString);
   wuri.data = "about:preferences";
 
-  args.appendElement(wuri, /* weak = */ false);
+  args.appendElement(wuri);
 
   Services.ww.openWindow(null, gBrowserContentHandler.chromeURL,
                          "_blank",
@@ -259,10 +251,10 @@ function doSearch(searchTerm, cmdLine) {
                        .createInstance(Components.interfaces.nsISupportsString);
   wuri.data = submission.uri.spec;
 
-  args.appendElement(wuri, /* weak =*/ false);
-  args.appendElement(null, /* weak =*/ false);
-  args.appendElement(null, /* weak =*/ false);
-  args.appendElement(submission.postData, /* weak =*/ false);
+  args.appendElement(wuri);
+  args.appendElement(null);
+  args.appendElement(null);
+  args.appendElement(submission.postData);
 
   // XXXbsmedberg: use handURIToExistingBrowser to obey tabbed-browsing
   // preferences, but need nsIBrowserDOMWindow extensions
@@ -289,7 +281,7 @@ nsBrowserContentHandler.prototype = {
 
   /* helper functions */
 
-  mChromeURL : null,
+  mChromeURL: null,
 
   get chromeURL() {
     if (this.mChromeURL) {
@@ -302,13 +294,13 @@ nsBrowserContentHandler.prototype = {
   },
 
   /* nsISupports */
-  QueryInterface : XPCOMUtils.generateQI([nsICommandLineHandler,
-                                          nsIBrowserHandler,
-                                          nsIContentHandler,
-                                          nsICommandLineValidator]),
+  QueryInterface: XPCOMUtils.generateQI([nsICommandLineHandler,
+                                         nsIBrowserHandler,
+                                         nsIContentHandler,
+                                         nsICommandLineValidator]),
 
   /* nsICommandLineHandler */
-  handle : function bch_handle(cmdLine) {
+  handle: function bch_handle(cmdLine) {
     if (cmdLine.handleFlag("browser", false)) {
       // Passing defaultArgs, so use NO_EXTERNAL_URIS
       openWindow(null, this.chromeURL, "_blank",
@@ -484,10 +476,7 @@ nsBrowserContentHandler.prototype = {
       // URL if we do end up showing an overridePage. This makes it possible
       // to have the overridePage's content vary depending on the version we're
       // upgrading from.
-      let old_mstone = "unknown";
-      try {
-        old_mstone = Services.prefs.getCharPref("browser.startup.homepage_override.mstone");
-      } catch (ex) {}
+      let old_mstone = Services.prefs.getCharPref("browser.startup.homepage_override.mstone", "unknown");
       override = needHomepageOverride(prefb);
       if (override != OVERRIDE_NONE) {
         switch (override) {
@@ -567,9 +556,9 @@ nsBrowserContentHandler.prototype = {
     return uri;
   },
 
-  mFeatures : null,
+  mFeatures: null,
 
-  getFeatures : function bch_features(cmdLine) {
+  getFeatures: function bch_features(cmdLine) {
     if (this.mFeatures === null) {
       this.mFeatures = "";
 
@@ -596,7 +585,7 @@ nsBrowserContentHandler.prototype = {
 
   /* nsIContentHandler */
 
-  handleContent : function bch_handleContent(contentType, context, request) {
+  handleContent: function bch_handleContent(contentType, context, request) {
     try {
       var webNavInfo = Components.classes["@mozilla.org/webnavigation-info;1"]
                                  .getService(nsIWebNavigationInfo);
@@ -614,7 +603,7 @@ nsBrowserContentHandler.prototype = {
   },
 
   /* nsICommandLineValidator */
-  validate : function bch_validate(cmdLine) {
+  validate: function bch_validate(cmdLine) {
     // Other handlers may use osint so only handle the osint flag if the url
     // flag is also present and the command line is valid.
     var osintFlagIdx = cmdLine.findFlag("osint", false);
@@ -678,7 +667,7 @@ nsDefaultCommandLineHandler.prototype = {
   classID: Components.ID("{47cd0651-b1be-4a0f-b5c4-10e5a573ef71}"),
 
   /* nsISupports */
-  QueryInterface : function dch_QI(iid) {
+  QueryInterface: function dch_QI(iid) {
     if (!iid.equals(nsISupports) &&
         !iid.equals(nsICommandLineHandler))
       throw Components.results.NS_ERROR_NO_INTERFACE;
@@ -689,7 +678,7 @@ nsDefaultCommandLineHandler.prototype = {
   _haveProfile: false,
 
   /* nsICommandLineHandler */
-  handle : function dch_handle(cmdLine) {
+  handle: function dch_handle(cmdLine) {
     var urilist = [];
 
     if (AppConstants.platform == "win") {
@@ -774,7 +763,7 @@ nsDefaultCommandLineHandler.prototype = {
     }
   },
 
-  helpInfo : "",
+  helpInfo: "",
 };
 
 var components = [nsBrowserContentHandler, nsDefaultCommandLineHandler];

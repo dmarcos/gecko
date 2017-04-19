@@ -10,7 +10,7 @@
 #include "mozilla/dom/FontFaceSetBinding.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "gfxUserFontSet.h"
-#include "nsCSSRules.h"
+#include "nsCSSFontFaceRule.h"
 #include "nsICSSLoaderObserver.h"
 
 struct gfxFontFaceSrc;
@@ -162,6 +162,8 @@ public:
     return set ? set->GetPresContext() : nullptr;
   }
 
+  nsIDocument* Document() const { return mDocument; }
+
   // -- Web IDL --------------------------------------------------------------
 
   IMPL_EVENT_HANDLER(loading)
@@ -232,7 +234,7 @@ private:
    */
   void DispatchLoadingFinishedEvent(
                                 const nsAString& aType,
-                                const nsTArray<FontFace*>& aFontFaces);
+                                nsTArray<OwningNonNull<FontFace>>&& aFontFaces);
 
   // Note: if you add new cycle collected objects to FontFaceRecord,
   // make sure to update FontFaceSet's cycle collection macros

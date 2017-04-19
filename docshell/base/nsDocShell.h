@@ -60,8 +60,10 @@
 #include "nsRect.h"
 #include "Units.h"
 #include "nsIDeprecationWarner.h"
+#include "nsIThrottlingService.h"
 
 namespace mozilla {
+enum class TaskCategory;
 namespace dom {
 class EventTarget;
 class PendingGlobalHistoryEntry;
@@ -232,8 +234,7 @@ public:
   NS_IMETHOD SetPrivateBrowsing(bool) override;
   NS_IMETHOD GetUseRemoteTabs(bool*) override;
   NS_IMETHOD SetRemoteTabs(bool) override;
-  NS_IMETHOD GetOriginAttributes(JS::MutableHandle<JS::Value>) override;
-  NS_IMETHOD IsTrackingProtectionOn(bool*) override;
+  NS_IMETHOD GetScriptableOriginAttributes(JS::MutableHandle<JS::Value>) override;
 
   // Restores a cached presentation from history (mLSHE).
   // This method swaps out the content viewer and simulates loads for
@@ -738,9 +739,6 @@ protected:
   // Convenience method for getting our parent docshell. Can return null
   already_AddRefed<nsDocShell> GetParentDocshell();
 
-  // Check if aURI is about:newtab.
-  bool IsAboutNewtab(nsIURI* aURI);
-
 protected:
   nsresult GetCurScrollPos(int32_t aScrollOrientation, int32_t* aCurPos);
   nsresult SetCurScrollPosEx(int32_t aCurHorizontalPos,
@@ -807,6 +805,8 @@ protected:
   bool HasUnloadedParent();
 
   void UpdateGlobalHistoryTitle(nsIURI* aURI);
+
+  NS_IMETHOD_(void) GetOriginAttributes(mozilla::OriginAttributes& aAttrs) override;
 
   // Dimensions of the docshell
   nsIntRect mBounds;
@@ -960,6 +960,7 @@ protected:
   bool mIsAppTab : 1;
   bool mUseGlobalHistory : 1;
   bool mUseRemoteTabs : 1;
+  bool mUseTrackingProtection : 1;
   bool mDeviceSizeIsPageSize : 1;
   bool mWindowDraggingAllowed : 1;
   bool mInFrameSwap : 1;
@@ -1057,8 +1058,9 @@ private:
   // Separate function to do the actual name (i.e. not _top, _self etc.)
   // searching for FindItemWithName.
   nsresult DoFindItemWithName(const nsAString& aName,
-                              nsISupports* aRequestor,
+                              nsIDocShellTreeItem* aRequestor,
                               nsIDocShellTreeItem* aOriginalRequestor,
+                              bool aSkipTabGroup,
                               nsIDocShellTreeItem** aResult);
 
   // Helper assertion to enforce that mInPrivateBrowsing is in sync with
@@ -1075,6 +1077,11 @@ private:
   // children docshells.
   void FirePageHideNotificationInternal(bool aIsUnload,
                                         bool aSkipCheckingDynEntries);
+
+  // Dispatch a runnable to the TabGroup associated to this docshell.
+  nsresult DispatchToTabGroup(const char* aName,
+                              mozilla::TaskCategory aCategory,
+                              already_AddRefed<nsIRunnable>&& aRunnable);
 
 #ifdef DEBUG
   // We're counting the number of |nsDocShells| to help find leaks
@@ -1094,6 +1101,9 @@ public:
     InterfaceRequestorProxy() {}
     nsWeakPtr mWeakPtr;
   };
+
+private:
+  mozilla::UniquePtr<mozilla::net::Throttler> mThrottler;
 };
 
 #endif /* nsDocShell_h__ */

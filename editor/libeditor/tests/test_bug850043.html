@@ -5,7 +5,6 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=850043
 -->
 <head>
   <title>Test for Bug 850043</title>
-  <script type="application/javascript" src="/MochiKit/packed.js"></script>
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
   <script type="application/javascript" src="/tests/SimpleTest/EventUtils.js"></script>
 
@@ -30,6 +29,7 @@ SimpleTest.waitForFocus(() => {
     getService(SpecialPowers.Ci.nsIFocusManager);
 
   let element = document.getElementById("textarea");
+  element.setSelectionRange(element.value.length, element.value.length);
   element.focus();
   is(SpecialPowers.unwrap(fm.focusedElement), element, "failed to move focus");
 

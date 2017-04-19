@@ -1,3 +1,6 @@
+/* global $:false, Handlebars:false */
+/* import-globals-from messages.js */
+
 /*
 PKT_SAVED_OVERLAY is the view itself and contains all of the methods to manipute the overlay and messaging.
 It does not contain any logic for saving or communication with the extension or server.
@@ -156,7 +159,7 @@ var PKT_SAVED_OVERLAY = function(options) {
                     var r = new RegExp("^" + term);
                     for (var i = 0; i < myself.userTags.length; i++) {
                         if (r.test(myself.userTags[i]) && limit > 0) {
-                            returnlist.push({name:myself.userTags[i]});
+                            returnlist.push({name: myself.userTags[i]});
                             limit--;
                         }
                     }
@@ -171,7 +174,7 @@ var PKT_SAVED_OVERLAY = function(options) {
                 if ($.trim(text).length > 25 || !$.trim(text).length) {
                     if (text.length > 25) {
                         myself.showTagsError(myself.dictJSON.maxtaglength);
-                        changestamp = Date.now();
+                        this.changestamp = Date.now();
                         setTimeout(function() {
                             $(".token-input-input-token input").val(text).focus();
                         }, 10);
@@ -179,7 +182,7 @@ var PKT_SAVED_OVERLAY = function(options) {
                     return null;
                 }
                 myself.hideTagsError();
-                return {name:myself.sanitizeText(text.toLowerCase())};
+                return {name: myself.sanitizeText(text.toLowerCase())};
             },
             onReady() {
                 $(".token-input-dropdown").addClass("token-input-dropdown-tag");
@@ -192,7 +195,7 @@ var PKT_SAVED_OVERLAY = function(options) {
                             return;
                         }
                         myself.justaddedsuggested = true;
-                        inputwrapper.find(".pkt_ext_tag_input").tokenInput("add", {id:inputwrapper.find(".token-input-token").length, name:tag.text()});
+                        inputwrapper.find(".pkt_ext_tag_input").tokenInput("add", {id: inputwrapper.find(".token-input-token").length, name: tag.text()});
                         tag.addClass("token-suggestedtag-inactive");
                         $(".token-input-input-token input").focus();
                     });
@@ -203,7 +206,7 @@ var PKT_SAVED_OVERLAY = function(options) {
                     }
                 }).on("keypress", "input", function(e) {
                     if (e.which == 13) {
-                        if (typeof changestamp == "undefined" || (Date.now() - changestamp > 250)) {
+                        if (typeof this.changestamp == "undefined" || (Date.now() - this.changestamp > 250)) {
                             e.preventDefault();
                             myself.wrapper.find(".pkt_ext_btn").trigger("click");
                         }
@@ -215,13 +218,13 @@ var PKT_SAVED_OVERLAY = function(options) {
             },
             onAdd() {
                 myself.checkValidTagSubmit();
-                changestamp = Date.now();
+                this.changestamp = Date.now();
                 myself.hideInactiveTags();
                 myself.checkPlaceholderStatus();
             },
             onDelete() {
                 myself.checkValidTagSubmit();
-                changestamp = Date.now();
+                this.changestamp = Date.now();
                 myself.showActiveTags();
                 myself.checkPlaceholderStatus();
             },
@@ -239,7 +242,7 @@ var PKT_SAVED_OVERLAY = function(options) {
                 if (selected.length) {
                     e.preventDefault();
                     e.stopImmediatePropagation();
-                    inputwrapper.find(".pkt_ext_tag_input").tokenInput("remove", {name:selected.find("p").text()});
+                    inputwrapper.find(".pkt_ext_tag_input").tokenInput("remove", {name: selected.find("p").text()});
                 }
             } else if ($(e.target).parent().hasClass("token-input-input-token")) {
                 e.stopImmediatePropagation();
@@ -533,6 +536,7 @@ PKT_SAVED.prototype = {
 $(function() {
     if (!window.thePKT_SAVED) {
         var thePKT_SAVED = new PKT_SAVED();
+        /* global thePKT_SAVED */
         window.thePKT_SAVED = thePKT_SAVED;
         thePKT_SAVED.init();
     }

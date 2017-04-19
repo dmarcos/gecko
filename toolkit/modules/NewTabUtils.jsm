@@ -118,18 +118,14 @@ LinksStorage.prototype = {
 
   get _storedVersion() {
     if (this.__storedVersion === undefined) {
-      try {
-        this.__storedVersion =
-          Services.prefs.getIntPref("browser.newtabpage.storageVersion");
-      } catch (ex) {
-        // The storage version is unknown, so either:
-        // - it's a new profile
-        // - it's a profile where versioning information got lost
-        // In this case we still run through all of the valid migrations,
-        // starting from 1, as if it was a downgrade.  As previously stated the
-        // migrations should already support running on an updated store.
-        this.__storedVersion = 1;
-      }
+      // When the pref is not set, the storage version is unknown, so either:
+      // - it's a new profile
+      // - it's a profile where versioning information got lost
+      // In this case we still run through all of the valid migrations,
+      // starting from 1, as if it was a downgrade.  As previously stated the
+      // migrations should already support running on an updated store.
+      this.__storedVersion =
+        Services.prefs.getIntPref("browser.newtabpage.storageVersion", 1);
     }
     return this.__storedVersion;
   },
@@ -148,8 +144,7 @@ LinksStorage.prototype = {
   get: function Storage_get(aKey, aDefault) {
     let value;
     try {
-      let prefValue = Services.prefs.getComplexValue(this._prefs[aKey],
-                                                     Ci.nsISupportsString).data;
+      let prefValue = Services.prefs.getStringPref(this._prefs[aKey]);
       value = JSON.parse(prefValue);
     } catch (e) {}
     return value || aDefault;
@@ -162,11 +157,7 @@ LinksStorage.prototype = {
    */
   set: function Storage_set(aKey, aValue) {
     // Page titles may contain unicode, thus use complex values.
-    let string = Cc["@mozilla.org/supports-string;1"]
-                   .createInstance(Ci.nsISupportsString);
-    string.data = JSON.stringify(aValue);
-    Services.prefs.setComplexValue(this._prefs[aKey], Ci.nsISupportsString,
-                                   string);
+    Services.prefs.setStringPref(this._prefs[aKey], JSON.stringify(aValue));
   },
 
   /**
@@ -353,8 +344,8 @@ var GridPrefs = {
    * Initializes object. Adds a preference observer
    */
   init: function GridPrefs_init() {
-    Services.prefs.addObserver(PREF_NEWTAB_ROWS, this, false);
-    Services.prefs.addObserver(PREF_NEWTAB_COLUMNS, this, false);
+    Services.prefs.addObserver(PREF_NEWTAB_ROWS, this);
+    Services.prefs.addObserver(PREF_NEWTAB_COLUMNS, this);
   },
 
   /**
@@ -731,6 +722,14 @@ var PlacesProvider = {
     if (this._batchProcessingDepth == 0 && this._batchCalledFrecencyChanged) {
       this.onManyFrecenciesChanged();
       this._batchCalledFrecencyChanged = false;
+    }
+  },
+
+  onVisit(aURI, aVisitId, aTime, aSessionId, aReferrerVisitId, aTransitionType,
+          aGuid, aHidden, aVisitCount, aTyped, aLastKnownTitle) {
+    // For new visits, if we're not batch processing, notify for a title // update
+    if (!this._batchProcessingDepth && aVisitCount == 1 && aLastKnownTitle) {
+      this.onTitleChanged(aURI, aLastKnownTitle, aGuid);
     }
   },
 
@@ -1292,7 +1291,7 @@ var Telemetry = {
    * Initializes object.
    */
   init: function Telemetry_init() {
-    Services.obs.addObserver(this, TOPIC_GATHER_TELEMETRY, false);
+    Services.obs.addObserver(this, TOPIC_GATHER_TELEMETRY);
   },
 
   /**

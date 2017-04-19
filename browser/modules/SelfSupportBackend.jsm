@@ -17,7 +17,7 @@ Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "HiddenFrame",
-  "resource:///modules/HiddenFrame.jsm");
+  "resource://gre/modules/HiddenFrame.jsm");
 
 // Enables or disables the Self Support.
 const PREF_ENABLED = "browser.selfsupport.enabled";
@@ -72,6 +72,9 @@ var SelfSupportBackendInternal = {
   _log: null,
   _progressListener: null,
 
+  // Whether we're invited to let test code talk to our frame.
+  _testing: false,
+
   /**
    * Initializes the self support backend.
    */
@@ -80,7 +83,7 @@ var SelfSupportBackendInternal = {
 
     this._log.trace("init");
 
-    Preferences.observe(PREF_BRANCH_LOG, this._configureLogging, this);
+    Services.prefs.addObserver(PREF_BRANCH_LOG, this);
 
     // Only allow to use SelfSupport if Unified Telemetry is enabled.
     let reportingEnabled = IS_UNIFIED_TELEMETRY;
@@ -102,7 +105,7 @@ var SelfSupportBackendInternal = {
       return;
     }
 
-    Services.obs.addObserver(this, "sessionstore-windows-restored", false);
+    Services.obs.addObserver(this, "sessionstore-windows-restored");
   },
 
   /**
@@ -111,7 +114,7 @@ var SelfSupportBackendInternal = {
   uninit() {
     this._log.trace("uninit");
 
-    Preferences.ignore(PREF_BRANCH_LOG, this._configureLogging, this);
+    Services.prefs.removeObserver(PREF_BRANCH_LOG, this);
 
     // Cancel delayed loading, if still active, when shutting down.
     clearTimeout(this._delayedLoadTimerId);
@@ -136,6 +139,9 @@ var SelfSupportBackendInternal = {
       this._frame.destroy();
       this._frame = null;
     }
+    if (this._testing) {
+      Services.obs.notifyObservers(this._browser, "self-support-browser-destroyed");
+    }
   },
 
   /**
@@ -148,6 +154,8 @@ var SelfSupportBackendInternal = {
     if (aTopic === "sessionstore-windows-restored") {
       Services.obs.removeObserver(this, "sessionstore-windows-restored");
       this._delayedLoadTimerId = setTimeout(this._loadSelfSupport.bind(this), STARTUP_DELAY_MS);
+    } else if (aTopic === "nsPref:changed") {
+      this._configureLogging();
     }
   },
 
@@ -193,6 +201,9 @@ var SelfSupportBackendInternal = {
       this._browser.setAttribute("disableglobalhistory", "true");
       this._browser.setAttribute("src", aURL);
 
+      if (this._testing) {
+        Services.obs.notifyObservers(this._browser, "self-support-browser-created");
+      }
       doc.documentElement.appendChild(this._browser);
     });
   },

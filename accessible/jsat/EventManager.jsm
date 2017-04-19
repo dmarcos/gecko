@@ -288,7 +288,7 @@ this.EventManager.prototype = {
       {
         let position = this.contentControl.vc.position;
         // Check if position is in the subtree of the DOCUMENT_LOAD_COMPLETE
-        // event's dialog accesible or accessible document
+        // event's dialog accessible or accessible document
         let subtreeRoot = aEvent.accessible.role === Roles.DIALOG ?
           aEvent.accessible : aEvent.accessibleDocument;
         if (aEvent.accessible === aEvent.accessibleDocument ||
@@ -564,16 +564,10 @@ this.EventManager.prototype = {
     }
   },
 
-  onProgressChange: function onProgressChange() {},
-
   onLocationChange: function onLocationChange(aWebProgress, aRequest, aLocation, aFlags) {
     let docAcc = Utils.AccService.getAccessibleFor(aWebProgress.DOMWindow.document);
     this.present(Presentation.tabStateChanged(docAcc, 'newdoc'));
   },
-
-  onStatusChange: function onStatusChange() {},
-
-  onSecurityChange: function onSecurityChange() {},
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
                                          Ci.nsISupportsWeakReference,
@@ -605,7 +599,7 @@ const AccessibilityEventObserver = {
     if (this.started || this.listenerCount === 0) {
       return;
     }
-    Services.obs.addObserver(this, 'accessible-event', false);
+    Services.obs.addObserver(this, 'accessible-event');
     this.started = true;
   },
 

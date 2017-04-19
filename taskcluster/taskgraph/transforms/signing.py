@@ -7,15 +7,11 @@ Transform the signing task into an actual task description.
 
 from __future__ import absolute_import, print_function, unicode_literals
 
-from taskgraph.transforms.base import (
-    validate_schema,
-    TransformSequence
-)
+from taskgraph.transforms.base import TransformSequence
+from taskgraph.util.schema import validate_schema, Schema
+from taskgraph.util.scriptworker import get_signing_cert_scope
 from taskgraph.transforms.task import task_description_schema
-from voluptuous import Schema, Any, Required, Optional
-
-
-ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/<{}>/artifacts/{}'
+from voluptuous import Any, Required, Optional
 
 
 # Voluptuous uses marker objects as dictionary *keys*, but they are not
@@ -60,6 +56,9 @@ signing_description_schema = Schema({
     # below transforms for defaults of various values.
     Optional('treeherder'): task_description_schema['treeherder'],
 
+    # Routes specific to this task, if defined
+    Optional('routes'): [basestring],
+
     # If True, adds a route which funsize uses to schedule generation of partial mar
     # files for updates. Expected to be added on nightly builds only.
     Optional('use-funsize-route'): bool,
@@ -99,14 +98,15 @@ def make_task_description(config, jobs):
         label = job.get('label', "{}-signing".format(dep_job.label))
 
         attributes = {
-                'nightly': dep_job.attributes.get('nightly', False),
-                'build_platform': dep_job.attributes.get('build_platform'),
-                'build_type': dep_job.attributes.get('build_type'),
+            'nightly': dep_job.attributes.get('nightly', False),
+            'build_platform': dep_job.attributes.get('build_platform'),
+            'build_type': dep_job.attributes.get('build_type'),
         }
         if dep_job.attributes.get('chunk_locales'):
             # Used for l10n attribute passthrough
             attributes['chunk_locales'] = dep_job.attributes.get('chunk_locales')
 
+        signing_cert_scope = get_signing_cert_scope(config)
         task = {
             'label': label,
             'description': "{} Signing".format(
@@ -115,15 +115,16 @@ def make_task_description(config, jobs):
             'worker': {'implementation': 'scriptworker-signing',
                        'upstream-artifacts': job['upstream-artifacts'],
                        'max-run-time': 3600},
-            'scopes': ["project:releng:signing:cert:nightly-signing"] + signing_format_scopes,
+            'scopes': [signing_cert_scope] + signing_format_scopes,
             'dependencies': {job['depname']: dep_job.label},
             'attributes': attributes,
             'run-on-projects': dep_job.attributes.get('run_on_projects'),
             'treeherder': treeherder,
+            'routes': job.get('routes', []),
         }
 
         if job.get('use-funsize-route', False):
-            task['routes'] = ["index.project.releng.funsize.level-{level}.{project}".format(
-                project=config.params['project'], level=config.params['level'])]
+            task['routes'].append("project.releng.funsize.level-{level}.{project}".format(
+                project=config.params['project'], level=config.params['level']))
 
         yield task

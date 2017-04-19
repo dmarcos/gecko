@@ -132,6 +132,12 @@ MP4Decoder::IsSupportedType(const MediaContainerType& aType,
             NS_LITERAL_CSTRING("audio/flac"), aType));
         continue;
       }
+      if (codec.EqualsLiteral("vp9") || codec.EqualsLiteral("vp9.0")) {
+        trackInfos.AppendElement(
+          CreateTrackInfoWithMIMETypeAndContainerTypeExtraParameters(
+            NS_LITERAL_CSTRING("video/vp9"), aType));
+        continue;
+      }
       // Note: Only accept H.264 in a video content type, not in an audio
       // content type.
       if (IsWhitelistedH264Codec(codec) && isVideo) {
@@ -214,8 +220,7 @@ CreateTestH264Decoder(layers::KnowsCompositor* aKnowsCompositor,
 {
   aConfig.mMimeType = "video/avc";
   aConfig.mId = 1;
-  aConfig.mDuration = 40000;
-  aConfig.mMediaTime = 0;
+  aConfig.mDuration = media::TimeUnit::FromMicroseconds(40000);
   aConfig.mImage = aConfig.mDisplay = nsIntSize(640, 360);
   aConfig.mExtraData = new MediaByteBuffer();
   aConfig.mExtraData->AppendElements(sTestH264ExtraData,

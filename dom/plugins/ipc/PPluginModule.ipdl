@@ -5,7 +5,6 @@
 
 include protocol PPluginInstance;
 include protocol PPluginScriptableObject;
-include protocol PCrashReporter;
 include protocol PContent;
 include ProfilerTypes;
 
@@ -15,6 +14,9 @@ using mozilla::dom::NativeThreadId from "mozilla/dom/TabMessageUtils.h";
 using class mac_plugin_interposing::NSCursorInfo from "mozilla/plugins/PluginMessageUtils.h";
 using struct nsID from "nsID.h";
 using struct mozilla::plugins::NPAudioDeviceChangeDetailsIPC from "mozilla/plugins/PluginMessageUtils.h";
+using mozilla::plugins::GetFileNameFunc from "mozilla/plugins/PluginMessageUtils.h";
+using mozilla::plugins::OpenFileNameIPC from "mozilla/plugins/PluginMessageUtils.h";
+using mozilla::plugins::OpenFileNameRetIPC from "mozilla/plugins/PluginMessageUtils.h";
 
 namespace mozilla {
 namespace plugins {
@@ -37,7 +39,6 @@ struct PluginSettings
 intr protocol PPluginModule
 {
   manages PPluginInstance;
-  manages PCrashReporter;
 
 both:
   // Window-specific message which instructs the interrupt mechanism to enter
@@ -62,7 +63,6 @@ child:
   async AsyncNP_Initialize(PluginSettings settings);
 
   async PPluginInstance(nsCString aMimeType,
-                        uint16_t aMode,
                         nsCString[] aNames,
                         nsCString[] aValues);
 
@@ -92,15 +92,15 @@ child:
 
   async SetParentHangTimeout(uint32_t seconds);
 
-  intr PCrashReporter()
-    returns (NativeThreadId tid, uint32_t processType);
+  intr InitCrashReporter(Shmem shmem)
+    returns (NativeThreadId tid);
 
   /**
    * Control the Gecko Profiler in the plugin process.
    */
   async StartProfiler(ProfilerInitParams params);
   async StopProfiler();
-
+  async PauseProfiler(bool aPause);
   async GatherProfile();
 
   async SettingChanged(PluginSettings settings);
@@ -153,7 +153,7 @@ parent:
   // down the plugin process in response.
   async NotifyContentModuleDestroyed();
 
-  async Profile(nsCString aProfile);
+  async Profile(nsCString aProfile, bool aIsExitProfile);
 
   // Answers to request about site data
   async ReturnClearSiteData(NPError aRv, uint64_t aCallbackId);
@@ -165,6 +165,10 @@ parent:
 
   intr NPN_SetValue_NPPVpluginRequiresAudioDeviceChanges(bool shouldRegister)
     returns (NPError result);
+
+  // Used to broker the GetOpenFileName/GetSaveFileName file pickers on Windows.
+  intr GetFileName(GetFileNameFunc aFunc, OpenFileNameIPC aOfnIn)
+    returns (OpenFileNameRetIPC aOfnOut, bool aResult);
 };
 
 } // namespace plugins

@@ -529,7 +529,7 @@ public:
 
     void CustomGCCallback(JSGCStatus status) override;
     void CustomOutOfMemoryCallback() override;
-    void CustomLargeAllocationFailureCallback() override;
+    void OnLargeAllocationFailure();
     static void GCSliceCallback(JSContext* cx,
                                 JS::GCProgress progress,
                                 const JS::GCDescription& desc);
@@ -538,7 +538,7 @@ public:
                                  JSFinalizeStatus status,
                                  bool isZoneGC,
                                  void* data);
-    static void WeakPointerZoneGroupCallback(JSContext* cx, void* data);
+    static void WeakPointerZonesCallback(JSContext* cx, void* data);
     static void WeakPointerCompartmentCallback(JSContext* cx, JSCompartment* comp, void* data);
 
     inline void AddVariantRoot(XPCTraceableVariant* variant);

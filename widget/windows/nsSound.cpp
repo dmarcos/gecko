@@ -22,7 +22,6 @@
 
 #include "mozilla/Logging.h"
 #include "prtime.h"
-#include "prprf.h"
 #include "prmem.h"
 
 #include "nsNativeCharsetUtils.h"
@@ -30,7 +29,7 @@
 
 using mozilla::LogLevel;
 
-PRLogModuleInfo* gWin32SoundLog = nullptr;
+static mozilla::LazyLogModule gWin32SoundLog("nsSound");
 
 class nsSoundPlayer: public mozilla::Runnable {
 public:
@@ -109,10 +108,6 @@ NS_IMPL_ISUPPORTS(nsSound, nsISound, nsIStreamLoaderObserver)
 
 nsSound::nsSound()
 {
-    if (!gWin32SoundLog) {
-      gWin32SoundLog = PR_NewLogModule("nsSound");
-    }
-
     mLastSound = nullptr;
 }
 

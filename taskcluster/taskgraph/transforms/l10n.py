@@ -8,21 +8,24 @@ Do transforms specific to l10n kind
 from __future__ import absolute_import, print_function, unicode_literals
 
 import copy
+import json
 
 from mozbuild.chunkify import chunkify
 from taskgraph.transforms.base import (
     TransformSequence,
-    resolve_keyed_by,
+)
+from taskgraph.util.schema import (
+    validate_schema,
     optionally_keyed_by,
-    validate_schema
+    resolve_keyed_by,
+    Schema,
 )
 from taskgraph.util.treeherder import split_symbol, join_symbol
+from taskgraph.transforms.job import job_description_schema
 from voluptuous import (
     Any,
-    Extra,
     Optional,
     Required,
-    Schema,
 )
 
 
@@ -34,6 +37,10 @@ taskref_or_string = Any(
     basestring,
     {Required('task-reference'): basestring})
 
+# Voluptuous uses marker objects as dictionary *keys*, but they are not
+# comparable, so we cast all of the keys back to regular strings
+job_description_schema = {str(k): v for k, v in job_description_schema.schema.iteritems()}
+
 l10n_description_schema = Schema({
     # Name for this job, inferred from the dependent job before validation
     Required('name'): basestring,
@@ -43,9 +50,6 @@ l10n_description_schema = Schema({
 
     # max run time of the task
     Required('run-time'): _by_platform(int),
-
-    # Data used by chain of trust (see `chain_of_trust` in this file)
-    Optional('chainOfTrust'): {Extra: object},
 
     # All l10n jobs use mozharness
     Required('mozharness'): {
@@ -75,6 +79,8 @@ l10n_description_schema = Schema({
     # Description of the localized task
     Required('description'): _by_platform(basestring),
 
+    Optional('run-on-projects'): job_description_schema['run-on-projects'],
+
     # task object of the dependent task
     Required('dependent-task'): object,
 
@@ -98,17 +104,6 @@ l10n_description_schema = Schema({
         # Tier this task is
         Required('tier'): _by_platform(int),
     },
-    Required('attributes'): {
-        # Is this a nightly task, inferred from dependent job before validation
-        Optional('nightly'): bool,
-
-        # build_platform of this task, inferred from dependent job before validation
-        Required('build_platform'): basestring,
-
-        # build_type for this task, inferred from dependent job before validation
-        Required('build_type'): basestring,
-        Extra: object,
-    },
 
     # Extra environment values to pass to the worker
     Optional('env'): _by_platform({basestring: taskref_or_string}),
@@ -123,7 +118,11 @@ l10n_description_schema = Schema({
     # Run the task when the listed files change (if present).
     Optional('when'): {
         'files-changed': [basestring]
-    }
+    },
+
+    # passed through directly to the job description
+    Optional('attributes'): job_description_schema['attributes'],
+    Optional('extra'): job_description_schema['extra'],
 })
 
 transforms = TransformSequence()
@@ -134,13 +133,29 @@ def _parse_locales_file(locales_file, platform=None):
         If platform is unset matches all platforms.
     """
     locales = []
-    if locales_file.endswith('json'):
-        # Release process uses .json for locale files sometimes.
-        raise NotImplementedError("Don't know how to parse a .json locales file")
-    else:
-        with open(locales_file, mode='r') as lf:
-            locales = lf.read().split()
+
+    with open(locales_file, mode='r') as f:
+        if locales_file.endswith('json'):
+            all_locales = json.load(f)
+            # XXX Only single locales are fetched
+            locales = {
+                locale: data['revision']
+                for locale, data in all_locales.items()
+                if 'android' in data['platforms']
+            }
+        else:
+            all_locales = f.read().split()
+            # 'default' is the hg revision at the top of hg repo, in this context
+            locales = {locale: 'default' for locale in all_locales}
     return locales
+
+
+def _remove_ja_jp_mac_locale(locales):
+    # ja-JP-mac is a mac-only locale, but there are no mac builds being repacked,
+    # so just omit it unconditionally
+    return {
+        locale: revision for locale, revision in locales.items() if locale != 'ja-JP-mac'
+    }
 
 
 @transforms.add
@@ -230,14 +245,13 @@ def handle_keyed_by(config, jobs):
 @transforms.add
 def all_locales_attribute(config, jobs):
     for job in jobs:
-        locales = set(_parse_locales_file(job["locales-file"]))
-        # ja-JP-mac is a mac-only locale, but there are no
-        # mac builds being repacked, so just omit it unconditionally
-        locales = locales - set(("ja-JP-mac", ))
-        # Convert to mutable list.
-        locales = list(sorted(locales))
+        locales_with_changesets = _parse_locales_file(job["locales-file"])
+        locales_with_changesets = _remove_ja_jp_mac_locale(locales_with_changesets)
+
+        locales = sorted(locales_with_changesets.keys())
         attributes = job.setdefault('attributes', {})
         attributes["all_locales"] = locales
+        attributes["all_locales_with_changesets"] = locales_with_changesets
         yield job
 
 
@@ -246,24 +260,27 @@ def chunk_locales(config, jobs):
     """ Utilizes chunking for l10n stuff """
     for job in jobs:
         chunks = job.get('chunks')
-        all_locales = job['attributes']['all_locales']
+        locales_with_changesets = job['attributes']['all_locales_with_changesets']
         if chunks:
-            if chunks > len(all_locales):
+            if chunks > len(locales_with_changesets):
                 # Reduce chunks down to the number of locales
-                chunks = len(all_locales)
+                chunks = len(locales_with_changesets)
             for this_chunk in range(1, chunks + 1):
                 chunked = copy.deepcopy(job)
                 chunked['name'] = chunked['name'].replace(
                     '/', '-{}/'.format(this_chunk), 1
                 )
                 chunked['mozharness']['options'] = chunked['mozharness'].get('options', [])
-                my_locales = []
-                my_locales = chunkify(all_locales, this_chunk, chunks)
+                # chunkify doesn't work with dicts
+                locales_with_changesets_as_list = locales_with_changesets.items()
+                chunked_locales = chunkify(locales_with_changesets_as_list, this_chunk, chunks)
                 chunked['mozharness']['options'].extend([
-                    "locale={}".format(locale) for locale in my_locales
-                    ])
+                    'locale={}:{}'.format(locale, changeset)
+                    for locale, changeset in chunked_locales
+                ])
                 chunked['attributes']['l10n_chunk'] = str(this_chunk)
-                chunked['attributes']['chunk_locales'] = my_locales
+                # strip revision
+                chunked['attributes']['chunk_locales'] = [locale for locale, _ in chunked_locales]
 
                 # add the chunk number to the TH symbol
                 group, symbol = split_symbol(
@@ -274,8 +291,9 @@ def chunk_locales(config, jobs):
         else:
             job['mozharness']['options'] = job['mozharness'].get('options', [])
             job['mozharness']['options'].extend([
-                "locale={}".format(locale) for locale in all_locales
-                ])
+                'locale={}:{}'.format(locale, changeset)
+                for locale, changeset in locales_with_changesets.items()
+            ])
             yield job
 
 
@@ -306,11 +324,9 @@ def mh_options_replace_project(config, jobs):
 @transforms.add
 def chain_of_trust(config, jobs):
     for job in jobs:
-        job.setdefault('chainOfTrust', {})
-        job['chainOfTrust'].setdefault('inputs', {})
-        job['chainOfTrust']['inputs']['docker-image'] = {
-            "task-reference": "<docker-image>"
-        }
+        # add the docker image to the chain of trust inputs in task.extra
+        cot = job.setdefault('extra', {}).setdefault('chainOfTrust', {})
+        cot.setdefault('inputs', {})['docker-image'] = {"task-reference": "<docker-image>"}
         yield job
 
 
@@ -332,9 +348,7 @@ def make_job_description(config, jobs):
                 'max-run-time': job['run-time'],
                 'chain-of-trust': True,
             },
-            'extra': {
-                'chainOfTrust': job['chainOfTrust'],
-            },
+            'extra': job['extra'],
             'worker-type': job['worker-type'],
             'description': job['description'],
             'run': {
@@ -354,7 +368,7 @@ def make_job_description(config, jobs):
                 'symbol': job['treeherder']['symbol'],
                 'platform': job['treeherder']['platform'],
             },
-            'run-on-projects': [],
+            'run-on-projects': job.get('run-on-projects') if job.get('run-on-projects') else [],
         }
 
         if job.get('index'):

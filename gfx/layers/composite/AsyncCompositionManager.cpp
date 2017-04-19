@@ -14,13 +14,11 @@
 #include "gfxPrefs.h"                   // for gfxPrefs
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
 #include "mozilla/WidgetUtils.h"        // for ComputeTransformForRotation
-#include "mozilla/dom/KeyframeEffectReadOnly.h"
-#include "mozilla/dom/AnimationEffectReadOnlyBinding.h" // for dom::FillMode
-#include "mozilla/dom/KeyframeEffectBinding.h" // for dom::IterationComposite
 #include "mozilla/gfx/BaseRect.h"       // for BaseRect
 #include "mozilla/gfx/Point.h"          // for RoundedToInt, PointTyped
 #include "mozilla/gfx/Rect.h"           // for RoundedToInt, RectTyped
 #include "mozilla/gfx/ScaleFactor.h"    // for ScaleFactor
+#include "mozilla/layers/AnimationHelper.h"
 #include "mozilla/layers/APZUtils.h"    // for CompleteAsyncTransform
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/CompositorBridgeParent.h" // for CompositorBridgeParent, etc
@@ -69,12 +67,14 @@ ContentMightReflowOnOrientationChange(const IntRect& rect)
   return rect.width != rect.height;
 }
 
-AsyncCompositionManager::AsyncCompositionManager(HostLayerManager* aManager)
+  AsyncCompositionManager::AsyncCompositionManager(CompositorBridgeParent* aParent,
+                                                   HostLayerManager* aManager)
   : mLayerManager(aManager)
   , mIsFirstPaint(true)
   , mLayersUpdated(false)
   , mPaintSyncId(0)
   , mReadyForCompose(true)
+  , mCompositorBridge(aParent)
 {
 }
 
@@ -576,74 +576,18 @@ AsyncCompositionManager::AlignFixedAndStickyLayers(Layer* aTransformedSubtreeRoo
   return;
 }
 
-struct StyleAnimationValueCompositePair {
-  StyleAnimationValue mValue;
-  dom::CompositeOperation mComposite;
-};
-
-static StyleAnimationValue
-SampleValue(float aPortion, const Animation& aAnimation,
-            const StyleAnimationValueCompositePair& aStart,
-            const StyleAnimationValueCompositePair& aEnd,
-            const StyleAnimationValue& aLastValue,
-            uint64_t aCurrentIteration,
-            const StyleAnimationValue& aUnderlyingValue)
-{
-  NS_ASSERTION(aStart.mValue.IsNull() || aEnd.mValue.IsNull() ||
-               aStart.mValue.GetUnit() == aEnd.mValue.GetUnit(),
-               "Must have same unit");
-
-  StyleAnimationValue startValue =
-    dom::KeyframeEffectReadOnly::CompositeValue(aAnimation.property(),
-                                                aStart.mValue,
-                                                aUnderlyingValue,
-                                                aStart.mComposite);
-  StyleAnimationValue endValue =
-    dom::KeyframeEffectReadOnly::CompositeValue(aAnimation.property(),
-                                                aEnd.mValue,
-                                                aUnderlyingValue,
-                                                aEnd.mComposite);
-
-  // Iteration composition for accumulate
-  if (static_cast<dom::IterationCompositeOperation>
-        (aAnimation.iterationComposite()) ==
-          dom::IterationCompositeOperation::Accumulate &&
-      aCurrentIteration > 0) {
-    // FIXME: Bug 1293492: Add a utility function to calculate both of
-    // below StyleAnimationValues.
-    startValue =
-      StyleAnimationValue::Accumulate(aAnimation.property(),
-                                      aLastValue.IsNull()
-                                        ? aUnderlyingValue
-                                        : aLastValue,
-                                      Move(startValue),
-                                      aCurrentIteration);
-    endValue =
-      StyleAnimationValue::Accumulate(aAnimation.property(),
-                                      aLastValue.IsNull()
-                                        ? aUnderlyingValue
-                                        : aLastValue,
-                                      Move(endValue),
-                                      aCurrentIteration);
-  }
-
-  StyleAnimationValue interpolatedValue;
-  // This should never fail because we only pass transform and opacity values
-  // to the compositor and they should never fail to interpolate.
-  DebugOnly<bool> uncomputeResult =
-    StyleAnimationValue::Interpolate(aAnimation.property(),
-                                     startValue, endValue,
-                                     aPortion, interpolatedValue);
-  MOZ_ASSERT(uncomputeResult, "could not uncompute value");
-  return interpolatedValue;
-}
-
 static void
 ApplyAnimatedValue(Layer* aLayer,
+                   CompositorAnimationStorage* aStorage,
                    nsCSSPropertyID aProperty,
                    const AnimationData& aAnimationData,
                    const StyleAnimationValue& aValue)
 {
+  if (aValue.IsNull()) {
+    // Return gracefully if we have no valid StyleAnimationValue.
+    return;
+  }
+
   HostLayer* layerCompositor = aLayer->AsHostLayer();
   switch (aProperty) {
     case eCSSProperty_opacity: {
@@ -651,6 +595,9 @@ ApplyAnimatedValue(Layer* aLayer,
                  "Interpolated value for opacity should be float");
       layerCompositor->SetShadowOpacity(aValue.GetFloatValue());
       layerCompositor->SetShadowOpacitySetByAnimation(true);
+      aStorage->SetAnimatedValue(aLayer->GetCompositorAnimationsId(),
+                                 aValue.GetFloatValue());
+
       break;
     }
     case eCSSProperty_transform: {
@@ -666,25 +613,31 @@ ApplyAnimatedValue(Layer* aLayer,
       nsDisplayTransform::FrameTransformProperties props(list,
                                                          transformOrigin);
 
-      // If our parent layer is a perspective layer, then the offset into reference
-      // frame coordinates is already on that layer. If not, then we need to ask
-      // for it to be added here.
-      uint32_t flags = 0;
-      if (!aLayer->GetParent() ||
-          !aLayer->GetParent()->GetTransformIsPerspective()) {
-        flags = nsDisplayTransform::OFFSET_BY_ORIGIN;
-      }
-
       Matrix4x4 transform =
         nsDisplayTransform::GetResultingTransformMatrix(props, origin,
                                                         transformData.appUnitsPerDevPixel(),
-                                                        flags, &transformData.bounds());
+                                                        0, &transformData.bounds());
+      Matrix4x4 frameTransform = transform;
+
+      // If our parent layer is a perspective layer, then the offset into reference
+      // frame coordinates is already on that layer. If not, then we need to ask
+      // for it to be added here.
+      if (!aLayer->GetParent() ||
+          !aLayer->GetParent()->GetTransformIsPerspective()) {
+        nsLayoutUtils::PostTranslate(transform, origin,
+                                     transformData.appUnitsPerDevPixel(),
+                                     true);
+      }
 
       if (ContainerLayer* c = aLayer->AsContainerLayer()) {
         transform.PostScale(c->GetInheritedXScale(), c->GetInheritedYScale(), 1);
       }
+
       layerCompositor->SetShadowBaseTransform(transform);
       layerCompositor->SetShadowTransformSetByAnimation(true);
+      aStorage->SetAnimatedValue(aLayer->GetCompositorAnimationsId(),
+                                 Move(transform), Move(frameTransform),
+                                 transformData);
       break;
     }
     default:
@@ -692,144 +645,62 @@ ApplyAnimatedValue(Layer* aLayer,
   }
 }
 
-static bool
-SampleAnimationForEachNode(TimeStamp aPoint,
-                           AnimationArray& aAnimations,
-                           InfallibleTArray<AnimData>& aAnimationData,
-                           StyleAnimationValue& aAnimationValue,
-                           bool& aHasInEffectAnimations)
+static AnimationProcessTypes
+SampleAnimations(Layer* aLayer,
+                 CompositorAnimationStorage* aStorage,
+                 TimeStamp aPoint,
+                 uint64_t* aLayerAreaAnimated)
 {
-  bool activeAnimations = false;
+  // This tracks the first-encountered RefLayer in the layer tree. Since we are
+  // doing a depth-first traversal, it is set to a non-null value if and only if
+  // the currently-being-traversed node has a RefLayer ancestor. In the case of
+  // nested RefLayers it points to the rootmost RefLayer.
+  RefLayer* ancestorRefLayer = nullptr;
 
-  if (aAnimations.IsEmpty()) {
-    return activeAnimations;
-  }
-
-  // Process in order, since later aAnimations override earlier ones.
-  for (size_t i = 0, iEnd = aAnimations.Length(); i < iEnd; ++i) {
-    Animation& animation = aAnimations[i];
-    AnimData& animData = aAnimationData[i];
-
-    activeAnimations = true;
-
-    MOZ_ASSERT(!animation.startTime().IsNull() ||
-               animation.isNotPlaying(),
-               "Failed to resolve start time of play-pending animations");
-    // If the animation is not currently playing , e.g. paused or
-    // finished, then use the hold time to stay at the same position.
-    TimeDuration elapsedDuration = animation.isNotPlaying()
-      ? animation.holdTime()
-      : (aPoint - animation.startTime())
-          .MultDouble(animation.playbackRate());
-    TimingParams timing;
-    timing.mDuration.emplace(animation.duration());
-    timing.mDelay = animation.delay();
-    timing.mEndDelay = animation.endDelay();
-    timing.mIterations = animation.iterations();
-    timing.mIterationStart = animation.iterationStart();
-    timing.mDirection =
-      static_cast<dom::PlaybackDirection>(animation.direction());
-    timing.mFill = static_cast<dom::FillMode>(animation.fillMode());
-    timing.mFunction =
-      AnimationUtils::TimingFunctionToComputedTimingFunction(
-        animation.easingFunction());
-
-    ComputedTiming computedTiming =
-      dom::AnimationEffectReadOnly::GetComputedTimingAt(
-        Nullable<TimeDuration>(elapsedDuration), timing,
-        animation.playbackRate());
-
-    if (computedTiming.mProgress.IsNull()) {
-      continue;
-    }
-
-    uint32_t segmentIndex = 0;
-    size_t segmentSize = animation.segments().Length();
-    AnimationSegment* segment = animation.segments().Elements();
-    while (segment->endPortion() < computedTiming.mProgress.Value() &&
-           segmentIndex < segmentSize - 1) {
-      ++segment;
-      ++segmentIndex;
-    }
-
-    double positionInSegment =
-      (computedTiming.mProgress.Value() - segment->startPortion()) /
-      (segment->endPortion() - segment->startPortion());
-
-    double portion =
-      ComputedTimingFunction::GetPortion(animData.mFunctions[segmentIndex],
-                                         positionInSegment,
-                                     computedTiming.mBeforeFlag);
-
-    StyleAnimationValueCompositePair from {
-      animData.mStartValues[segmentIndex],
-      static_cast<dom::CompositeOperation>(segment->startComposite())
-    };
-    StyleAnimationValueCompositePair to {
-      animData.mEndValues[segmentIndex],
-      static_cast<dom::CompositeOperation>(segment->endComposite())
-    };
-    // interpolate the property
-    aAnimationValue = SampleValue(portion,
-                                 animation,
-                                 from, to,
-                                 animData.mEndValues.LastElement(),
-                                 computedTiming.mCurrentIteration,
-                                 aAnimationValue);
-    aHasInEffectAnimations = true;
-  }
-
-#ifdef DEBUG
-  // Sanity check that all of animation data are the same.
-  const AnimationData& lastData = aAnimations.LastElement().data();
-  for (const Animation& animation : aAnimations) {
-    const AnimationData& data = animation.data();
-    MOZ_ASSERT(data.type() == lastData.type(),
-               "The type of AnimationData should be the same");
-    if (data.type() == AnimationData::Tnull_t) {
-      continue;
-    }
-
-    MOZ_ASSERT(data.type() == AnimationData::TTransformData);
-    const TransformData& transformData = data.get_TransformData();
-    const TransformData& lastTransformData = lastData.get_TransformData();
-    MOZ_ASSERT(transformData.origin() == lastTransformData.origin() &&
-               transformData.transformOrigin() ==
-                 lastTransformData.transformOrigin() &&
-               transformData.bounds() == lastTransformData.bounds() &&
-               transformData.appUnitsPerDevPixel() ==
-                 lastTransformData.appUnitsPerDevPixel(),
-               "All of members of TransformData should be the same");
-  }
-#endif
-  return activeAnimations;
-}
-
-static bool
-SampleAnimations(Layer* aLayer, TimeStamp aPoint)
-{
-  bool activeAnimations = false;
+  // This bitfield-enum tracks which processes have active animations. Anything
+  // "above" the |ancestorRefLayer| in the layer tree is assumed to be the
+  // chrome process, and anything "below" is assumed to be the content process.
+  AnimationProcessTypes animProcess = AnimationProcessTypes::eNone;
 
   ForEachNode<ForwardIterator>(
       aLayer,
-      [&activeAnimations, &aPoint] (Layer* layer)
+      [&] (Layer* layer)
       {
+        if (!ancestorRefLayer) {
+          ancestorRefLayer = layer->AsRefLayer();
+        }
+
         bool hasInEffectAnimations = false;
         StyleAnimationValue animationValue = layer->GetBaseAnimationStyle();
-        activeAnimations |= SampleAnimationForEachNode(aPoint,
-                                                       layer->GetAnimations(),
-                                                       layer->GetAnimationData(),
-                                                       animationValue,
-                                                       hasInEffectAnimations);
+        if (AnimationHelper::SampleAnimationForEachNode(aPoint,
+                                                        layer->GetAnimations(),
+                                                        layer->GetAnimationData(),
+                                                        animationValue,
+                                                        hasInEffectAnimations)) {
+          animProcess |= (ancestorRefLayer ? AnimationProcessTypes::eContent
+                                           : AnimationProcessTypes::eChrome);
+        }
         if (hasInEffectAnimations) {
           Animation& animation = layer->GetAnimations().LastElement();
           ApplyAnimatedValue(layer,
+                             aStorage,
                              animation.property(),
                              animation.data(),
                              animationValue);
+          if (aLayerAreaAnimated) {
+            *aLayerAreaAnimated += (layer->GetVisibleRegion().Area());
+          }
+        }
+      },
+      [&ancestorRefLayer] (Layer* aLayer)
+      {
+        // If we're unwinding up past the rootmost RefLayer, clear our pointer
+        if (ancestorRefLayer && aLayer->AsRefLayer() == ancestorRefLayer) {
+          ancestorRefLayer = nullptr;
         }
       });
-  return activeAnimations;
+
+  return animProcess;
 }
 
 static bool
@@ -1099,6 +970,7 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer,
             }
           }
 #else
+          *aOutFoundRoot = false;
           // Non-Android platforms still care about this flag being cleared after
           // the first call to TransformShadowTree().
           mIsFirstPaint = false;
@@ -1475,6 +1347,9 @@ AsyncCompositionManager::TransformShadowTree(TimeStamp aCurrentFrame,
     return false;
   }
 
+  // GetAnimationStorage in CompositorBridgeParent expects id as 0
+  CompositorAnimationStorage* storage =
+    mCompositorBridge->GetAnimationStorage(0);
   // First, compute and set the shadow transforms from OMT animations.
   // NB: we must sample animations *before* sampling pan/zoom
   // transforms.
@@ -1482,9 +1357,23 @@ AsyncCompositionManager::TransformShadowTree(TimeStamp aCurrentFrame,
   // more in sync with each other.
   // On the initial frame we use aVsyncTimestamp here so the timestamp on the
   // second frame are the same as the initial frame, but it does not matter.
-  bool wantNextFrame = SampleAnimations(root,
-    !mPreviousFrameTimeStamp.IsNull() ?
-      mPreviousFrameTimeStamp : aCurrentFrame);
+  uint64_t layerAreaAnimated = 0;
+  AnimationProcessTypes animationProcess =
+    SampleAnimations(root,
+                     storage,
+                     !mPreviousFrameTimeStamp.IsNull() ?
+                       mPreviousFrameTimeStamp : aCurrentFrame,
+                     &layerAreaAnimated);
+  bool wantNextFrame = (animationProcess != AnimationProcessTypes::eNone);
+
+  mAnimationMetricsTracker.UpdateAnimationInProgress(
+    animationProcess, layerAreaAnimated, aVsyncRate);
+
+  if (!wantNextFrame) {
+    // Clean up the CompositorAnimationStorage because
+    // there are no active animations running
+    storage->Clear();
+  }
 
   // Reset the previous time stamp if we don't already have any running
   // animations to avoid using the time which is far behind for newly
@@ -1522,7 +1411,9 @@ AsyncCompositionManager::TransformShadowTree(TimeStamp aCurrentFrame,
       nextFrame += aVsyncRate;
     }
 
-    wantNextFrame |= SampleAPZAnimations(LayerMetricsWrapper(root), nextFrame);
+    bool apzAnimating = SampleAPZAnimations(LayerMetricsWrapper(root), nextFrame);
+    mAnimationMetricsTracker.UpdateApzAnimationInProgress(apzAnimating, aVsyncRate);
+    wantNextFrame |= apzAnimating;
   }
 
   HostLayer* rootComposite = root->AsHostLayer();

@@ -42,6 +42,9 @@ var gSynthesizeKeyCount = 0;
 var gSynthesizeCompositionCount = 0;
 var gSynthesizeCompositionChangeCount = 0;
 
+const kAboutPageRegistrationContentScript =
+  "chrome://mochikit/content/tests/BrowserTestUtils/content-about-page-utils.js";
+
 this.BrowserTestUtils = {
   /**
    * Loads a page in a new tab, executes a Task and closes the tab.
@@ -180,6 +183,13 @@ this.BrowserTestUtils = {
    * @resolves When a load event is triggered for the browser.
    */
   browserLoaded(browser, includeSubFrames=false, wantLoad=null) {
+    // If browser belongs to tabbrowser-tab, ensure it has been
+    // inserted into the document.
+    let tabbrowser = browser.ownerGlobal.gBrowser;
+    if (tabbrowser && tabbrowser.getTabForBrowser) {
+      tabbrowser._insertBrowser(tabbrowser.getTabForBrowser(browser));
+    }
+
     function isWanted(url) {
       if (!wantLoad) {
         return true;
@@ -216,11 +226,12 @@ this.BrowserTestUtils = {
    * @return {Promise}
    * @resolves Once the selected browser fires its load event.
    */
-  firstBrowserLoaded(win) {
+  firstBrowserLoaded(win, aboutBlank = true) {
     let mm = win.messageManager;
     return this.waitForMessage(mm, "browser-test-utils:loadEvent", (msg) => {
       let selectedBrowser = win.gBrowser.selectedBrowser;
-      return msg.target == selectedBrowser;
+      return msg.target == selectedBrowser &&
+             (aboutBlank || selectedBrowser.currentURI.spec != "about:blank")
     });
   },
 
@@ -476,6 +487,11 @@ this.BrowserTestUtils = {
                     createInstance(Ci.nsISupportsString);
     argString.data = "";
     let features = "chrome,dialog=no,all";
+    let opener = null;
+
+    if (options.opener) {
+      opener = options.opener;
+    }
 
     if (options.private) {
       features += ",private";
@@ -494,7 +510,7 @@ this.BrowserTestUtils = {
     }
 
     let win = Services.ww.openWindow(
-      null, Services.prefs.getCharPref("browser.chromeURL"), "_blank",
+      opener, Services.prefs.getCharPref("browser.chromeURL"), "_blank",
       features, argString);
 
     // Wait for browser-delayed-startup-finished notification, it indicates
@@ -806,10 +822,31 @@ this.BrowserTestUtils = {
   /**
    * Removes the given tab from its parent tabbrowser and
    * waits until its final message has reached the parent.
+   *
+   * @param (tab) tab
+   *        The tab to remove.
+   * @param (Object) options
+   *        Extra options to pass to tabbrowser's removeTab method.
+   * @returns (Promise)
+   * @resolves When the tab is removed. Does not get passed a value.
    */
   removeTab(tab, options = {}) {
-    let dontRemove = options && options.dontRemove;
+    let tabRemoved = BrowserTestUtils.tabRemoved(tab);
+    if (!tab.closing) {
+      tab.ownerGlobal.gBrowser.removeTab(tab, options);
+    }
+    return tabRemoved;
+  },
 
+  /**
+   * Returns a Promise that resolves once a tab has been removed.
+   *
+   * @param (tab) tab
+   *        The tab that will be removed.
+   * @returns (Promise)
+   * @resolves When the tab is removed. Does not get passed a value.
+   */
+  tabRemoved(tab) {
     return new Promise(resolve => {
       let {messageManager: mm, frameLoader} = tab.linkedBrowser;
       mm.addMessageListener("SessionStore:update", function onMessage(msg) {
@@ -818,10 +855,6 @@ this.BrowserTestUtils = {
           resolve();
         }
       }, true);
-
-      if (!dontRemove && !tab.closing) {
-        tab.ownerGlobal.gBrowser.removeTab(tab);
-      }
     });
   },
 
@@ -956,7 +989,7 @@ this.BrowserTestUtils = {
         });
       };
 
-      Services.obs.addObserver(observer, 'ipc:content-shutdown', false);
+      Services.obs.addObserver(observer, 'ipc:content-shutdown');
     });
 
     expectedPromises.push(crashCleanupPromise);
@@ -1267,5 +1300,63 @@ this.BrowserTestUtils = {
         })
       });
     });
+  },
+
+  _knownAboutPages: new Set(),
+  _loadedAboutContentScript: false,
+  /**
+   * Registers an about: page with particular flags in both the parent
+   * and any content processes. Returns a promise that resolves when
+   * registration is complete.
+   *
+   * @param registerCleanupFunction (Function)
+   *        The test framework doesn't keep its cleanup stuff anywhere accessible,
+   *        so the first argument is a reference to your cleanup registration
+   *        function, allowing us to clean up after you if necessary.
+   * @param aboutModule (String)
+   *        The name of the about page.
+   * @param pageURI (String)
+   *        The URI the about: page should point to.
+   * @param flags (Number)
+   *        The nsIAboutModule flags to use for registration.
+   * @returns Promise that resolves when registration has finished.
+   */
+  registerAboutPage(registerCleanupFunction, aboutModule, pageURI, flags) {
+    // Return a promise that resolves when registration finished.
+    const kRegistrationMsgId = "browser-test-utils:about-registration:registered";
+    let rv = this.waitForMessage(Services.ppmm, kRegistrationMsgId, msg => {
+      return msg.data == aboutModule;
+    });
+    // Load a script that registers our page, then send it a message to execute the registration.
+    if (!this._loadedAboutContentScript) {
+      Services.ppmm.loadProcessScript(kAboutPageRegistrationContentScript, true);
+      this._loadedAboutContentScript = true;
+      registerCleanupFunction(this._removeAboutPageRegistrations.bind(this));
+    }
+    Services.ppmm.broadcastAsyncMessage("browser-test-utils:about-registration:register",
+                                        {aboutModule, pageURI, flags});
+    return rv.then(() => {
+      this._knownAboutPages.add(aboutModule);
+    });
+  },
+
+  unregisterAboutPage(aboutModule) {
+    if (!this._knownAboutPages.has(aboutModule)) {
+      return Promise.reject(new Error("We don't think this about page exists!"));
+    }
+    const kUnregistrationMsgId = "browser-test-utils:about-registration:unregistered";
+    let rv = this.waitForMessage(Services.ppmm, kUnregistrationMsgId, msg => {
+      return msg.data == aboutModule;
+    });
+    Services.ppmm.broadcastAsyncMessage("browser-test-utils:about-registration:unregister",
+                                        aboutModule);
+    return rv.then(() => this._knownAboutPages.delete(aboutModule));
+  },
+
+  *_removeAboutPageRegistrations() {
+    for (let aboutModule of this._knownAboutPages) {
+      yield this.unregisterAboutPage(aboutModule);
+    }
+    Services.ppmm.removeDelayedProcessScript(kAboutPageRegistrationContentScript);
   },
 };

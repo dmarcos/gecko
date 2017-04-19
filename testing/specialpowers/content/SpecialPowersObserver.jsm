@@ -108,7 +108,7 @@ SpecialPowersObserver.prototype._receiveMessage = function(aMessage) {
 SpecialPowersObserver.prototype.init = function()
 {
   var obs = Services.obs;
-  obs.addObserver(this, "chrome-document-global-created", false);
+  obs.addObserver(this, "chrome-document-global-created");
 
   // Register special testing modules.
   var testsURI = Cc["@mozilla.org/file/directory_service;1"].
@@ -123,7 +123,7 @@ SpecialPowersObserver.prototype.init = function()
   Components.manager.QueryInterface(Ci.nsIComponentRegistrar).
                  autoRegister(manifestFile);
 
-  obs.addObserver(this, "http-on-modify-request", false);
+  obs.addObserver(this, "http-on-modify-request");
 
   this._loadFrameScript();
 };
@@ -174,8 +174,8 @@ SpecialPowersObserver.prototype._addProcessCrashObservers = function() {
   var obs = Components.classes["@mozilla.org/observer-service;1"]
                       .getService(Components.interfaces.nsIObserverService);
 
-  obs.addObserver(this, "plugin-crashed", false);
-  obs.addObserver(this, "ipc:content-shutdown", false);
+  obs.addObserver(this, "plugin-crashed");
+  obs.addObserver(this, "ipc:content-shutdown");
   this._processCrashObserversRegistered = true;
 };
 
@@ -198,7 +198,7 @@ SpecialPowersObserver.prototype._registerObservers = {
   _add: function(topic) {
     if (this._topics.indexOf(topic) < 0) {
       this._topics.push(topic);
-      Services.obs.addObserver(this, topic, false);
+      Services.obs.addObserver(this, topic);
     }
   },
   observe: function (aSubject, aTopic, aData) {
@@ -253,6 +253,7 @@ SpecialPowersObserver.prototype.receiveMessage = function(aMessage) {
       }
       let createdFiles = this._createdFiles;
       try {
+        let promises = [];
         aMessage.data.forEach(function(request) {
           const filePerms = 0666;
           let testFile = Services.dirsvc.get("ProfD", Ci.nsIFile);
@@ -268,14 +269,25 @@ SpecialPowersObserver.prototype.receiveMessage = function(aMessage) {
             outStream.write(request.data, request.data.length);
           }
           outStream.close();
-          filePaths.push(File.createFromFileName(testFile.path, request.options));
+          promises.push(File.createFromFileName(testFile.path, request.options).then(function(file) {
+            filePaths.push(file);
+          }));
           createdFiles.push(testFile);
         });
-        aMessage.target
-                .QueryInterface(Ci.nsIFrameLoaderOwner)
-                .frameLoader
-                .messageManager
-                .sendAsyncMessage("SpecialPowers.FilesCreated", filePaths);
+
+        Promise.all(promises).then(function() {
+          aMessage.target
+                  .QueryInterface(Ci.nsIFrameLoaderOwner)
+                  .frameLoader
+                  .messageManager
+                  .sendAsyncMessage("SpecialPowers.FilesCreated", filePaths);
+        }, function(e) {
+          aMessage.target
+                  .QueryInterface(Ci.nsIFrameLoaderOwner)
+                  .frameLoader
+                  .messageManager
+                  .sendAsyncMessage("SpecialPowers.FilesError", e.toString());
+        });
       } catch (e) {
           aMessage.target
                   .QueryInterface(Ci.nsIFrameLoaderOwner)

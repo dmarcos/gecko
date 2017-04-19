@@ -228,8 +228,10 @@ struct ParamTraits<mozilla::WidgetPointerHelper>
     WriteParam(aMsg, aParam.pointerId);
     WriteParam(aMsg, aParam.tiltX);
     WriteParam(aMsg, aParam.tiltY);
-    // We don't serialize convertToPointer and retargetedByPointerCapture since
-    // they are temporarily variable and should be reset to default.
+    WriteParam(aMsg, aParam.twist);
+    WriteParam(aMsg, aParam.tangentialPressure);
+    // We don't serialize convertToPointer since it's temporarily variable and
+    // should be reset to default.
   }
 
   static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
@@ -237,7 +239,9 @@ struct ParamTraits<mozilla::WidgetPointerHelper>
     bool rv;
     rv = ReadParam(aMsg, aIter, &aResult->pointerId) &&
          ReadParam(aMsg, aIter, &aResult->tiltX) &&
-         ReadParam(aMsg, aIter, &aResult->tiltY);
+         ReadParam(aMsg, aIter, &aResult->tiltY) &&
+         ReadParam(aMsg, aIter, &aResult->twist) &&
+         ReadParam(aMsg, aIter, &aResult->tangentialPressure);
     return rv;
   }
 };
@@ -417,7 +421,6 @@ struct ParamTraits<mozilla::WidgetKeyboardEvent>
     WriteParam(aMsg, aParam.mCharCode);
     WriteParam(aMsg, aParam.mPseudoCharCode);
     WriteParam(aMsg, aParam.mAlternativeCharCodes);
-    WriteParam(aMsg, aParam.mIsChar);
     WriteParam(aMsg, aParam.mIsRepeat);
     WriteParam(aMsg, aParam.mIsReserved);
     WriteParam(aMsg, aParam.mAccessKeyForwardedToChild);
@@ -453,7 +456,6 @@ struct ParamTraits<mozilla::WidgetKeyboardEvent>
         ReadParam(aMsg, aIter, &aResult->mCharCode) &&
         ReadParam(aMsg, aIter, &aResult->mPseudoCharCode) &&
         ReadParam(aMsg, aIter, &aResult->mAlternativeCharCodes) &&
-        ReadParam(aMsg, aIter, &aResult->mIsChar) &&
         ReadParam(aMsg, aIter, &aResult->mIsRepeat) &&
         ReadParam(aMsg, aIter, &aResult->mIsReserved) &&
         ReadParam(aMsg, aIter, &aResult->mAccessKeyForwardedToChild) &&
@@ -721,9 +723,9 @@ struct ParamTraits<mozilla::WidgetSelectionEvent>
 };
 
 template<>
-struct ParamTraits<nsIMEUpdatePreference>
+struct ParamTraits<mozilla::widget::IMENotificationRequests>
 {
-  typedef nsIMEUpdatePreference paramType;
+  typedef mozilla::widget::IMENotificationRequests paramType;
 
   static void Write(Message* aMsg, const paramType& aParam)
   {

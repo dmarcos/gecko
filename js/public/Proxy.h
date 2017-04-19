@@ -32,7 +32,8 @@ using JS::PrivateValue;
 using JS::PropertyDescriptor;
 using JS::Value;
 
-class RegExpGuard;
+class RegExpShared;
+
 class JS_FRIEND_API(Wrapper);
 
 /*
@@ -231,7 +232,9 @@ class JS_FRIEND_API(BaseProxyHandler)
      *
      * enter() allows the policy to specify whether the caller may perform |act|
      * on the proxy's |id| property. In the case when |act| is CALL, |id| is
-     * generally JSID_VOID.
+     * generally JSID_VOID.  The |mayThrow| parameter indicates whether a
+     * handler that wants to throw custom exceptions when denying should do so
+     * or not.
      *
      * The |act| parameter to enter() specifies the action being performed.
      * If |bp| is false, the method suggests that the caller throw (though it
@@ -252,7 +255,7 @@ class JS_FRIEND_API(BaseProxyHandler)
         GET_PROPERTY_DESCRIPTOR = 0x10
     };
 
-    virtual bool enter(JSContext* cx, HandleObject wrapper, HandleId id, Action act,
+    virtual bool enter(JSContext* cx, HandleObject wrapper, HandleId id, Action act, bool mayThrow,
                        bool* bp) const;
 
     /* Standard internal methods. */
@@ -328,7 +331,8 @@ class JS_FRIEND_API(BaseProxyHandler)
     virtual bool isArray(JSContext* cx, HandleObject proxy, JS::IsArrayAnswer* answer) const;
     virtual const char* className(JSContext* cx, HandleObject proxy) const;
     virtual JSString* fun_toString(JSContext* cx, HandleObject proxy, unsigned indent) const;
-    virtual bool regexp_toShared(JSContext* cx, HandleObject proxy, RegExpGuard* g) const;
+    virtual bool regexp_toShared(JSContext* cx, HandleObject proxy,
+                                 MutableHandle<js::RegExpShared*> shared) const;
     virtual bool boxedValue_unbox(JSContext* cx, HandleObject proxy, MutableHandleValue vp) const;
     virtual void trace(JSTracer* trc, JSObject* proxy) const;
     virtual void finalize(JSFreeOp* fop, JSObject* proxy) const;
@@ -380,6 +384,10 @@ struct ProxyValueArray
     {
         for (size_t i = 0; i < PROXY_EXTRA_SLOTS; i++)
             extraSlots[i] = JS::UndefinedValue();
+    }
+
+    static size_t offsetOfPrivateSlot() {
+        return offsetof(ProxyValueArray, privateSlot);
     }
 };
 
@@ -546,7 +554,7 @@ class JS_FRIEND_API(AutoEnterPolicy)
         : context(nullptr)
 #endif
     {
-        allow = handler->hasSecurityPolicy() ? handler->enter(cx, wrapper, id, act, &rv)
+        allow = handler->hasSecurityPolicy() ? handler->enter(cx, wrapper, id, act, mayThrow, &rv)
                                              : true;
         recordEnter(cx, wrapper, id, act);
         // We want to throw an exception if all of the following are true:

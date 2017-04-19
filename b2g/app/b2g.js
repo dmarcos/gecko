@@ -324,7 +324,6 @@ pref("media.gonk.enabled", true);
 
 //Encrypted media extensions.
 pref("media.eme.enabled", true);
-pref("media.eme.apiVisible", true);
 // The default number of decoded video frames that are enqueued in
 // MediaDecoderReader's mVideoQueue.
 pref("media.video-queue.default-size", 3);
@@ -414,15 +413,6 @@ pref("media.realtime_decoder.enabled", true);
 
 // TCPSocket
 pref("dom.mozTCPSocket.enabled", true);
-
-// "Preview" landing of bug 710563, which is bogged down in analysis
-// of talos regression.  This is a needed change for higher-framerate
-// CSS animations, and incidentally works around an apparent bug in
-// our handling of requestAnimationFrame() listeners, which are
-// supposed to enable this REPEATING_PRECISE_CAN_SKIP behavior.  The
-// secondary bug isn't really worth investigating since it's obseleted
-// by bug 710563.
-pref("layout.frame_rate.precise", true);
 
 // Handle hardware buttons in the b2g chrome package
 pref("b2g.keys.menu.enabled", true);
@@ -889,9 +879,6 @@ pref("layout.accessiblecaret.enabled", true);
 // Show the selection bars at the two ends of the selection highlight. Required
 // by the spec in bug 921965.
 pref("layout.accessiblecaret.bar.enabled", true);
-
-// Hide the caret in cursor mode after 3 seconds.
-pref("layout.accessiblecaret.timeout_ms", 3000);
 
 // Hide carets and text selection dialog during scrolling.
 pref("layout.accessiblecaret.always_show_when_scrolling", false);

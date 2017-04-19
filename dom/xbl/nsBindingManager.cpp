@@ -20,6 +20,7 @@
 #include "nsIDocument.h"
 #include "nsContentUtils.h"
 #include "nsIPresShell.h"
+#include "nsIPresShellInlines.h"
 #include "nsIXMLContentSink.h"
 #include "nsContentCID.h"
 #include "mozilla/dom/XMLDocument.h"
@@ -338,7 +339,9 @@ nsBindingManager::AddToAttachedQueue(nsXBLBinding* aBinding)
   }
 
   // Make sure that flushes will flush out the new items as needed.
-  mDocument->SetNeedStyleFlush();
+  if (nsIPresShell* shell = mDocument->GetShell()) {
+    shell->SetNeedStyleFlush();
+  }
 
   return NS_OK;
 
@@ -348,7 +351,8 @@ void
 nsBindingManager::PostProcessAttachedQueueEvent()
 {
   mProcessAttachedQueueEvent =
-    NewRunnableMethod(this, &nsBindingManager::DoProcessAttachedQueue);
+    NewRunnableMethod("nsBindingManager::DoProcessAttachedQueue",
+                      this, &nsBindingManager::DoProcessAttachedQueue);
   nsresult rv = NS_DispatchToCurrentThread(mProcessAttachedQueueEvent);
   if (NS_SUCCEEDED(rv) && mDocument) {
     mDocument->BlockOnload();
@@ -671,7 +675,6 @@ nsBindingManager::WalkRules(nsIStyleRuleProcessor::EnumFunc aFunc,
   do {
     nsXBLBinding *binding = content->GetXBLBinding();
     if (binding) {
-      aData->mTreeMatchContext.mScopedRoot = content;
       binding->WalkRules(aFunc, aData);
       // If we're not looking at our original content, allow the binding to cut
       // off style inheritance
@@ -693,9 +696,6 @@ nsBindingManager::WalkRules(nsIStyleRuleProcessor::EnumFunc aFunc,
   // If "content" is non-null that means we cut off inheritance at some point
   // in the loop.
   *aCutOffInheritance = (content != nullptr);
-
-  // Null out the scoped root that we set repeatedly
-  aData->mTreeMatchContext.mScopedRoot = nullptr;
 
   return NS_OK;
 }

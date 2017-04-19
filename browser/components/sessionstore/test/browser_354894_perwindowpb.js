@@ -76,7 +76,7 @@ add_task(function* setup() {
   document.documentElement.setAttribute("windowtype", "navigator:testrunner");
 
   registerCleanupFunction(() => {
-    document.documentElement.setAttribute("windowtype", "navigator:browser");
+    document.documentElement.setAttribute("windowtype", oldWinType);
   });
 });
 
@@ -126,7 +126,7 @@ let setupTest = Task.async(function*(options, testFunction) {
   }
 
   for (let o in observing) {
-    Services.obs.addObserver(observer, o, false);
+    Services.obs.addObserver(observer, o);
   }
 
   let private = options.private || false;
@@ -154,7 +154,7 @@ let setupTest = Task.async(function*(options, testFunction) {
  *        The browser window to load the tabs in
  */
 function injectTestTabs(win) {
-  TEST_URLS.forEach(function (url) {
+  TEST_URLS.forEach(function(url) {
     win.gBrowser.addTab(url);
   });
 }
@@ -471,4 +471,3 @@ add_task(function* test_mac_notifications() {
        "Got expected browser-lastwindow-close-granted notifications");
   });
 });
-

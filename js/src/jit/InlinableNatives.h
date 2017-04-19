@@ -15,7 +15,6 @@
     _(ArrayShift)                   \
     _(ArrayPush)                    \
     _(ArraySlice)                   \
-    _(ArraySplice)                  \
                                     \
     _(AtomicsCompareExchange)       \
     _(AtomicsExchange)              \
@@ -119,7 +118,6 @@
     _(IntrinsicToString)            \
     _(IntrinsicIsConstructing)      \
     _(IntrinsicSubstringKernel)     \
-    _(IntrinsicDefineDataProperty)  \
     _(IntrinsicObjectHasPrototype)  \
                                     \
     _(IntrinsicIsArrayIterator)     \
@@ -130,6 +128,8 @@
     _(IntrinsicGetNextMapEntryForIterator) \
                                     \
     _(IntrinsicGetNextSetEntryForIterator) \
+                                    \
+    _(IntrinsicNewArrayIterator)    \
                                     \
     _(IntrinsicArrayBufferByteLength) \
     _(IntrinsicPossiblyWrappedArrayBufferByteLength) \

@@ -19,19 +19,16 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Extension",
                                   "resource://gre/modules/Extension.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionChild",
+                                  "resource://gre/modules/ExtensionChild.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
 
-Cu.import("resource://gre/modules/ExtensionChild.jsm");
 Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 
 var {
   BaseContext,
 } = ExtensionCommon;
-
-var {
-  Messenger,
-} = ExtensionChild;
 
 /**
  * Instances created from this class provide to a legacy extension
@@ -64,12 +61,12 @@ var LegacyExtensionContext = class extends BaseContext {
       {value: cloneScope, enumerable: true, configurable: true, writable: true}
     );
 
-    let sender = {id: targetExtension.uuid};
+    let sender = {id: targetExtension.id};
     let filter = {extensionId: targetExtension.id};
     // Legacy addons live in the main process. Messages from other addons are
     // Messages from WebExtensions are sent to the main process and forwarded via
     // the parent process manager to the legacy extension.
-    this.messenger = new Messenger(this, [Services.cpmm], sender, filter);
+    this.messenger = new ExtensionChild.Messenger(this, [Services.cpmm], sender, filter);
 
     this.api = {
       browser: {

@@ -14,6 +14,13 @@ SOURCES += [
     'WidevineVideoFrame.cpp',
 ]
 
+EXPORTS += [
+    'WidevineDecryptor.h',
+    'WidevineFileIO.h',
+    'WidevineUtils.h',
+    'WidevineVideoFrame.h'
+]
+
 FINAL_LIBRARY = 'xul'
 
 LOCAL_INCLUDES += [

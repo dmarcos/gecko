@@ -10,6 +10,7 @@
 #include "ColorLayerComposite.h"        // for ColorLayerComposite
 #include "CompositableHost.h"           // for CompositableHost
 #include "ContainerLayerComposite.h"    // for ContainerLayerComposite, etc
+#include "Diagnostics.h"
 #include "FPSCounter.h"                 // for FPSState, FPSCounter
 #include "FrameMetrics.h"               // for FrameMetrics
 #include "GeckoProfiler.h"              // for profiler_set_frame_number, etc
@@ -60,6 +61,7 @@
 #include "opengl/CompositorOGL.h"
 #include "GLContextEGL.h"
 #include "GLContextProvider.h"
+#include "mozilla/widget/AndroidCompositorWidget.h"
 #include "ScopedGLHelpers.h"
 #endif
 #include "GeckoProfiler.h"
@@ -123,6 +125,18 @@ HostLayerManager::HostLayerManager()
 HostLayerManager::~HostLayerManager()
 {}
 
+void
+HostLayerManager::RecordPaintTimes(const PaintTiming& aTiming)
+{
+  mDiagnostics->RecordPaintTimes(aTiming);
+}
+
+void
+HostLayerManager::RecordUpdateTime(float aValue)
+{
+  mDiagnostics->RecordUpdateTime(aValue);
+}
+
 /**
  * LayerManagerComposite
  */
@@ -134,7 +148,8 @@ LayerManagerComposite::LayerManagerComposite(Compositor* aCompositor)
 , mIsCompositorReady(false)
 , mGeometryChanged(true)
 {
-  mTextRenderer = new TextRenderer(aCompositor);
+  mTextRenderer = new TextRenderer();
+  mDiagnostics = MakeUnique<Diagnostics>();
   MOZ_ASSERT(aCompositor);
 
 #ifdef USE_SKIA
@@ -410,7 +425,7 @@ LayerManagerComposite::EndTransaction(const TimeStamp& aTimeStamp,
   // Set composition timestamp here because we need it in
   // ComputeEffectiveTransforms (so the correct video frame size is picked) and
   // also to compute invalid regions properly.
-  mCompositor->SetCompositionTime(aTimeStamp);
+  SetCompositionTime(aTimeStamp);
 
   if (mRoot && !(aFlags & END_NO_IMMEDIATE_REDRAW)) {
     MOZ_ASSERT(!aTimeStamp.IsNull());
@@ -538,7 +553,7 @@ LayerManagerComposite::InvalidateDebugOverlay(nsIntRegion& aInvalidRegion, const
   bool drawFrameColorBars = gfxPrefs::CompositorDrawColorBars();
 
   if (drawFps || drawFrameCounter) {
-    aInvalidRegion.Or(aInvalidRegion, nsIntRect(0, 0, 256, 256));
+    aInvalidRegion.Or(aInvalidRegion, nsIntRect(0, 0, 650, 400));
   }
   if (drawFrameColorBars) {
     aInvalidRegion.Or(aInvalidRegion, nsIntRect(0, 0, 10, aBounds.height));
@@ -573,18 +588,14 @@ LayerManagerComposite::RenderDebugOverlay(const IntRect& aBounds)
   bool drawFrameCounter = gfxPrefs::DrawFrameCounter();
   bool drawFrameColorBars = gfxPrefs::CompositorDrawColorBars();
 
-  TimeStamp now = TimeStamp::Now();
-
   if (drawFps) {
-    if (!mFPS) {
-      mFPS = MakeUnique<FPSState>();
-    }
-
     float alpha = 1;
 #ifdef ANDROID
     // Draw a translation delay warning overlay
     int width;
     int border;
+
+    TimeStamp now = TimeStamp::Now();
     if (!mWarnTime.IsNull() && (now - mWarnTime).ToMilliseconds() < kVisualWarningDuration) {
       EffectChain effects;
 
@@ -617,8 +628,19 @@ LayerManagerComposite::RenderDebugOverlay(const IntRect& aBounds)
     }
 #endif
 
-    float fillRatio = mCompositor->GetFillRatio();
-    mFPS->DrawFPS(now, drawFrameColorBars ? 10 : 1, 2, unsigned(fillRatio), mCompositor);
+    GPUStats stats;
+    stats.mScreenPixels = mRenderBounds.width * mRenderBounds.height;
+    mCompositor->GetFrameStats(&stats);
+
+    std::string text = mDiagnostics->GetFrameOverlayString(stats);
+    mTextRenderer->RenderText(
+      mCompositor,
+      text,
+      IntPoint(2, 5),
+      Matrix4x4(),
+      24,
+      600,
+      TextRenderer::FontType::FixedWidth);
 
     if (mUnusedApzTransformWarning) {
       // If we have an unused APZ transform on this composite, draw a 20x20 red box
@@ -643,11 +665,6 @@ LayerManagerComposite::RenderDebugOverlay(const IntRect& aBounds)
       mDisabledApzWarning = false;
       SetDebugOverlayWantsNextFrame(true);
     }
-
-
-    // Each frame is invalidate by the previous frame for simplicity
-  } else {
-    mFPS = nullptr;
   }
 
   if (drawFrameColorBars) {
@@ -924,8 +941,21 @@ LayerManagerComposite::Render(const nsIntRegion& aInvalidRegion, const nsIntRegi
   }
 
   // Render our layers.
-  RootLayer()->Prepare(ViewAs<RenderTargetPixel>(clipRect, PixelCastJustification::RenderTargetIsParentLayerForRoot));
-  RootLayer()->RenderLayer(clipRect.ToUnknownRect(), Nothing());
+  {
+    Diagnostics::Record record;
+    RootLayer()->Prepare(ViewAs<RenderTargetPixel>(clipRect, PixelCastJustification::RenderTargetIsParentLayerForRoot));
+    if (record.Recording()) {
+      mDiagnostics->RecordPrepareTime(record.Duration());
+    }
+  }
+  // Execute draw commands.
+  {
+    Diagnostics::Record record;
+    RootLayer()->RenderLayer(clipRect.ToUnknownRect(), Nothing());
+    if (record.Recording()) {
+      mDiagnostics->RecordCompositeTime(record.Duration());
+    }
+  }
   RootLayer()->Cleanup();
 
   if (!mRegionToClear.IsEmpty()) {
@@ -944,6 +974,8 @@ LayerManagerComposite::Render(const nsIntRegion& aInvalidRegion, const nsIntRegi
   // Allow widget to render a custom foreground.
   mCompositor->GetWidget()->DrawWindowOverlay(
     &widgetContext, LayoutDeviceIntRect::FromUnknownRect(actualBounds));
+
+  mCompositor->NormalDrawingDone();
 
   // Debugging
   RenderDebugOverlay(actualBounds);
@@ -1337,10 +1369,9 @@ void
 LayerManagerComposite::ChangeCompositor(Compositor* aNewCompositor)
 {
   if (mCompositor) {
-    mCompositor->CancelFrame();
+    mCompositor->CancelFrame(false);
   }
   mCompositor = aNewCompositor;
-  mTextRenderer = new TextRenderer(aNewCompositor);
   mTwoPassTmpTarget = nullptr;
 }
 
@@ -1387,8 +1418,8 @@ LayerManagerComposite::CanUseCanvasLayerForSize(const IntSize &aSize)
 void
 LayerManagerComposite::NotifyShadowTreeTransaction()
 {
-  if (mFPS) {
-    mFPS->NotifyShadowTreeTransaction();
+  if (gfxPrefs::LayersDrawFPS()) {
+    mDiagnostics->AddTxnFrame();
   }
 }
 
@@ -1407,6 +1438,12 @@ LayerManagerComposite::AsyncPanZoomEnabled() const
     return bridge->GetOptions().UseAPZ();
   }
   return false;
+}
+
+bool
+LayerManagerComposite::AlwaysScheduleComposite() const
+{
+  return !!(mCompositor->GetDiagnosticTypes() & DiagnosticTypes::FLASH_BORDERS);
 }
 
 nsIntRegion

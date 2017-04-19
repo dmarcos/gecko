@@ -5,7 +5,6 @@
 
 var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
-Cu.import("resource://gre/modules/ExtensionContent.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -22,7 +21,7 @@ var AboutReaderListener = {
 
   _articlePromise: null,
 
-  _isLeavingReaderMode: false,
+  _isLeavingReaderableReaderMode: false,
 
   init: function() {
     addEventListener("AboutReaderContentLoaded", this, false, true);
@@ -41,7 +40,7 @@ var AboutReaderListener = {
           this._articlePromise = ReaderMode.parseDocument(content.document).catch(Cu.reportError);
           ReaderMode.enterReaderMode(docShell, content);
         } else {
-          this._isLeavingReaderMode = true;
+          this._isLeavingReaderableReaderMode = this.isReaderableAboutReader;
           ReaderMode.leaveReaderMode(docShell, content);
         }
         break;
@@ -54,6 +53,11 @@ var AboutReaderListener = {
 
   get isAboutReader() {
     return content.document.documentURI.startsWith("about:reader");
+  },
+
+  get isReaderableAboutReader() {
+    return this.isAboutReader &&
+      !content.document.documentElement.dataset.isError;
   },
 
   get isErrorPage() {
@@ -84,12 +88,12 @@ var AboutReaderListener = {
         break;
 
       case "pagehide":
-        // this._isLeavingReaderMode is used here to keep the Reader Mode icon
+        // this._isLeavingReaderableReaderMode is used here to keep the Reader Mode icon
         // visible in the location bar when transitioning from reader-mode page
         // back to the source page.
-        sendAsyncMessage("Reader:UpdateReaderButton", { isArticle: this._isLeavingReaderMode });
-        if (this._isLeavingReaderMode) {
-          this._isLeavingReaderMode = false;
+        sendAsyncMessage("Reader:UpdateReaderButton", { isArticle: this._isLeavingReaderableReaderMode });
+        if (this._isLeavingReaderableReaderMode) {
+          this._isLeavingReaderableReaderMode = false;
         }
         break;
 
@@ -162,7 +166,4 @@ addMessageListener("RemoteLogins:fillForm", function(message) {
   LoginManagerContent.receiveMessage(message, content);
 });
 
-ExtensionContent.init(this);
-addEventListener("unload", () => {
-  ExtensionContent.uninit(this);
-});
+Services.obs.notifyObservers(this, "tab-content-frameloader-created");

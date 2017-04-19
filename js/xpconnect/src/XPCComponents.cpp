@@ -1710,7 +1710,8 @@ nsXPCComponents_Exception::HasInstance(nsIXPConnectWrappedNative* wrapper,
     RootedValue v(cx, val);
     if (bp) {
         Exception* e;
-        *bp = NS_SUCCEEDED(UNWRAP_OBJECT(Exception, v.toObjectOrNull(), e)) ||
+        *bp = (v.isObject() &&
+               NS_SUCCEEDED(UNWRAP_OBJECT(Exception, &v.toObject(), e))) ||
               JSValIsInterfaceOfType(cx, v, NS_GET_IID(nsIException));
     }
     return NS_OK;
@@ -3020,14 +3021,8 @@ nsXPCComponents_Utils::NukeSandbox(HandleValue obj, JSContext* cx)
     NS_ENSURE_TRUE(IsWrapper(wrapper), NS_ERROR_INVALID_ARG);
     RootedObject sb(cx, UncheckedUnwrap(wrapper));
     NS_ENSURE_TRUE(IsSandbox(sb), NS_ERROR_INVALID_ARG);
-    NukeCrossCompartmentWrappers(cx, AllCompartments(),
-                                 SingleCompartment(GetObjectCompartment(sb)),
-                                 NukeWindowReferences);
 
-    // Now mark the compartment as nuked and non-scriptable.
-    auto compartmentPrivate = xpc::CompartmentPrivate::Get(sb);
-    compartmentPrivate->wasNuked = true;
-    compartmentPrivate->scriptability.Block();
+    xpc::NukeAllWrappersForCompartment(cx, GetObjectCompartment(sb));
 
     return NS_OK;
 }

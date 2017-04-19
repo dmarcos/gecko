@@ -12,20 +12,6 @@ ifndef TEST_PACKAGE_NAME
 TEST_PACKAGE_NAME := $(ANDROID_PACKAGE_NAME)
 endif
 
-# Linking xul-gtest.dll takes too long, so we disable GTest on
-# Windows PGO builds (bug 1028035).
-ifneq (1_WINNT,$(MOZ_PGO)_$(OS_ARCH))
-BUILD_GTEST=1
-endif
-
-ifneq (browser,$(MOZ_BUILD_APP))
-BUILD_GTEST=
-endif
-
-ifndef COMPILE_ENVIRONMENT
-BUILD_GTEST=
-endif
-
 ifndef NO_FAIL_ON_TEST_ERRORS
 define check_test_error_internal
   @errors=`grep 'TEST-UNEXPECTED-' $@.log` ;\
@@ -46,7 +32,7 @@ RUN_REFTEST = rm -f ./$@.log && $(PYTHON) _tests/reftest/runreftest.py \
   $(SYMBOLS_PATH) $(EXTRA_TEST_ARGS) $(1) | tee ./$@.log
 
 REMOTE_REFTEST = rm -f ./$@.log && $(PYTHON) _tests/reftest/remotereftest.py \
-  --dm_trans=$(DM_TRANS) --ignore-window-size \
+  --ignore-window-size \
   --app=$(TEST_PACKAGE_NAME) --deviceIP=${TEST_DEVICE} --xre-path=${MOZ_HOST_BIN} \
   --httpd-path=_tests/modules --suite reftest \
   --extra-profile-file=$(topsrcdir)/mobile/android/fonts \
@@ -67,7 +53,6 @@ reftest:
 	$(CHECK_TEST_ERROR)
 
 reftest-remote: TEST_PATH?=layout/reftests/reftest.list
-reftest-remote: DM_TRANS?=adb
 reftest-remote:
 	@if [ '${MOZ_HOST_BIN}' = '' ]; then \
         echo 'environment variable MOZ_HOST_BIN must be set to a directory containing host xpcshell'; \
@@ -75,8 +60,6 @@ reftest-remote:
         echo 'MOZ_HOST_BIN does not specify a directory'; \
     elif [ ! -f ${MOZ_HOST_BIN}/xpcshell ]; then \
         echo 'xpcshell not found in MOZ_HOST_BIN'; \
-    elif [ '${TEST_DEVICE}' = '' -a '$(DM_TRANS)' != 'adb' ]; then \
-        echo 'please prepare your host with the environment variable TEST_DEVICE'; \
     else \
         ln -s $(abspath $(topsrcdir)) _tests/reftest/tests; \
         $(call REMOTE_REFTEST,'tests/$(TEST_PATH)'); \
@@ -101,18 +84,12 @@ REMOTE_CPPUNITTESTS = \
 	$(PYTHON) -u $(topsrcdir)/testing/remotecppunittests.py \
 	  --xre-path=$(DEPTH)/dist/bin \
 	  --localLib=$(DEPTH)/dist/fennec \
-	  --dm_trans=$(DM_TRANS) \
 	  --deviceIP=${TEST_DEVICE} \
 	  $(TEST_PATH) $(EXTRA_TEST_ARGS)
 
 # Usage: |make [TEST_PATH=...] [EXTRA_TEST_ARGS=...] cppunittests-remote|.
-cppunittests-remote: DM_TRANS?=adb
 cppunittests-remote:
-	@if [ '${TEST_DEVICE}' != '' -o '$(DM_TRANS)' = 'adb' ]; \
-          then $(call REMOTE_CPPUNITTESTS); \
-        else \
-          echo 'please prepare your host with environment variables for TEST_DEVICE'; \
-        fi
+	$(call REMOTE_CPPUNITTESTS);
 
 jetpack-tests:
 	cd $(topsrcdir)/addon-sdk/source && $(PYTHON) bin/cfx -b $(abspath $(browser_path)) --parseable testpkgs
@@ -148,11 +125,12 @@ TEST_PKGS := \
   mochitest \
   reftest \
   talos \
+  awsy \
   web-platform \
   xpcshell \
   $(NULL)
 
-ifdef BUILD_GTEST
+ifdef LINK_GTEST_DURING_COMPILE
 stage-all: stage-gtest
 TEST_PKGS += gtest
 endif
@@ -217,11 +195,26 @@ endif
 stage-jstests: make-stage-dir
 	$(MAKE) -C $(DEPTH)/js/src/tests stage-package
 
+ifdef OBJCOPY
+ifneq ($(OBJCOPY), :) # see build/autoconf/toolchain.m4:102 for why this is necessary
+ifndef PKG_SKIP_STRIP
+STRIP_COMPILED_TESTS := 1
+endif
+endif
+endif
+
 stage-gtest: make-stage-dir
-# FIXME: (bug 1200311) We should be generating the gtest xul as part of the build.
-	$(MAKE) -C $(DEPTH)/testing/gtest gtest
-	$(NSINSTALL) -D $(PKG_STAGE)/gtest/gtest_bin
+	$(NSINSTALL) -D $(PKG_STAGE)/gtest/gtest_bin/gtest
+ifdef STRIP_COMPILED_TESTS
+# The libxul file basename will vary per platform. Fortunately
+# dependentlibs.list always lists the library name as its final line, so we
+# can get the value from there.
+	LIBXUL_BASE=`tail -1 $(DIST)/bin/dependentlibs.list` && \
+        $(OBJCOPY) $(or $(STRIP_FLAGS),--strip-unneeded) \
+        $(DIST)/bin/gtest/$$LIBXUL_BASE $(PKG_STAGE)/gtest/gtest_bin/gtest/$$LIBXUL_BASE
+else
 	cp -RL $(DIST)/bin/gtest $(PKG_STAGE)/gtest/gtest_bin
+endif
 	cp -RL $(DEPTH)/_tests/gtest $(PKG_STAGE)
 	cp $(topsrcdir)/testing/gtest/rungtests.py $(PKG_STAGE)/gtest
 	cp $(DIST)/bin/dependentlibs.list.gtest $(PKG_STAGE)/gtest
@@ -236,22 +229,14 @@ stage-jetpack: make-stage-dir
 
 CPP_UNIT_TEST_BINS=$(wildcard $(DIST)/cppunittests/*)
 
-ifdef OBJCOPY
-ifneq ($(OBJCOPY), :) # see build/autoconf/toolchain.m4:102 for why this is necessary
-ifndef PKG_SKIP_STRIP
-STRIP_CPP_TESTS := 1
-endif
-endif
-endif
-
 stage-cppunittests: make-stage-dir
 	$(NSINSTALL) -D $(PKG_STAGE)/cppunittest
-ifdef STRIP_CPP_TESTS
+ifdef STRIP_COMPILED_TESTS
 	$(foreach bin,$(CPP_UNIT_TEST_BINS),$(OBJCOPY) $(or $(STRIP_FLAGS),--strip-unneeded) $(bin) $(bin:$(DIST)/cppunittests/%=$(PKG_STAGE)/cppunittest/%);)
 else
 	cp -RL $(CPP_UNIT_TEST_BINS) $(PKG_STAGE)/cppunittest
 endif
-ifdef STRIP_CPP_TESTS
+ifdef STRIP_COMPILED_TESTS
 	$(OBJCOPY) $(or $(STRIP_FLAGS),--strip-unneeded) $(DIST)/bin/jsapi-tests$(BIN_SUFFIX) $(PKG_STAGE)/cppunittest/jsapi-tests$(BIN_SUFFIX)
 else
 	cp -RL $(DIST)/bin/jsapi-tests$(BIN_SUFFIX) $(PKG_STAGE)/cppunittest
@@ -278,7 +263,7 @@ stage-extensions: make-stage-dir
 check::
 	$(eval cores=$(shell $(PYTHON) -c 'import multiprocessing; print(multiprocessing.cpu_count())'))
 	@echo "Starting 'mach python-test' with -j$(cores)"
-	@$(topsrcdir)/mach --log-no-times python-test -j$(cores)
+	@$(topsrcdir)/mach --log-no-times python-test -j$(cores) --subsuite default
 	@echo "Finished 'mach python-test' successfully"
 
 

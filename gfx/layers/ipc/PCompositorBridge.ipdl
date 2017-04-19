@@ -14,6 +14,7 @@ include protocol PBrowser;
 include protocol PCompositorWidget;
 include protocol PLayerTransaction;
 include protocol PTexture;
+include protocol PWebRenderBridge;
 include "mozilla/GfxMessageUtils.h";
 
 using struct mozilla::null_t from "ipc/IPCMessageUtils.h";
@@ -29,10 +30,13 @@ using mozilla::ipc::SharedMemoryBasic::Handle from "mozilla/ipc/SharedMemoryBasi
 using mozilla::CSSIntRegion from "Units.h";
 using mozilla::LayoutDeviceIntPoint from "Units.h";
 using mozilla::LayoutDeviceIntRegion from "Units.h";
+using mozilla::LayoutDeviceIntSize from "Units.h";
 using class mozilla::TimeStamp from "mozilla/TimeStamp.h";
 using class mozilla::layers::FrameUniformityData from "mozilla/layers/FrameUniformityData.h";
 using mozilla::layers::TextureFlags from "mozilla/layers/CompositorTypes.h";
 using mozilla::layers::CompositorOptions from "mozilla/layers/CompositorOptions.h";
+using mozilla::wr::PipelineId from "mozilla/webrender/WebRenderTypes.h";
+using base::ProcessId from "base/process.h";
 
 namespace mozilla {
 namespace layers {
@@ -71,6 +75,7 @@ sync protocol PCompositorBridge
   manages PLayerTransaction;
   manages PTexture;
   manages PCompositorWidget;
+  manages PWebRenderBridge;
 
 child:
   // The child should invalidate retained layers. This is used for local
@@ -139,9 +144,6 @@ parent:
   sync Reset(LayersBackend[] aBackendHints, uint64_t aSeqNo)
     returns (bool aResult, TextureFactoryIdentifier aOutIdentifier);
 
-  // Returns the CompositorOptions for this compositor.
-  sync GetCompositorOptions(uint64_t layersId) returns (CompositorOptions aOptions);
-
   // Must be called after Initialize(), and only succeeds if AsyncPanZoomEnabled() is true.
   async PAPZ(uint64_t layersId);
   async PAPZCTreeManager(uint64_t layersId);
@@ -169,7 +171,15 @@ parent:
 
   // See bug 1316632 comment #33 for why this has to be sync. Otherwise,
   // there are ordering issues with SendPLayerTransactionConstructor.
-  sync NotifyChildCreated(uint64_t id);
+  sync NotifyChildCreated(uint64_t id)
+    returns (CompositorOptions compositorOptions);
+
+  // This version of NotifyChildCreated also performs a layer tree mapping.
+  //
+  // See bug 1316632 comment #33 for why this has to be sync. Otherwise,
+  // there are ordering issues with SendPLayerTransactionConstructor.
+  sync MapAndNotifyChildCreated(uint64_t id, ProcessId owner)
+    returns (CompositorOptions compositorOptions);
 
   async AdoptChild(uint64_t id);
 
@@ -177,7 +187,8 @@ parent:
   // reassociate layers. This must be synchronous to ensure that the
   // association happens before PLayerTransactions are sent over the
   // cross-process bridge.
-  sync NotifyChildRecreated(uint64_t id);
+  sync NotifyChildRecreated(uint64_t id)
+    returns (CompositorOptions compositorOptions);
 
   // Make a snapshot of the content that would have been drawn to our
   // render target at the time this message is received.  If the size
@@ -237,6 +248,10 @@ parent:
   async PTexture(SurfaceDescriptor aSharedData, LayersBackend aBackend, TextureFlags aTextureFlags, uint64_t id, uint64_t aSerial);
 
   sync SyncWithCompositor();
+
+  // The pipelineId is the same as the layersId
+  sync PWebRenderBridge(PipelineId pipelineId, LayoutDeviceIntSize aSize)
+    returns (TextureFactoryIdentifier textureFactoryIdentifier, uint32_t idNamespace); //XXX: use the WrIdNamespace type
 
 child:
   // Send back Compositor Frame Metrics from APZCs so tiled layers can

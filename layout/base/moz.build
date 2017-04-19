@@ -20,6 +20,7 @@ with Files('AccessibleCaret*'):
     BUG_COMPONENT = ('Core', 'Selection')
 
 XPIDL_SOURCES += [
+    'nsILayoutHistoryState.idl',
     'nsIPreloadedStyleSheet.idl',
     'nsIStyleSheetService.idl',
 ]
@@ -47,9 +48,9 @@ EXPORTS += [
     'nsFrameTraversal.h',
     'nsIFrameTraversal.h',
     'nsILayoutDebugger.h',
-    'nsILayoutHistoryState.h',
     'nsIPercentBSizeObserver.h',
     'nsIPresShell.h',
+    'nsIPresShellInlines.h',
     'nsIReflowCallback.h',
     'nsLayoutUtils.h',
     'nsPresArena.h',
@@ -70,16 +71,14 @@ EXPORTS.mozilla += [
     'ArenaObjectID.h',
     'ArenaRefPtr.h',
     'ArenaRefPtrInlines.h',
+    'GeckoRestyleManager.h',
     'GeometryUtils.h',
     'OverflowChangedTracker.h',
     'PresShell.h',
     'RestyleLogging.h',
     'RestyleManager.h',
-    'RestyleManagerBase.h',
-    'RestyleManagerHandle.h',
-    'RestyleManagerHandleInlines.h',
+    'RestyleManagerInlines.h',
     'ServoRestyleManager.h',
-    'ServoRestyleManagerInlines.h',
     'ShapeUtils.h',
     'StaticPresData.h',
 ]
@@ -89,6 +88,7 @@ UNIFIED_SOURCES += [
     'AccessibleCaretEventHub.cpp',
     'AccessibleCaretManager.cpp',
     'FramePropertyTable.cpp',
+    'GeckoRestyleManager.cpp',
     'GeometryUtils.cpp',
     'LayoutLogging.cpp',
     'MobileViewportManager.cpp',
@@ -104,6 +104,7 @@ UNIFIED_SOURCES += [
     'nsLayoutDebugger.cpp',
     'nsLayoutHistoryState.cpp',
     'nsLayoutUtils.cpp',
+    'nsPresArena.cpp',
     'nsPresContext.cpp',
     'nsQuoteList.cpp',
     'nsStyleChangeList.cpp',
@@ -111,7 +112,6 @@ UNIFIED_SOURCES += [
     'PositionedEventTargeting.cpp',
     'PresShell.cpp',
     'RestyleManager.cpp',
-    'RestyleManagerBase.cpp',
     'RestyleTracker.cpp',
     'ScrollbarStyles.cpp',
     'ServoRestyleManager.cpp',
@@ -137,10 +137,8 @@ else:
         'nsBidi_noICU.cpp',
     ]
 
-# nsPresArena.cpp needs to be built separately because it uses plarena.h.
 # nsRefreshDriver.cpp needs to be built separately because of name clashes in the OS X headers
 SOURCES += [
-    'nsPresArena.cpp',
     'nsRefreshDriver.cpp',
 ]
 
@@ -165,6 +163,7 @@ LOCAL_INCLUDES += [
     '/dom/html',
     '/dom/svg',
     '/dom/xbl',
+    '/dom/xul',
     '/view',
 ]
 

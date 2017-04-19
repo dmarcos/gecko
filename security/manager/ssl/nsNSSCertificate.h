@@ -35,8 +35,6 @@ public:
   NS_DECL_NSISERIALIZABLE
   NS_DECL_NSICLASSINFO
 
-  friend class nsNSSCertificateFakeTransport;
-
   explicit nsNSSCertificate(CERTCertificate* cert);
   nsNSSCertificate();
   static nsNSSCertificate* Create(CERTCertificate* cert = nullptr);
@@ -54,8 +52,7 @@ private:
   bool             mPermDelete;
   uint32_t         mCertType;
   nsresult CreateASN1Struct(nsIASN1Object** aRetVal);
-  nsresult CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence,
-                                          nsINSSComponent* nssComponent);
+  nsresult CreateTBSCertificateASN1Struct(nsIASN1Sequence** retSequence);
   nsresult GetSortableDate(PRTime aTime, nsAString& _aSortableDate);
   virtual void virtualDestroyNSSReference() override;
   void destructorSafeDestroyNSSReference();

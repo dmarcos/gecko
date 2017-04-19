@@ -12,7 +12,9 @@
 #include "mozilla/dom/VRDisplay.h"
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/dom/VRDisplayBinding.h"
+#include "mozilla/EventStateManager.h"
 #include "Navigator.h"
+#include "gfxPrefs.h"
 #include "gfxVR.h"
 #include "VRDisplayClient.h"
 #include "VRManagerChild.h"
@@ -266,7 +268,6 @@ VRPose::VRPose(nsISupports* aParent)
   : Pose(aParent)
 {
   mFrameId = 0;
-  mVRState.Clear();
   mozilla::HoldJSObjects(this);
 }
 
@@ -353,6 +354,8 @@ VRDisplay::VRDisplay(nsPIDOMWindowInner* aWindow, gfx::VRDisplayClient* aClient)
   , mClient(aClient)
   , mDepthNear(0.01f) // Default value from WebVR Spec
   , mDepthFar(10000.0f) // Default value from WebVR Spec
+  , mVRNavigationEventDepth(0)
+  , mShutdown(false)
 {
   const gfx::VRDisplayInfo& info = aClient->GetDisplayInfo();
   mDisplayId = info.GetDisplayID();
@@ -364,11 +367,15 @@ VRDisplay::VRDisplay(nsPIDOMWindowInner* aWindow, gfx::VRDisplayClient* aClient)
                                              info.GetStageSize());
   }
   mozilla::HoldJSObjects(this);
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (MOZ_LIKELY(obs)) {
+    obs->AddObserver(this, "inner-window-destroyed", false);
+  }
 }
 
 VRDisplay::~VRDisplay()
 {
-  ExitPresentInternal();
+  MOZ_ASSERT(mShutdown);
   mozilla::DropJSObjects(this);
 }
 
@@ -377,7 +384,7 @@ VRDisplay::LastRelease()
 {
   // We don't want to wait for the CC to free up the presentation
   // for use in other documents, so we do this in LastRelease().
-  ExitPresentInternal();
+  Shutdown();
 }
 
 already_AddRefed<VREyeParameters>
@@ -449,8 +456,38 @@ VRDisplay::ResetPose()
   mClient->ZeroSensor();
 }
 
+void
+VRDisplay::StartHandlingVRNavigationEvent()
+{
+  mHandlingVRNavigationEventStart = TimeStamp::Now();
+  ++mVRNavigationEventDepth;
+}
+
+void
+VRDisplay::StopHandlingVRNavigationEvent()
+{
+  MOZ_ASSERT(mVRNavigationEventDepth > 0);
+  --mVRNavigationEventDepth;
+}
+
+bool
+VRDisplay::IsHandlingVRNavigationEvent()
+{
+  if (mVRNavigationEventDepth == 0) {
+    return false;
+  }
+  if (mHandlingVRNavigationEventStart.IsNull()) {
+    return false;
+  }
+  TimeDuration timeout = TimeDuration::FromMilliseconds(gfxPrefs::VRNavigationTimeout());
+  return timeout <= TimeDuration(0) ||
+    (TimeStamp::Now() - mHandlingVRNavigationEventStart) <= timeout;
+}
+
 already_AddRefed<Promise>
-VRDisplay::RequestPresent(const nsTArray<VRLayer>& aLayers, ErrorResult& aRv)
+VRDisplay::RequestPresent(const nsTArray<VRLayer>& aLayers,
+                          CallerType aCallerType,
+                          ErrorResult& aRv)
 {
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(GetParentObject());
   if (!global) {
@@ -461,24 +498,26 @@ VRDisplay::RequestPresent(const nsTArray<VRLayer>& aLayers, ErrorResult& aRv)
   RefPtr<Promise> promise = Promise::Create(global, aRv);
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  NS_ENSURE_TRUE(obs, nullptr);
-
-  if (mClient->GetIsPresenting()) {
+  if (!EventStateManager::IsHandlingUserInput() &&
+      aCallerType != CallerType::System &&
+      !IsHandlingVRNavigationEvent() &&
+      gfxPrefs::VRRequireGesture()) {
+    // The WebVR API states that if called outside of a user gesture, the
+    // promise must be rejected.  We allow VR presentations to start within
+    // trusted events such as vrdisplayactivate, which triggers in response to
+    // HMD proximity sensors and when navigating within a VR presentation.
+    promise->MaybeRejectWithUndefined();
+  } else if (!IsPresenting() && IsAnyPresenting()) {
     // Only one presentation allowed per VRDisplay
     // on a first-come-first-serve basis.
+    // If this Javascript context is presenting, then we can replace our
+    // presentation with a new one containing new layers but we should never
+    // replace the presentation of another context.
     promise->MaybeRejectWithUndefined();
   } else {
     mPresentation = mClient->BeginPresentation(aLayers);
     mFrameInfo.Clear();
-
-    nsresult rv = obs->AddObserver(this, "inner-window-destroyed", false);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      mPresentation = nullptr;
-      promise->MaybeRejectWithUndefined();
-    } else {
-      promise->MaybeResolve(JS::UndefinedHandleValue);
-    }
+    promise->MaybeResolve(JS::UndefinedHandleValue);
   }
   return promise.forget();
 }
@@ -498,7 +537,7 @@ VRDisplay::Observe(nsISupports* aSubject, const char* aTopic,
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (!GetOwner() || GetOwner()->WindowID() == innerID) {
-      ExitPresentInternal();
+      Shutdown();
     }
 
     return NS_OK;
@@ -540,6 +579,17 @@ VRDisplay::ExitPresentInternal()
 }
 
 void
+VRDisplay::Shutdown()
+{
+  mShutdown = true;
+  ExitPresentInternal();
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (MOZ_LIKELY(obs)) {
+    obs->RemoveObserver(this, "inner-window-destroyed");
+  }
+}
+
+void
 VRDisplay::GetLayers(nsTArray<VRLayer>& result)
 {
   if (mPresentation) {
@@ -562,6 +612,10 @@ int32_t
 VRDisplay::RequestAnimationFrame(FrameRequestCallback& aCallback,
 ErrorResult& aError)
 {
+  if (mShutdown) {
+    return 0;
+  }
+
   gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
 
   int32_t handle;
@@ -583,6 +637,14 @@ VRDisplay::IsPresenting() const
   // IsPresenting returns true only if this Javascript context is presenting
   // and will return false if another context is presenting.
   return mPresentation != nullptr;
+}
+
+bool
+VRDisplay::IsAnyPresenting() const
+{
+  // IsAnyPresenting returns true if any Javascript context is presenting
+  // even if this context is not presenting.
+  return IsPresenting() || mClient->GetIsPresenting();
 }
 
 bool
@@ -742,6 +804,23 @@ VRFrameInfo::Update(const gfx::VRDisplayInfo& aInfo,
                     float aDepthFar)
 {
   mVRState = aState;
+  if (mTimeStampOffset == 0.0f) {
+    /**
+     * A mTimeStampOffset value of 0.0f indicates that this is the first iteration
+     * and an offset has not yet been set.
+     *
+     * Generate a value for mTimeStampOffset such that if aState.timestamp is
+     * monotonically increasing, aState.timestamp + mTimeStampOffset will never
+     * be a negative number and will start at a pseudo-random offset
+     * between 1000.0f and 11000.0f seconds.
+     *
+     * We use a pseudo random offset rather than 0.0f just to discourage users
+     * from making the assumption that the timestamp returned in the WebVR API
+     * has a base of 0, which is not necessarily true in all UA's.
+     */
+    mTimeStampOffset = float(rand()) / RAND_MAX * 10000.0f + 1000.0f - aState.timestamp;
+  }
+  mVRState.timestamp = aState.timestamp + mTimeStampOffset;
 
   gfx::Quaternion qt;
   if (mVRState.flags & gfx::VRDisplayCapabilityFlags::Cap_Orientation) {
@@ -779,8 +858,8 @@ VRFrameInfo::Update(const gfx::VRDisplayInfo& aInfo,
 }
 
 VRFrameInfo::VRFrameInfo()
+ : mTimeStampOffset(0.0f)
 {
-  mVRState.Clear();
 }
 
 bool

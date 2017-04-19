@@ -32,9 +32,8 @@ function check_record_version(user, id) {
 
     _("Payload is " + JSON.stringify(cleartext));
     equal(Services.appinfo.version, cleartext.version);
-    equal(2, cleartext.protocols.length);
-    equal("1.1", cleartext.protocols[0]);
-    equal("1.5", cleartext.protocols[1]);
+    equal(1, cleartext.protocols.length);
+    equal("1.5", cleartext.protocols[0]);
 }
 
 // compare 2 different command arrays, taking into account that a flowID
@@ -366,6 +365,62 @@ add_task(async function test_client_name_change() {
   cleanup();
 });
 
+add_task(async function test_last_modified() {
+  _("Ensure that remote records have a sane serverLastModified attribute.");
+
+  let now = Date.now() / 1000;
+  let contents = {
+    meta: {global: {engines: {clients: {version: engine.version,
+                                        syncID: engine.syncID}}}},
+    clients: {},
+    crypto: {}
+  };
+  let server = serverForUsers({"foo": "password"}, contents);
+  let user   = server.user("foo");
+
+  await SyncTestingInfrastructure(server);
+  generateNewKeys(Service.collectionKeys);
+
+  let activeID = Utils.makeGUID();
+  server.insertWBO("foo", "clients", new ServerWBO(activeID, encryptPayload({
+    id: activeID,
+    name: "Active client",
+    type: "desktop",
+    commands: [],
+    version: "48",
+    protocols: ["1.5"],
+  }), now - 10));
+
+  try {
+    let collection = user.collection("clients");
+
+    _("Sync to download the record");
+    engine._sync();
+
+    equal(engine._store._remoteClients[activeID].serverLastModified, now - 10,
+          "last modified in the local record is correctly the server last-modified");
+
+    _("Modify the record and re-upload it");
+    // set a new name to make sure we really did upload.
+    engine._store._remoteClients[activeID].name = "New name";
+    engine._modified.set(activeID, 0);
+    engine._uploadOutgoing();
+
+    _("Local record should have updated timestamp");
+    ok(engine._store._remoteClients[activeID].serverLastModified >= now);
+
+    _("Record on the server should have new name but not serverLastModified");
+    let payload = JSON.parse(JSON.parse(collection.payload(activeID)).ciphertext);
+    equal(payload.name, "New name");
+    equal(payload.serverLastModified, undefined);
+
+  } finally {
+    cleanup();
+    server.deleteCollections("foo");
+    await promiseStopServer(server);
+  }
+});
+
 add_task(async function test_send_command() {
   _("Verifies _sendCommandToClient puts commands in the outbound queue.");
 
@@ -379,8 +434,9 @@ add_task(async function test_send_command() {
 
   let action = "testCommand";
   let args = ["foo", "bar"];
+  let extra = { flowID: "flowy" }
 
-  engine._sendCommandToClient(action, args, remoteId);
+  engine._sendCommandToClient(action, args, remoteId, extra);
 
   let newRecord = store._remoteClients[remoteId];
   let clientCommands = engine._readCommands()[remoteId];
@@ -762,6 +818,71 @@ add_task(async function test_command_sync() {
   }
 });
 
+add_task(async function test_clients_not_in_fxa_list() {
+  _("Ensure that clients not in the FxA devices list are marked as stale.");
+
+  engine._store.wipe();
+  generateNewKeys(Service.collectionKeys);
+
+  let contents = {
+    meta: {global: {engines: {clients: {version: engine.version,
+                                        syncID: engine.syncID}}}},
+    clients: {},
+    crypto: {}
+  };
+  let server   = serverForUsers({"foo": "password"}, contents);
+  await SyncTestingInfrastructure(server);
+
+  let user     = server.user("foo");
+  let remoteId = Utils.makeGUID();
+  let remoteId2 = Utils.makeGUID();
+
+  _("Create remote client records");
+  server.insertWBO("foo", "clients", new ServerWBO(remoteId, encryptPayload({
+    id: remoteId,
+    name: "Remote client",
+    type: "desktop",
+    commands: [],
+    version: "48",
+    fxaDeviceId: remoteId,
+    protocols: ["1.5"],
+  }), Date.now() / 1000));
+  server.insertWBO("foo", "clients", new ServerWBO(remoteId2, encryptPayload({
+    id: remoteId2,
+    name: "Remote client 2",
+    type: "desktop",
+    commands: [],
+    version: "48",
+    fxaDeviceId: remoteId2,
+    protocols: ["1.5"],
+  }), Date.now() / 1000));
+
+  let fxAccounts = engine.fxAccounts;
+  engine.fxAccounts = {
+    getDeviceId() { return fxAccounts.getDeviceId(); },
+    getDeviceList() { return Promise.resolve([{ id: remoteId }]); }
+  };
+
+  try {
+    _("Syncing.");
+    engine._sync();
+
+    ok(!engine._store._remoteClients[remoteId].stale);
+    ok(engine._store._remoteClients[remoteId2].stale);
+
+  } finally {
+    engine.fxAccounts = fxAccounts;
+    cleanup();
+
+    try {
+      let collection = server.getCollection("foo", "clients");
+      collection.remove(remoteId);
+    } finally {
+      await promiseStopServer(server);
+    }
+  }
+});
+
 add_task(async function test_send_uri_to_client_for_display() {
   _("Ensure sendURIToClientForDisplay() sends command properly.");
 
@@ -858,7 +979,7 @@ add_task(async function test_receive_display_uri() {
 add_task(async function test_optional_client_fields() {
   _("Ensure that we produce records with the fields added in Bug 1097222.");
 
-  const SUPPORTED_PROTOCOL_VERSIONS = ["1.1", "1.5"];
+  const SUPPORTED_PROTOCOL_VERSIONS = ["1.5"];
   let local = engine._store.createRecord(engine.localID, "clients");
   equal(local.name, engine.localName);
   equal(local.type, engine.localType);
@@ -1423,6 +1544,88 @@ add_task(async function test_command_sync() {
     } finally {
       await promiseStopServer(server);
     }
+  }
+});
+
+add_task(async function ensureSameFlowIDs() {
+  let events = []
+  let origRecordTelemetryEvent = Service.recordTelemetryEvent;
+  Service.recordTelemetryEvent = (object, method, value, extra) => {
+    events.push({ object, method, value, extra });
+  }
+
+  try {
+    // Setup 2 clients, send them a command, and ensure we get to events
+    // written, both with the same flowID.
+    let contents = {
+      meta: {global: {engines: {clients: {version: engine.version,
+                                          syncID: engine.syncID}}}},
+      clients: {},
+      crypto: {}
+    };
+    let server    = serverForUsers({"foo": "password"}, contents);
+    await SyncTestingInfrastructure(server);
+
+    let remoteId   = Utils.makeGUID();
+    let remoteId2  = Utils.makeGUID();
+
+    _("Create remote client record 1");
+    server.insertWBO("foo", "clients", new ServerWBO(remoteId, encryptPayload({
+      id: remoteId,
+      name: "Remote client",
+      type: "desktop",
+      commands: [],
+      version: "48",
+      protocols: ["1.5"]
+    }), Date.now() / 1000));
+
+    _("Create remote client record 2");
+    server.insertWBO("foo", "clients", new ServerWBO(remoteId2, encryptPayload({
+      id: remoteId2,
+      name: "Remote client 2",
+      type: "mobile",
+      commands: [],
+      version: "48",
+      protocols: ["1.5"]
+    }), Date.now() / 1000));
+
+    engine._sync();
+    engine.sendCommand("wipeAll", []);
+    engine._sync();
+    equal(events.length, 2);
+    // we don't know what the flowID is, but do know it should be the same.
+    equal(events[0].extra.flowID, events[1].extra.flowID);
+
+    // check it's correctly used when we specify a flow ID
+    events.length = 0;
+    let flowID = Utils.makeGUID();
+    engine.sendCommand("wipeAll", [], null, { flowID });
+    engine._sync();
+    equal(events.length, 2);
+    equal(events[0].extra.flowID, flowID);
+    equal(events[1].extra.flowID, flowID);
+
+    // and that it works when something else is in "extra"
+    events.length = 0;
+    engine.sendCommand("wipeAll", [], null, { reason: "testing" });
+    engine._sync();
+    equal(events.length, 2);
+    equal(events[0].extra.flowID, events[1].extra.flowID);
+    equal(events[0].extra.reason, "testing");
+    equal(events[1].extra.reason, "testing");
+
+    // and when both are specified.
+    events.length = 0;
+    engine.sendCommand("wipeAll", [], null, { reason: "testing", flowID });
+    engine._sync();
+    equal(events.length, 2);
+    equal(events[0].extra.flowID, flowID);
+    equal(events[1].extra.flowID, flowID);
+    equal(events[0].extra.reason, "testing");
+    equal(events[1].extra.reason, "testing");
+
+  } finally {
+    Service.recordTelemetryEvent = origRecordTelemetryEvent;
   }
 });
 

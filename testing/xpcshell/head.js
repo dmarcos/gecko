@@ -23,6 +23,7 @@ _register_modules_protocol_handler();
 
 var _Promise = Components.utils.import("resource://gre/modules/Promise.jsm", {}).Promise;
 var _PromiseTestUtils = Components.utils.import("resource://testing-common/PromiseTestUtils.jsm", {}).PromiseTestUtils;
+var _Task = Components.utils.import("resource://gre/modules/Task.jsm", {}).Task;
 Components.utils.importGlobalProperties(["XMLHttpRequest"]);
 
 // Support a common assertion library, Assert.jsm.
@@ -440,7 +441,7 @@ function _setupDebuggerServer(breakpointFiles, callback) {
   };
 
   for (let topic of TOPICS) {
-    obsSvc.addObserver(observe, topic, false);
+    obsSvc.addObserver(observe, topic);
   }
   return DebuggerServer;
 }
@@ -551,9 +552,6 @@ function _execute_test() {
     // has already been logged so there is no need to log it again. It's
     // possible that this will mask an NS_ERROR_ABORT that happens after a
     // do_check failure though.
-    if (coverageCollector != null) {
-      coverageCollector.recordTestCoverage(_TEST_FILE[0]);
-    }
 
     if (!_quit || e != Components.results.NS_ERROR_ABORT) {
       let extra = {};
@@ -571,10 +569,10 @@ function _execute_test() {
       }
       _testLogger.error(message, extra);
     }
-  }
-
-  if (coverageCollector != null) {
-    coverageCollector.finalize();
+  } finally {
+    if (coverageCollector != null) {
+      coverageCollector.finalize();
+    }
   }
 
   // Execute all of our cleanup functions.
@@ -597,27 +595,22 @@ function _execute_test() {
                       });
   };
 
-  let func;
-  while ((func = _cleanupFunctions.pop())) {
-    let result;
-    try {
-      result = func();
-    } catch (ex) {
-      reportCleanupError(ex);
-      continue;
-    }
-    if (result && typeof result == "object"
-        && "then" in result && typeof result.then == "function") {
-      // This is a promise, wait until it is satisfied before proceeding
-      let complete = false;
-      let promise = result.then(null, reportCleanupError);
-      promise = promise.then(() => complete = true);
-      let thr = Components.classes["@mozilla.org/thread-manager;1"]
-                  .getService().currentThread;
-      while (!complete) {
-        thr.processNextEvent(true);
+  let complete = _cleanupFunctions.length == 0;
+  _Task.spawn(function*() {
+    for (let func of _cleanupFunctions.reverse()) {
+      try {
+        yield func();
+      } catch (ex) {
+        reportCleanupError(ex);
       }
     }
+    _cleanupFunctions = [];
+  }.bind(this)).catch(reportCleanupError)
+               .then(() => complete = true);
+  let thr = Components.classes["@mozilla.org/thread-manager;1"]
+                      .getService().currentThread;
+  while (!complete) {
+    thr.processNextEvent(true);
   }
 
   // Restore idle service to avoid leaks.
@@ -628,10 +621,10 @@ function _execute_test() {
     // the end of the current test, to ensure correct cleanup on shutdown.
     let obs = Components.classes["@mozilla.org/observer-service;1"]
                         .getService(Components.interfaces.nsIObserverService);
-    obs.notifyObservers(null, "profile-change-net-teardown", null);
-    obs.notifyObservers(null, "profile-change-teardown", null);
-    obs.notifyObservers(null, "profile-before-change", null);
-    obs.notifyObservers(null, "profile-before-change-qm", null);
+    obs.notifyObservers(null, "profile-change-net-teardown");
+    obs.notifyObservers(null, "profile-change-teardown");
+    obs.notifyObservers(null, "profile-before-change");
+    obs.notifyObservers(null, "profile-before-change-qm");
 
     _profileInitialized = false;
   }
@@ -704,7 +697,7 @@ function do_execute_soon(callback, aName) {
   var tm = Components.classes["@mozilla.org/thread-manager;1"]
                      .getService(Components.interfaces.nsIThreadManager);
 
-  tm.mainThread.dispatch({
+  tm.dispatchToMainThread({
     run: function() {
       try {
         callback();
@@ -729,7 +722,7 @@ function do_execute_soon(callback, aName) {
         do_test_finished(funcName);
       }
     }
-  }, Components.interfaces.nsIThread.DISPATCH_NORMAL);
+  });
 }
 
 /**
@@ -1515,7 +1508,6 @@ function add_task(funcOrProperties, func) {
 add_task.only = _add_only.bind(undefined, add_task);
 add_task.skip = _add_skip.bind(undefined, add_task);
 
-var _Task = Components.utils.import("resource://gre/modules/Task.jsm", {}).Task;
 _Task.Debugging.maintainStack = true;
 
 

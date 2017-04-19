@@ -478,6 +478,7 @@ function filterDevice() {
       }
 
       provider.listener = null;
+      provider = null;
       run_next_test();
     },
     updateDevice: function() {},
@@ -803,9 +804,9 @@ function ignoreIncompatibleDevice() {
   let mockServerObj = {
     QueryInterface: XPCOMUtils.generateQI([Ci.nsIPresentationControlService]),
     startServer: function() {
-      Services.tm.currentThread.dispatch(() => {
+      Services.tm.dispatchToMainThread(() => {
         this.listener.onServerReady(this.port, this.certFingerprint);
-      }, Ci.nsIThread.DISPATCH_NORMAL);
+      });
     },
     sessionRequest: function() {},
     close: function() {},
@@ -835,6 +836,7 @@ function ignoreIncompatibleDevice() {
     Assert.equal(listener.count(), 0);
 
     provider.listener = null;
+    provider = null;
 
     run_next_test();
   });
@@ -887,9 +889,9 @@ function ignoreSelfDevice() {
   let mockServerObj = {
     QueryInterface: XPCOMUtils.generateQI([Ci.nsIPresentationControlService]),
     startServer: function() {
-      Services.tm.currentThread.dispatch(() => {
+      Services.tm.dispatchToMainThread(() => {
         this.listener.onServerReady(this.port, this.certFingerprint);
-      }, Ci.nsIThread.DISPATCH_NORMAL);
+      });
     },
     sessionRequest: function() {},
     close: function() {},
@@ -918,6 +920,7 @@ function ignoreSelfDevice() {
     Assert.equal(listener.count(), 0);
 
     provider.listener = null;
+    provider = null;
 
     run_next_test();
   });
@@ -1250,14 +1253,14 @@ function serverRetry() {
     startServer: function(encrypted, port) {
       if (!isRetrying) {
         isRetrying = true;
-        Services.tm.currentThread.dispatch(() => {
+        Services.tm.dispatchToMainThread(() => {
           this.listener.onServerStopped(Cr.NS_ERROR_FAILURE);
-        }, Ci.nsIThread.DISPATCH_NORMAL);
+        });
       } else {
         this.port = 54321;
-        Services.tm.currentThread.dispatch(() => {
+        Services.tm.dispatchToMainThread(() => {
           this.listener.onServerReady(this.port, this.certFingerprint);
-        }, Ci.nsIThread.DISPATCH_NORMAL);
+        });
       }
     },
     sessionRequest: function() {},

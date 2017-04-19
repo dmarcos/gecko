@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files('**'):
+    BUG_COMPONENT = ('Toolkit', 'Startup and Profile System')
+
 if CONFIG['OS_ARCH'] == 'WINNT':
     TEST_DIRS += ['test/win']
 
@@ -37,6 +40,7 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     ]
     DEFINES['PROXY_PRINTING'] = 1
     LOCAL_INCLUDES += [
+        '../../other-licenses/nsis/Contrib/CityHash/cityhash',
         '../components/printingui/win',
     ]
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
@@ -72,6 +76,7 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk3':
     ]
 
 if CONFIG['MOZ_X11']:
+    EXPORTS += ['nsX11ErrorHandler.h']
     UNIFIED_SOURCES += [
         'nsX11ErrorHandler.cpp',
     ]

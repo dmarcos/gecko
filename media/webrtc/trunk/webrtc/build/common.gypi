@@ -326,6 +326,9 @@
               '-Wimplicit-fallthrough',
               '-Wthread-safety',
             ],
+            'cflags_mozilla': [
+              '-Wthread-safety',
+            ],
           }],
         ],
       }],
@@ -347,7 +350,7 @@
               ['arm_neon==1', {
                 'defines': ['WEBRTC_HAS_NEON',],
               }],
-              ['arm_neon==0 and (OS=="android" or moz_widget_toolkit_gonk==1)', {
+              ['arm_neon==0 and arm_neon_optional==1', {
                 'defines': ['WEBRTC_DETECT_NEON',],
               }],
             ],

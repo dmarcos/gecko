@@ -16,7 +16,7 @@ function promiseObserverNotified(aTopic) {
       dump("notification promised " + topic);
       Services.obs.removeObserver(onNotification, topic);
       TestUtils.executeSoon(() => resolve({subject, data}));
-    }, aTopic, false);
+    }, aTopic);
   });
 }
 
@@ -117,11 +117,6 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
       providersAdded++;
       info("runSocialTestWithProvider: provider added");
 
-      // we want to set the first specified provider as the UI's provider
-      if (provider.origin == manifests[0].origin) {
-        firstProvider = provider;
-      }
-
       // If we've added all the providers we need, call the callback to start
       // the tests (and give it a callback it can call to finish them)
       if (providersAdded == manifests.length) {
@@ -203,10 +198,7 @@ function checkSocialUI(win) {
 }
 
 function setManifestPref(name, manifest) {
-  let string = Cc["@mozilla.org/supports-string;1"].
-               createInstance(Ci.nsISupportsString);
-  string.data = JSON.stringify(manifest);
-  Services.prefs.setComplexValue(name, Ci.nsISupportsString, string);
+  Services.prefs.setStringPref(name, JSON.stringify(manifest));
 }
 
 function getManifestPrefname(aManifest) {
@@ -249,7 +241,7 @@ function toggleOfflineStatus(goOfflineState) {
         info("offline state changed to " + Services.io.offline);
         is(expect, Services.io.offline, "network:offline-status-changed successful toggle");
         resolve();
-      }, "network:offline-status-changed", false);
+      }, "network:offline-status-changed");
       BrowserOffline.toggleOfflineStatus();
     } else {
       resolve();

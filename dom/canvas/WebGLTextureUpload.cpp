@@ -17,6 +17,7 @@
 #include "mozilla/dom/ImageData.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Scoped.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Unused.h"
 #include "ScopedGLHelpers.h"
 #include "TexUnpackBlob.h"
@@ -219,8 +220,6 @@ FromImageBitmap(WebGLContext* webgl, const char* funcName, TexImageTarget target
     UniquePtr<dom::ImageBitmapCloneData> cloneData = Move(imageBitmap.ToCloneData());
     const RefPtr<gfx::DataSourceSurface> surf = cloneData->mSurface;
 
-    ////
-
     if (!width) {
         width = surf->GetSize().width;
     }
@@ -229,15 +228,11 @@ FromImageBitmap(WebGLContext* webgl, const char* funcName, TexImageTarget target
         height = surf->GetSize().height;
     }
 
-    ////
-
-
     // WhatWG "HTML Living Standard" (30 October 2015):
     // "The getImageData(sx, sy, sw, sh) method [...] Pixels must be returned as
     //  non-premultiplied alpha values."
-    const bool isAlphaPremult = cloneData->mIsPremultipliedAlpha;
     return MakeUnique<webgl::TexUnpackSurface>(webgl, target, width, height, depth, surf,
-                                               isAlphaPremult);
+                                               cloneData->mAlphaType);
 }
 
 static UniquePtr<webgl::TexUnpackBlob>
@@ -255,6 +250,11 @@ FromImageData(WebGLContext* webgl, const char* funcName, TexImageTarget target,
     const gfx::IntSize size(imageData.Width(), imageData.Height());
     const size_t stride = size.width * 4;
     const gfx::SurfaceFormat surfFormat = gfx::SurfaceFormat::R8G8B8A8;
+
+    // WhatWG "HTML Living Standard" (30 October 2015):
+    // "The getImageData(sx, sy, sw, sh) method [...] Pixels must be returned as
+    //  non-premultiplied alpha values."
+    const auto alphaType = gfxAlphaType::NonPremult;
 
     MOZ_ASSERT(dataSize == stride * size.height);
 
@@ -280,12 +280,8 @@ FromImageData(WebGLContext* webgl, const char* funcName, TexImageTarget target,
 
     ////
 
-    // WhatWG "HTML Living Standard" (30 October 2015):
-    // "The getImageData(sx, sy, sw, sh) method [...] Pixels must be returned as
-    //  non-premultiplied alpha values."
-    const bool isAlphaPremult = false;
     return MakeUnique<webgl::TexUnpackSurface>(webgl, target, width, height, depth, surf,
-                                               isAlphaPremult);
+                                               alphaType);
 }
 
 UniquePtr<webgl::TexUnpackBlob>
@@ -293,7 +289,11 @@ WebGLContext::FromDomElem(const char* funcName, TexImageTarget target, uint32_t 
                           uint32_t height, uint32_t depth, const dom::Element& elem,
                           ErrorResult* const out_error)
 {
-    uint32_t flags = nsLayoutUtils::SFE_WANT_IMAGE_SURFACE |
+    // The canvas spec says that drawImage should draw the first frame of
+    // animated images. The webgl spec doesn't mention the issue, so we do the
+    // same as drawImage.
+    uint32_t flags = nsLayoutUtils::SFE_WANT_FIRST_FRAME_IF_IMAGE |
+                     nsLayoutUtils::SFE_WANT_IMAGE_SURFACE |
                      nsLayoutUtils::SFE_USE_ELEMENT_SIZE_IF_VECTOR;
 
     if (mPixelStore_ColorspaceConversion == LOCAL_GL_NONE)
@@ -374,16 +374,14 @@ WebGLContext::FromDomElem(const char* funcName, TexImageTarget target, uint32_t 
     //////
     // Ok, we're good!
 
-    const bool isAlphaPremult = sfer.mIsPremultiplied;
-
     if (layersImage) {
         return MakeUnique<webgl::TexUnpackImage>(this, target, width, height, depth,
-                                                 layersImage,  isAlphaPremult);
+                                                 layersImage, sfer.mAlphaType);
     }
 
     MOZ_ASSERT(dataSurf);
     return MakeUnique<webgl::TexUnpackSurface>(this, target, width, height, depth,
-                                               dataSurf, isAlphaPremult);
+                                               dataSurf, sfer.mAlphaType);
 }
 
 ////////////////////////////////////////
@@ -695,7 +693,7 @@ ValidateCompressedTexUnpack(WebGLContext* webgl, const char* funcName, GLsizei w
 
     if (dataSize != bytesNeeded.value()) {
         webgl->ErrorInvalidValue("%s: Provided buffer's size must match expected size."
-                                 " (needs %u, has %u)",
+                                 " (needs %u, has %" PRIuSIZE ")",
                                  funcName, bytesNeeded.value(), dataSize);
         return false;
     }
@@ -1394,7 +1392,7 @@ WebGLTexture::TexSubImage(const char* funcName, TexImageTarget target, GLint lev
     }
 
     if (glError) {
-        mContext->ErrorInvalidOperation("%s: Unexpected error during upload: 0x04x",
+        mContext->ErrorInvalidOperation("%s: Unexpected error during upload: 0x%04x",
                                         funcName, glError);
         MOZ_ASSERT(false, "Unexpected GL error.");
         return;
@@ -2010,11 +2008,15 @@ DoCopyTexOrSubImage(WebGLContext* webgl, const char* funcName, bool isSubImage,
 
     ////
 
-    uint32_t readX, readY;
-    uint32_t writeX, writeY;
-    uint32_t rwWidth, rwHeight;
-    Intersect(srcTotalWidth, xWithinSrc, dstWidth, &readX, &writeX, &rwWidth);
-    Intersect(srcTotalHeight, yWithinSrc, dstHeight, &readY, &writeY, &rwHeight);
+    int32_t readX, readY;
+    int32_t writeX, writeY;
+    int32_t rwWidth, rwHeight;
+    if (!Intersect(srcTotalWidth, xWithinSrc, dstWidth, &readX, &writeX, &rwWidth) ||
+        !Intersect(srcTotalHeight, yWithinSrc, dstHeight, &readY, &writeY, &rwHeight))
+    {
+        webgl->ErrorOutOfMemory("%s: Bad subrect selection.", funcName);
+        return false;
+    }
 
     writeX += xOffset;
     writeY += yOffset;
@@ -2027,7 +2029,7 @@ DoCopyTexOrSubImage(WebGLContext* webgl, const char* funcName, bool isSubImage,
         if (!isSubImage) {
             UniqueBuffer buffer;
 
-            if (rwWidth != dstWidth || rwHeight != dstHeight) {
+            if (uint32_t(rwWidth) != dstWidth || uint32_t(rwHeight) != dstHeight) {
                 const auto& pi = idealUnpack->ToPacking();
                 CheckedUint32 byteCount = BytesPerPixel(pi);
                 byteCount *= dstWidth;

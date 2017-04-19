@@ -202,14 +202,26 @@ Notification.prototype = {
  *        parent of anchor elements whose IDs are passed to show().
  *        It is used as a fallback popup anchor if notifications specify
  *        invalid or non-existent anchor IDs.
+ * @param options
+ *        An optional object with the following optional properties:
+ *        {
+ *          shouldSuppress:
+ *            If this function returns true, then all notifications are
+ *            suppressed for this window. This state is checked on construction
+ *            and when the "anchorVisibilityChange" method is called.
+ *        }
  */
-this.PopupNotifications = function PopupNotifications(tabbrowser, panel, iconBox) {
+this.PopupNotifications = function PopupNotifications(tabbrowser, panel,
+                                                      iconBox, options = {}) {
   if (!(tabbrowser instanceof Ci.nsIDOMXULElement))
     throw "Invalid tabbrowser";
   if (iconBox && !(iconBox instanceof Ci.nsIDOMXULElement))
     throw "Invalid iconBox";
   if (!(panel instanceof Ci.nsIDOMXULElement))
     throw "Invalid panel";
+
+  this._shouldSuppress = options.shouldSuppress || (() => false);
+  this._suppress = this._shouldSuppress();
 
   this.window = tabbrowser.ownerGlobal;
   this.panel = panel;
@@ -234,18 +246,29 @@ this.PopupNotifications = function PopupNotifications(tabbrowser, panel, iconBox
     }
 
     let doc = this.window.document;
-    let activeElement = doc.activeElement;
+    let focusedElement = Services.focus.focusedElement;
 
     // If the chrome window has a focused element, let it handle the ESC key instead.
-    if (!activeElement ||
-        activeElement == doc.body ||
-        activeElement == this.tabbrowser.selectedBrowser ||
+    if (!focusedElement ||
+        focusedElement == doc.body ||
+        focusedElement == this.tabbrowser.selectedBrowser ||
         // Ignore focused elements inside the notification.
-        getNotificationFromElement(activeElement) == notification ||
-        notification.contains(activeElement)) {
+        getNotificationFromElement(focusedElement) == notification ||
+        notification.contains(focusedElement)) {
       this._onButtonEvent(aEvent, "secondarybuttoncommand", notification);
     }
   };
+
+  // There are no anchor icons in DOM fullscreen mode, but we would
+  // still like to show the popup notification. To avoid an infinite
+  // loop of showing and hiding, we have to disable followanchor
+  // (which hides the element without an anchor) in fullscreen.
+  this.window.addEventListener("MozDOMFullscreen:Entered", () => {
+    this.panel.setAttribute("followanchor", "false");
+  }, true);
+  this.window.addEventListener("MozDOMFullscreen:Exited", () => {
+    this.panel.setAttribute("followanchor", "true");
+  }, true);
 
   this.window.addEventListener("activate", this, true);
   if (this.tabbrowser.tabContainer)
@@ -342,6 +365,8 @@ PopupNotifications.prototype = {
    *        dismissed:   Whether the notification should be added as a dismissed
    *                     notification. Dismissed notifications can be activated
    *                     by clicking on their anchorElement.
+   *        autofocus:   Whether the notification should be autofocused on
+   *                     showing, stealing focus from any other focused element.
    *        eventCallback:
    *                     Callback to be invoked when the notification changes
    *                     state. The callback's first argument is a string
@@ -453,6 +478,14 @@ PopupNotifications.prototype = {
 
     if (isActiveBrowser) {
       if (isActiveWindow) {
+
+        // Autofocus if the notification requests focus.
+        if (options && !options.dismissed && options.autofocus) {
+          this.panel.removeAttribute("noautofocus");
+        } else {
+          this.panel.setAttribute("noautofocus", "true");
+        }
+
         // show panel now
         this._update(notifications, new Set([notification.anchorElement]), true);
       } else {
@@ -524,25 +557,35 @@ PopupNotifications.prototype = {
     this._setNotificationsForBrowser(aBrowser, notifications);
 
     if (this._isActiveBrowser(aBrowser)) {
-      // get the anchor element if the browser has defined one so it will
-      // _update will handle both the tabs iconBox and non-tab permission
-      // anchors.
-      this._update(notifications, this._getAnchorsForNotifications(notifications,
-        getAnchorFromBrowser(aBrowser)));
+      this.anchorVisibilityChange();
     }
   },
 
   /**
    * Called by the consumer to indicate that the visibility of the notification
-   * anchors may have changed, but the location has not changed. This may result
-   * in the "showing" and "shown" events for visible notifications to be
-   * invoked even if the anchor has not changed.
+   * anchors may have changed, but the location has not changed. This also
+   * checks whether all notifications are suppressed for this window.
+   *
+   * Calling this method may result in the "showing" and "shown" events for
+   * visible notifications to be invoked even if the anchor has not changed.
    */
   anchorVisibilityChange() {
-    let notifications =
-      this._getNotificationsForBrowser(this.tabbrowser.selectedBrowser);
-    this._update(notifications, this._getAnchorsForNotifications(notifications,
-      getAnchorFromBrowser(this.tabbrowser.selectedBrowser)));
+    let suppress = this._shouldSuppress();
+    if (!suppress) {
+      // If notifications are not suppressed, always update the visibility.
+      this._suppress = false;
+      let notifications =
+        this._getNotificationsForBrowser(this.tabbrowser.selectedBrowser);
+      this._update(notifications, this._getAnchorsForNotifications(notifications,
+        getAnchorFromBrowser(this.tabbrowser.selectedBrowser)));
+      return;
+    }
+
+    // Notifications are suppressed, ensure that the panel is hidden.
+    if (!this._suppress) {
+      this._suppress = true;
+      this._hidePanel().catch(Cu.reportError);
+    }
   },
 
   /**
@@ -565,8 +608,12 @@ PopupNotifications.prototype = {
         this._onPopupHidden(aEvent);
         break;
       case "activate":
-        if (this.isPanelOpen)
+        if (this.isPanelOpen) {
+          for (let elt of this.panel.children)
+            elt.notification.timeShown = this.window.performance.now();
           break;
+        }
+
       case "TabSelect":
         let self = this;
         // This is where we could detect if the panel is dismissed if the page
@@ -822,6 +869,7 @@ PopupNotifications.prototype = {
         }
       } else {
         popupnotification.setAttribute("checkboxhidden", "true");
+        popupnotification.setAttribute("warninghidden", "true");
       }
 
       this.panel.appendChild(popupnotification);
@@ -1014,10 +1062,12 @@ PopupNotifications.prototype = {
     }
 
     // Filter out notifications that have been dismissed, unless they are
-    // persistent.
-    let notificationsToShow = notifications.filter(function(n) {
-      return (!n.dismissed || n.options.persistent) && !n.options.neverShow;
-    });
+    // persistent. Also check if we should not show any notification.
+    let notificationsToShow = [];
+    if (!this._suppress) {
+      notificationsToShow = notifications.filter(
+        n => (!n.dismissed || n.options.persistent) && !n.options.neverShow);
+    }
 
     if (useIconBox) {
       // Hide icons of the previous tab.
@@ -1200,14 +1250,17 @@ PopupNotifications.prototype = {
       this._dismissOrRemoveCurrentNotifications();
     }
 
-    // Ensure we move focus into the panel because it's opened through user interaction:
-    this.panel.removeAttribute("noautofocus");
+    // Avoid reshowing notifications that are already shown and have not been dismissed.
+    if (this.panel.state == "closed" || anchor != this._currentAnchorElement) {
+      // As soon as the panel is shown, focus the first element in the selected notification.
+      this.panel.addEventListener("popupshown",
+        () => this.window.document.commandDispatcher.advanceFocusIntoSubtree(this.panel),
+        {once: true});
 
-    this._reshowNotifications(anchor);
-
-    // If the user re-selects the current notification, focus it.
-    if (anchor == this._currentAnchorElement && this.panel.firstChild) {
-      this.panel.firstChild.button.focus();
+      this._reshowNotifications(anchor);
+    } else {
+      // Focus the first element in the selected notification.
+      this.window.document.commandDispatcher.advanceFocusIntoSubtree(this.panel);
     }
   },
 
@@ -1283,17 +1336,22 @@ PopupNotifications.prototype = {
   },
 
   _onPopupHidden: function PopupNotifications_onPopupHidden(event) {
-    if (event.target != this.panel || this._ignoreDismissal) {
-      if (this._ignoreDismissal) {
-        this._ignoreDismissal.resolve();
-        this._ignoreDismissal = null;
-      }
+    if (event.target != this.panel) {
       return;
     }
 
-    // Ensure that when the panel comes up without user interaction,
-    // we don't autofocus it.
+    // We may have removed the "noautofocus" attribute before showing the panel
+    // if the notification specified it wants to autofocus on first show.
+    // When the panel is closed, we have to restore the attribute to its default
+    // value, so we don't autofocus it if it's subsequently opened from a different code path.
     this.panel.setAttribute("noautofocus", "true");
+
+    // Handle the case where the panel was closed programmatically.
+    if (this._ignoreDismissal) {
+      this._ignoreDismissal.resolve();
+      this._ignoreDismissal = null;
+      return;
+    }
 
     this._dismissOrRemoveCurrentNotifications();
 
@@ -1372,6 +1430,13 @@ PopupNotifications.prototype = {
     }
 
     if (type == "buttoncommand" || type == "secondarybuttoncommand") {
+      if (Services.focus.activeWindow != this.window) {
+        Services.console.logStringMessage("PopupNotifications._onButtonEvent: " +
+                                          "Button click happened before the window was focused");
+        this.window.focus();
+        return;
+      }
+
       let timeSinceShown = this.window.performance.now() - notification.timeShown;
       if (timeSinceShown < this.buttonDelay) {
         Services.console.logStringMessage("PopupNotifications._onButtonEvent: " +
@@ -1438,6 +1503,6 @@ PopupNotifications.prototype = {
   },
 
   _notify: function PopupNotifications_notify(topic) {
-    Services.obs.notifyObservers(null, "PopupNotifications-" + topic, "");
+    Services.obs.notifyObservers(null, "PopupNotifications-" + topic);
   },
 };

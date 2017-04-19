@@ -6,7 +6,6 @@
 #ifndef GFX_PLATFORM_ANDROID_H
 #define GFX_PLATFORM_ANDROID_H
 
-#include "gfxFT2Fonts.h"
 #include "gfxPlatform.h"
 #include "gfxUserFontSet.h"
 #include "nsCOMPtr.h"
@@ -65,10 +64,6 @@ public:
     }
 
     virtual already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource() override;
-
-    virtual bool SupportsApzTouchInput() const override {
-      return true;
-    }
 
 protected:
     bool AccelerateLayersByDefault() override {

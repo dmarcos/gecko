@@ -27,7 +27,7 @@ complete: function(partialHash, gethashUrl, tableName, cb)
   var self = this;
   var doCallback = function() {
       if (self.alwaysFail) {
-        cb.completionFinished(1);
+        cb.completionFinished(Cr.NS_ERROR_FAILURE);
         return;
       }
       var results;
@@ -35,7 +35,7 @@ complete: function(partialHash, gethashUrl, tableName, cb)
         for (var i = 0; i < fragments[partialHash].length; i++) {
           var chunkId = fragments[partialHash][i][0];
           var hash = fragments[partialHash][i][1];
-          cb.completion(hash, self.tableName, chunkId);
+          cb.completionV2(hash, self.tableName, chunkId);
         }
       }
     cb.completionFinished(0);

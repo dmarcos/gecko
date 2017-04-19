@@ -13,6 +13,7 @@
       'sources': [
         'der_getint_unittest.cc',
         'der_private_key_import_unittest.cc',
+        'der_quickder_unittest.cc',
         '<(DEPTH)/gtests/common/gtests.cc'
       ],
       'dependencies': [
@@ -24,12 +25,6 @@
       ]
     }
   ],
-  'target_defaults': {
-    'include_dirs': [
-      '../../gtests/google_test/gtest/include',
-      '../../gtests/common'
-    ]
-  },
   'variables': {
     'module': 'nss'
   }

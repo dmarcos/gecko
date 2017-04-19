@@ -57,7 +57,7 @@ public:
    * APIs used by the registered external transport to this Conduit to
    * feed in received RTP Frames to the VoiceEngine for decoding
    */
-  virtual MediaConduitErrorCode ReceivedRTPPacket(const void *data, int len) override;
+  virtual MediaConduitErrorCode ReceivedRTPPacket(const void *data, int len, uint32_t ssrc) override;
 
   /**
    * APIs used by the registered external transport to this Conduit to
@@ -163,6 +163,7 @@ public:
                         size_t len) override;
 
   virtual uint64_t CodecPluginID() override { return 0; }
+  virtual void SetPCHandle(const std::string& aPCHandle) {}
 
   explicit WebrtcAudioConduit():
                       mVoiceEngine(nullptr),
@@ -175,9 +176,7 @@ public:
                       mDtmfEnabled(false),
                       mCodecMutex("AudioConduit codec db"),
                       mCaptureDelay(150),
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
                       mLastTimestamp(0),
-#endif // MOZILLA_INTERNAL_API
                       mSamples(0),
                       mLastSyncLog(0)
   {
@@ -202,11 +201,19 @@ public:
   }
   bool GetRemoteSSRC(unsigned int* ssrc) override;
   bool SetLocalCNAME(const char* cname) override;
+
+  bool GetSendPacketTypeStats(
+      webrtc::RtcpPacketTypeCounter* aPacketCounts) override;
+
+  bool GetRecvPacketTypeStats(
+      webrtc::RtcpPacketTypeCounter* aPacketCounts) override;
+
   bool GetVideoEncoderStats(double* framerateMean,
                             double* framerateStdDev,
                             double* bitrateMean,
                             double* bitrateStdDev,
-                            uint32_t* droppedFrames) override
+                            uint32_t* droppedFrames,
+                            uint32_t* framesEncoded) override
   {
     return false;
   }
@@ -303,9 +310,7 @@ private:
   // Current "capture" delay (really output plus input delay)
   int32_t mCaptureDelay;
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   uint32_t mLastTimestamp;
-#endif // MOZILLA_INTERNAL_API
 
   uint32_t mSamples;
   uint32_t mLastSyncLog;

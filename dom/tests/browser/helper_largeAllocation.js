@@ -15,7 +15,7 @@ function expectProcessCreated() {
       ok(true, "Expect process created");
       resolve();
     }
-    os.addObserver(observer, topic, /* weak = */ false);
+    os.addObserver(observer, topic);
     kill = () => {
       os.removeObserver(observer, topic);
       ok(true, "Expect process created killed");
@@ -33,7 +33,7 @@ function expectNoProcess() {
     ok(false, "A process was created!");
     os.removeObserver(observer, topic);
   }
-  os.addObserver(observer, topic, /* weak = */ false);
+  os.addObserver(observer, topic);
 
   return () => os.removeObserver(observer, topic);
 }
@@ -48,12 +48,7 @@ function getPID(aBrowser) {
 
 function getInLAProc(aBrowser) {
   return ContentTask.spawn(aBrowser, null, () => {
-    try {
-      return docShell.inLargeAllocProcess;
-    } catch (e) {
-      // This must be a non-remote browser, which means it is not fresh
-      return false;
-    }
+    return Services.appinfo.remoteType == "webLargeAllocation";
   });
 }
 
@@ -350,8 +345,46 @@ function* largeAllocSuccessTests() {
     });
   });
 
+  // Try dragging the tab into a new window when not at the maximum number of
+  // Large-Allocation processes.
   yield BrowserTestUtils.withNewTab("about:blank", function*(aBrowser) {
     info("Starting test 7");
+
+    let pid1 = yield getPID(aBrowser);
+    is(false, yield getInLAProc(aBrowser));
+
+    let ready = Promise.all([expectProcessCreated(),
+                             BrowserTestUtils.browserLoaded(aBrowser)]);
+    yield ContentTask.spawn(aBrowser, TEST_URI, TEST_URI => {
+      content.document.location = TEST_URI;
+    });
+
+    yield ready;
+
+    let pid2 = yield getPID(aBrowser);
+
+    isnot(pid1, pid2, "PIDs 1 and 2 should not match");
+    is(true, yield getInLAProc(aBrowser));
+
+    let newWindow = yield BrowserTestUtils.openNewBrowserWindow();
+
+    newWindow.gBrowser.adoptTab(gBrowser.getTabForBrowser(aBrowser), 0);
+    let newTab = newWindow.gBrowser.tabs[0];
+
+    is(newTab.linkedBrowser.currentURI.spec, TEST_URI);
+    is(newTab.linkedBrowser.remoteType, "webLargeAllocation");
+    let pid3 = yield getPID(newTab.linkedBrowser);
+
+    is(pid2, pid3, "PIDs 2 and 3 should match");
+    is(true, yield getInLAProc(newTab.linkedBrowser));
+
+    yield BrowserTestUtils.closeWindow(newWindow);
+  });
+
+  // Try opening a new Large-Allocation document when at the max number of large
+  // allocation processes.
+  yield BrowserTestUtils.withNewTab("about:blank", function*(aBrowser) {
+    info("Starting test 8");
     yield SpecialPowers.pushPrefEnv({
       set: [
         ["dom.ipc.processCount.webLargeAllocation", 1]
@@ -389,6 +422,116 @@ function* largeAllocSuccessTests() {
 
       is(false, yield getInLAProc(aBrowser));
     });
+  });
+
+  // XXX: Important - reset the process count, as it was set to 1 by the
+  // previous test.
+  yield SpecialPowers.pushPrefEnv({
+    set: [["dom.ipc.processCount.webLargeAllocation", 20]],
+  });
+
+  // view-source tabs should not be considered to be in a large-allocation process.
+  yield BrowserTestUtils.withNewTab("about:blank", function*(aBrowser) {
+    info("Starting test 9");
+    let pid1 = yield getPID(aBrowser);
+    is(false, yield getInLAProc(aBrowser));
+
+    // Fail the test if we create a process
+    let stopExpectNoProcess = expectNoProcess();
+
+    yield ContentTask.spawn(aBrowser, null, () => {
+      content.document.location = "view-source:http://example.com";
+    });
+
+    yield BrowserTestUtils.browserLoaded(aBrowser);
+
+    let pid2 = yield getPID(aBrowser);
+
+    is(pid1, pid2, "The PID should not have changed");
+    is(false, yield getInLAProc(aBrowser));
+
+    stopExpectNoProcess();
+  });
+
+  // Try dragging tab into new window when at the max number of large allocation
+  // processes.
+  yield BrowserTestUtils.withNewTab("about:blank", function*(aBrowser) {
+    info("Starting test 10");
+    yield SpecialPowers.pushPrefEnv({
+      set: [
+        ["dom.ipc.processCount.webLargeAllocation", 1]
+      ],
+    });
+
+    let pid1 = yield getPID(aBrowser);
+    is(false, yield getInLAProc(aBrowser));
+
+    let ready = Promise.all([expectProcessCreated(),
+                             BrowserTestUtils.browserLoaded(aBrowser)]);
+    yield ContentTask.spawn(aBrowser, TEST_URI, TEST_URI => {
+      content.document.location = TEST_URI;
+    });
+
+    yield ready;
+
+    let pid2 = yield getPID(aBrowser);
+
+    isnot(pid1, pid2, "PIDs 1 and 2 should not match");
+    is(true, yield getInLAProc(aBrowser));
+
+    let newWindow = yield BrowserTestUtils.openNewBrowserWindow();
+
+    newWindow.gBrowser.adoptTab(gBrowser.getTabForBrowser(aBrowser), 0);
+    let newTab = newWindow.gBrowser.tabs[0];
+
+    is(newTab.linkedBrowser.currentURI.spec, TEST_URI);
+    is(newTab.linkedBrowser.remoteType, "webLargeAllocation");
+    let pid3 = yield getPID(newTab.linkedBrowser);
+
+    is(pid2, pid3, "PIDs 2 and 3 should match");
+    is(true, yield getInLAProc(newTab.linkedBrowser));
+
+    yield BrowserTestUtils.closeWindow(newWindow);
+  });
+
+  // XXX: Important - reset the process count, as it was set to 1 by the
+  // previous test.
+  yield SpecialPowers.pushPrefEnv({
+    set: [["dom.ipc.processCount.webLargeAllocation", 20]],
+  });
+
+  yield BrowserTestUtils.withNewTab("about:blank", function*(aBrowser) {
+    info("Starting test 11");
+
+    let pid1 = yield getPID(aBrowser);
+    is(false, yield getInLAProc(aBrowser));
+
+    let ready = Promise.all([expectProcessCreated(),
+                             BrowserTestUtils.browserLoaded(aBrowser)]);
+    yield ContentTask.spawn(aBrowser, TEST_URI, TEST_URI => {
+      content.document.location = TEST_URI;
+    });
+
+    yield ready;
+
+    let pid2 = yield getPID(aBrowser);
+
+    isnot(pid1, pid2, "PIDs 1 and 2 should not match");
+    is(true, yield getInLAProc(aBrowser));
+
+    yield Promise.all([
+      ContentTask.spawn(aBrowser, null, () => {
+        content.document.querySelector("#submit").click();
+      }),
+      BrowserTestUtils.browserLoaded(aBrowser)
+    ]);
+
+    let innerText = yield ContentTask.spawn(aBrowser, null, () => {
+      return content.document.body.innerText;
+    });
+    isnot(innerText, "FAIL", "We should not have sent a get request!");
+    is(innerText, "textarea=default+value&button=submit",
+       "The post data should be received by the callee");
   });
 
   // XXX: Make sure to reset dom.ipc.processCount.webLargeAllocation if adding a

@@ -53,7 +53,7 @@ public:
                             int32_t aModType) override;
 
   void OnVisibilityChange(Visibility aNewVisibility,
-                          Maybe<OnNonvisible> aNonvisibleAction = Nothing()) override;
+                          const Maybe<OnNonvisible>& aNonvisibleAction = Nothing()) override;
 
   /* get the size of the video's display */
   nsSize GetVideoIntrinsicSize(nsRenderingContext *aRenderingContext);
@@ -127,6 +127,9 @@ protected:
   // if we're the frame for a video element. Only call on frames for video
   // elements, not for frames for audio elements.
   void UpdatePosterSource(bool aNotify);
+
+  // Notify the mediaElement that the mCaptionDiv was created.
+  void UpdateTextTrack();
 
   virtual ~nsVideoFrame();
 

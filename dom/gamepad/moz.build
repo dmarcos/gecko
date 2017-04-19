@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files("**"):
+    BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
+
 IPDL_SOURCES += [
     'ipc/GamepadEventTypes.ipdlh',
     'ipc/PGamepadEventChannel.ipdl',
@@ -13,6 +16,7 @@ IPDL_SOURCES += [
 EXPORTS.mozilla.dom += [
     'Gamepad.h',
     'GamepadButton.h',
+    'GamepadHapticActuator.h',
     'GamepadManager.h',
     'GamepadMonitoring.h',
     'GamepadPlatformService.h',
@@ -30,6 +34,7 @@ EXPORTS.mozilla.dom += [
 UNIFIED_SOURCES = [
     'Gamepad.cpp',
     'GamepadButton.cpp',
+    'GamepadHapticActuator.cpp',
     'GamepadManager.cpp',
     'GamepadMonitoring.cpp',
     'GamepadPlatformService.cpp',

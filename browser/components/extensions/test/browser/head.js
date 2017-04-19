@@ -8,13 +8,15 @@
  *          getBrowserActionPopup getPageActionPopup
  *          closeBrowserAction closePageAction
  *          promisePopupShown promisePopupHidden
- *          openContextMenu closeContextMenu
+ *          openContextMenu closeContextMenu openContextMenuInSidebar
  *          openExtensionContextMenu closeExtensionContextMenu
  *          openActionContextMenu openSubmenu closeActionContextMenu
  *          openTabContextMenu closeTabContextMenu
- *          imageBuffer getListStyleImage getPanelForNode
+ *          imageBuffer imageBufferFromDataURI
+ *          getListStyleImage getPanelForNode
  *          awaitExtensionPanel awaitPopupResize
  *          promiseContentDimensions alterContent
+ *          promisePrefChangeObserved openContextMenuInFrame
  */
 
 const {AppConstants} = Cu.import("resource://gre/modules/AppConstants.jsm", {});
@@ -26,7 +28,6 @@ const {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm", {})
 // use to select our configuration.
 if (gTestPath.includes("test-oop-extensions")) {
   SpecialPowers.pushPrefEnv({set: [
-    ["dom.ipc.processCount.extension", 1],
     ["extensions.webextensions.remote", true],
   ]});
   // We don't want to reset this at the end of the test, so that we don't have
@@ -65,8 +66,13 @@ var focusWindow = Task.async(function* focusWindow(win) {
   yield promise;
 });
 
+function imageBufferFromDataURI(encodedImageData) {
+  let decodedImageData = atob(encodedImageData);
+  return Uint8Array.from(decodedImageData, byte => byte.charCodeAt(0)).buffer;
+}
+
 let img = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQImWNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==";
-var imageBuffer = Uint8Array.from(atob(img), byte => byte.charCodeAt(0)).buffer;
+var imageBuffer = imageBufferFromDataURI(img);
 
 function getListStyleImage(button) {
   let style = button.ownerGlobal.getComputedStyle(button);
@@ -226,19 +232,40 @@ function closeBrowserAction(extension, win = window) {
   return Promise.resolve();
 }
 
-function* openContextMenu(selector = "#img1") {
-  let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
+async function openContextMenuInSidebar(selector = "body") {
+  let contentAreaContextMenu = SidebarUI.browser.contentDocument.getElementById("contentAreaContextMenu");
+  let browser = SidebarUI.browser.contentDocument.getElementById("webext-panels-browser");
   let popupShownPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popupshown");
-  yield BrowserTestUtils.synthesizeMouseAtCenter(selector, {type: "contextmenu"}, gBrowser.selectedBrowser);
-  yield popupShownPromise;
+  await BrowserTestUtils.synthesizeMouseAtCenter(selector, {type: "mousedown", button: 2}, browser);
+  await BrowserTestUtils.synthesizeMouseAtCenter(selector, {type: "contextmenu"}, browser);
+  await popupShownPromise;
   return contentAreaContextMenu;
 }
 
-function* closeContextMenu() {
+async function openContextMenuInFrame(frameId) {
   let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
+  let popupShownPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popupshown");
+  let doc = gBrowser.selectedBrowser.contentDocument;
+  let frame = doc.getElementById(frameId);
+  EventUtils.synthesizeMouseAtCenter(frame.contentDocument.body, {type: "contextmenu"}, frame.contentWindow);
+  await popupShownPromise;
+  return contentAreaContextMenu;
+}
+
+async function openContextMenu(selector = "#img1") {
+  let contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
+  let popupShownPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popupshown");
+  await BrowserTestUtils.synthesizeMouseAtCenter(selector, {type: "mousedown", button: 2}, gBrowser.selectedBrowser);
+  await BrowserTestUtils.synthesizeMouseAtCenter(selector, {type: "contextmenu"}, gBrowser.selectedBrowser);
+  await popupShownPromise;
+  return contentAreaContextMenu;
+}
+
+async function closeContextMenu(contextMenu) {
+  let contentAreaContextMenu = contextMenu || document.getElementById("contentAreaContextMenu");
   let popupHiddenPromise = BrowserTestUtils.waitForEvent(contentAreaContextMenu, "popuphidden");
   contentAreaContextMenu.hidePopup();
-  yield popupHiddenPromise;
+  await popupHiddenPromise;
 }
 
 function* openExtensionContextMenu(selector = "#img1") {
@@ -342,4 +369,12 @@ function closePageAction(extension, win = window) {
   }
 
   return Promise.resolve();
+}
+
+function promisePrefChangeObserved(pref) {
+  return new Promise((resolve, reject) =>
+    Preferences.observe(pref, function prefObserver() {
+      Preferences.ignore(pref, prefObserver);
+      resolve();
+    }));
 }

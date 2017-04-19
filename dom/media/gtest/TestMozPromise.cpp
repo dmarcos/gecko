@@ -39,7 +39,7 @@ class DelayedResolveOrReject : public Runnable
 public:
   DelayedResolveOrReject(TaskQueue* aTaskQueue,
                          TestPromise::Private* aPromise,
-                         TestPromise::ResolveOrRejectValue aValue,
+                         const TestPromise::ResolveOrRejectValue& aValue,
                          int aIterations)
   : mTaskQueue(aTaskQueue)
   , mPromise(aPromise)
@@ -195,7 +195,7 @@ TEST(MozPromise, CompletionPromises)
       },
       DO_FAIL)
     ->Then(queue, __func__,
-      [queue] (int aVal) -> RefPtr<TestPromise> { return TestPromise::CreateAndReject(double(aVal - 42) + 42.0, __func__); },
+      [] (int aVal) -> RefPtr<TestPromise> { return TestPromise::CreateAndReject(double(aVal - 42) + 42.0, __func__); },
       DO_FAIL)
     ->Then(queue, __func__,
       DO_FAIL,

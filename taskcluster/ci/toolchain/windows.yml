@@ -6,8 +6,8 @@ win32-clang-cl/opt:
     description: "Clang-cl toolchain build"
     treeherder:
         kind: build
-        platform: windows-2012-32/opt
-        symbol: Cc(ClangCL)
+        platform: toolchains/opt
+        symbol: TW32(clang-cl)
         tier: 2
     worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
     worker:
@@ -16,18 +16,16 @@ win32-clang-cl/opt:
     run:
         using: toolchain-script
         script: build-clang32-windows.sh
-    when:
-        files-changed:
+        resources:
             - 'build/build-clang/**'
-            - 'taskcluster/scripts/misc/build-clang32-windows.sh'
-            - 'taskcluster/taskgraph/transforms/job/toolchain.py'
+            - 'taskcluster/scripts/misc/build-clang-windows-helper32.sh'
 
 win64-clang-cl/opt:
     description: "Clang-cl toolchain build"
     treeherder:
         kind: build
-        platform: windows-2012-64/opt
-        symbol: Cc(ClangCL)
+        platform: toolchains/opt
+        symbol: TW64(clang-cl)
         tier: 2
     worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
     worker:
@@ -36,11 +34,9 @@ win64-clang-cl/opt:
     run:
         using: toolchain-script
         script: build-clang64-windows.sh
-    when:
-        files-changed:
+        resources:
             - 'build/build-clang/**'
-            - 'taskcluster/scripts/misc/build-clang64-windows.sh'
-            - 'taskcluster/taskgraph/transforms/job/toolchain.py'
+            - 'taskcluster/scripts/misc/build-clang-windows-helper64.sh'
 
 win32-clang-tidy/opt:
     description: "Clang-tidy toolchain build"
@@ -49,8 +45,8 @@ win32-clang-tidy/opt:
         job-name: win32-clang-tidy
     treeherder:
         kind: build
-        platform: windows-2012-32/opt
-        symbol: Cc(Clang-Tidy)
+        platform: toolchains/opt
+        symbol: TW32(clang-tidy)
         tier: 2
     worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
     worker:
@@ -59,11 +55,9 @@ win32-clang-tidy/opt:
     run:
         using: toolchain-script
         script: build-clang-tidy32-windows.sh
-    when:
-        files-changed:
+        resources:
             - 'build/build-clang/**'
-            - 'taskcluster/scripts/misc/build-clang-tidy32-windows.sh'
-            - 'taskcluster/taskgraph/transforms/job/toolchain.py'
+            - 'taskcluster/scripts/misc/build-clang-windows-helper32.sh'
 
 win64-clang-tidy/opt:
     description: "Clang-tidy toolchain build"
@@ -72,8 +66,8 @@ win64-clang-tidy/opt:
         job-name: win64-clang-tidy
     treeherder:
         kind: build
-        platform: windows-2012-64/opt
-        symbol: Cc(Clang-Tidy)
+        platform: toolchains/opt
+        symbol: TW64(clang-tidy)
         tier: 2
     worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
     worker:
@@ -82,8 +76,6 @@ win64-clang-tidy/opt:
     run:
         using: toolchain-script
         script: build-clang-tidy64-windows.sh
-    when:
-        files-changed:
+        resources:
             - 'build/build-clang/**'
-            - 'taskcluster/scripts/misc/build-clang-tidy64-windows.sh'
-            - 'taskcluster/taskgraph/transforms/job/toolchain.py'
+            - 'taskcluster/scripts/misc/build-clang-windows-helper64.sh'

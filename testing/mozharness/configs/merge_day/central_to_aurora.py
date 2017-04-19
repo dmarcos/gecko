@@ -29,11 +29,12 @@ config = {
         for f in ["debug", "nightly", "l10n-mozconfig"]
     ] + [
         # File, from, to
-        ("{}/l10n-nightly".format(d),
+        ("{}/{}".format(d, f),
         "ac_add_options --with-l10n-base=../../l10n-central",
-        "ac_add_options --with-l10n-base=..")
+        "ac_add_options --with-l10n-base=../../mozilla-aurora")
         for d in ["mobile/android/config/mozconfigs/android-api-15/",
                   "mobile/android/config/mozconfigs/android-x86/"]
+        for f in ["l10n-nightly", "l10n-release"]
     ] + [
         # File, from, to
         (f, "ac_add_options --enable-profiling", "") for f in
@@ -60,7 +61,8 @@ config = {
         "browser/locales/shipped-locales",
         "browser/locales/all-locales",
         "mobile/android/locales/maemo-locales",
-        "mobile/android/locales/all-locales"
+        "mobile/android/locales/all-locales",
+        "mobile/locales/l10n-changesets.json",
     ],
 
     "vcs_share_base": os.path.join(ABS_WORK_DIR, 'hg-shared'),

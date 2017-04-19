@@ -239,7 +239,7 @@ XULDocument::~XULDocument()
     delete mTemplateBuilderTable;
 
     Preferences::UnregisterCallback(XULDocument::DirectionChanged,
-                                    "intl.uidirection.", this);
+                                    "intl.uidirection", this);
 
     if (mOffThreadCompileStringBuf) {
       js_free(mOffThreadCompileStringBuf);
@@ -403,7 +403,15 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
     nsresult rv =
         NS_GetFinalChannelURI(aChannel, getter_AddRefs(mDocumentURI));
     NS_ENSURE_SUCCESS(rv, rv);
-    
+
+    mOriginalURI = mDocumentURI;
+
+    // Get the document's principal
+    nsCOMPtr<nsIPrincipal> principal;
+    nsContentUtils::GetSecurityManager()->
+        GetChannelResultPrincipal(mChannel, getter_AddRefs(principal));
+    principal = MaybeDowngradePrincipal(principal);
+
     ResetStylesheetsToURI(mDocumentURI);
 
     RetrieveRelevantHeaders(aChannel);
@@ -460,8 +468,8 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
         // with the stream n' stuff.
 
         nsCOMPtr<nsIParser> parser;
-        rv = PrepareToLoad(aContainer, aCommand, aChannel, aLoadGroup,
-                           getter_AddRefs(parser));
+        rv = PrepareToLoadPrototype(mDocumentURI, aCommand, principal,
+                                    getter_AddRefs(parser));
         if (NS_FAILED(rv)) return rv;
 
         // Predicate mIsWritingFastLoad on the XUL cache being enabled,
@@ -1898,7 +1906,7 @@ XULDocument::Init()
     }
 
     Preferences::RegisterCallback(XULDocument::DirectionChanged,
-                                  "intl.uidirection.", this);
+                                  "intl.uidirection", this);
 
     return NS_OK;
 }
@@ -1932,26 +1940,26 @@ XULDocument::StartLayout(void)
 
 /* static */
 bool
-XULDocument::MatchAttribute(nsIContent* aContent,
+XULDocument::MatchAttribute(Element* aElement,
                             int32_t aNamespaceID,
                             nsIAtom* aAttrName,
                             void* aData)
 {
-    NS_PRECONDITION(aContent, "Must have content node to work with!");
+    NS_PRECONDITION(aElement, "Must have content node to work with!");
     nsString* attrValue = static_cast<nsString*>(aData);
     if (aNamespaceID != kNameSpaceID_Unknown &&
         aNamespaceID != kNameSpaceID_Wildcard) {
         return attrValue->EqualsLiteral("*") ?
-            aContent->HasAttr(aNamespaceID, aAttrName) :
-            aContent->AttrValueIs(aNamespaceID, aAttrName, *attrValue,
+            aElement->HasAttr(aNamespaceID, aAttrName) :
+            aElement->AttrValueIs(aNamespaceID, aAttrName, *attrValue,
                                   eCaseMatters);
     }
 
     // Qualified name match. This takes more work.
 
-    uint32_t count = aContent->GetAttrCount();
+    uint32_t count = aElement->GetAttrCount();
     for (uint32_t i = 0; i < count; ++i) {
-        const nsAttrName* name = aContent->GetAttrNameAt(i);
+        const nsAttrName* name = aElement->GetAttrNameAt(i);
         bool nameMatch;
         if (name->IsAtom()) {
             nameMatch = name->Atom() == aAttrName;
@@ -1963,28 +1971,13 @@ XULDocument::MatchAttribute(nsIContent* aContent,
 
         if (nameMatch) {
             return attrValue->EqualsLiteral("*") ||
-                aContent->AttrValueIs(name->NamespaceID(), name->LocalName(),
+                aElement->AttrValueIs(name->NamespaceID(), name->LocalName(),
                                       *attrValue, eCaseMatters);
         }
     }
 
     return false;
 }
-
-nsresult
-XULDocument::PrepareToLoad(nsISupports* aContainer,
-                           const char* aCommand,
-                           nsIChannel* aChannel,
-                           nsILoadGroup* aLoadGroup,
-                           nsIParser** aResult)
-{
-    // Get the document's principal
-    nsCOMPtr<nsIPrincipal> principal;
-    nsContentUtils::GetSecurityManager()->
-        GetChannelResultPrincipal(aChannel, getter_AddRefs(principal));
-    return PrepareToLoadPrototype(mDocumentURI, aCommand, principal, aResult);
-}
-
 
 nsresult
 XULDocument::PrepareToLoadPrototype(nsIURI* aURI, const char* aCommand,
@@ -3647,10 +3640,9 @@ XULDocument::CheckTemplateBuilderHookup(nsIContent* aElement,
     // bad) if aElement is not a XUL element.
     //
     // XXXvarga Do we still want to support non XUL content?
-    nsCOMPtr<nsIDOMXULElement> xulElement = do_QueryInterface(aElement);
+    RefPtr<nsXULElement> xulElement = nsXULElement::FromContent(aElement);
     if (xulElement) {
-        nsCOMPtr<nsIRDFCompositeDataSource> ds;
-        xulElement->GetDatabase(getter_AddRefs(ds));
+        nsCOMPtr<nsIRDFCompositeDataSource> ds = xulElement->GetDatabase();
         if (ds) {
             *aNeedsHookup = false;
             return NS_OK;
@@ -4439,6 +4431,7 @@ XULDocument::ParserObserver::OnStartRequest(nsIRequest *request,
             nsCOMPtr<nsIPrincipal> principal;
             secMan->GetChannelResultPrincipal(channel, getter_AddRefs(principal));
 
+            principal = mDocument->MaybeDowngradePrincipal(principal);
             // Failure there is ok -- it'll just set a (safe) null principal
             mPrototype->SetDocumentPrincipal(principal);
         }

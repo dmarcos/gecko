@@ -25,25 +25,35 @@ public:
 
   virtual nsresult Init() override;
   virtual nsresult Has(const Completion& aCompletion,
+                       const TableFreshnessMap& aTableFreshness,
+                       uint32_t aFreshnessGuarantee,
                        bool* aHas, uint32_t* aMatchLength,
-                       bool* aFromCache) override;
+                       bool* aConfirmed, bool* aFromCache) override;
 
-  virtual void IsHashEntryConfirmed(const Completion& aEntry,
-                                    const TableFreshnessMap& aTableFreshness,
-                                    uint32_t aFreshnessGuarantee,
-                                    bool* aConfirmed) override;
+  virtual void ClearCache() override;
+
+#if DEBUG
+  virtual void DumpCache() override;
+#endif
+
+  virtual bool IsEmpty() override;
 
   nsresult Build(PrefixStringMap& aPrefixMap);
 
   nsresult GetPrefixes(PrefixStringMap& aPrefixMap);
+  nsresult GetFixedLengthPrefixes(FallibleTArray<uint32_t>& aPrefixes);
 
   // ApplyUpdate will merge data stored in aTableUpdate with prefixes in aInputMap.
   nsresult ApplyUpdate(TableUpdateV4* aTableUpdate,
                        PrefixStringMap& aInputMap,
                        PrefixStringMap& aOutputMap);
 
+  nsresult AddFullHashResponseToCache(const FullHashResponseMap& aResponseMap);
+
   nsresult WriteMetadata(TableUpdateV4* aTableUpdate);
   nsresult LoadMetadata(nsACString& aState, nsACString& aChecksum);
+
+  void InvalidateExpiredCacheEntry();
 
   static const int VER;
 
@@ -60,6 +70,8 @@ private:
   nsresult VerifyChecksum(const nsACString& aChecksum);
 
   RefPtr<VariableLengthPrefixSet> mVLPrefixSet;
+
+  FullHashResponseMap mCache;
 };
 
 } // namespace safebrowsing

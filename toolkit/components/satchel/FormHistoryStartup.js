@@ -55,11 +55,11 @@ FormHistoryStartup.prototype = {
     Services.obs.addObserver(this, "profile-before-change", true);
     Services.obs.addObserver(this, "formhistory-expire-now", true);
 
+    Services.ppmm.loadProcessScript("chrome://satchel/content/formSubmitListener.js", true);
+    Services.ppmm.addMessageListener("FormHistory:FormSubmitEntries", this);
+
     let messageManager = Cc["@mozilla.org/globalmessagemanager;1"].
                          getService(Ci.nsIMessageListenerManager);
-    messageManager.loadFrameScript("chrome://satchel/content/formSubmitListener.js", true);
-    messageManager.addMessageListener("FormHistory:FormSubmitEntries", this);
-
     // For each of these messages, we could receive them from content,
     // or we might receive them from the ppmm if the searchbar is
     // having its history queried.
@@ -75,9 +75,9 @@ FormHistoryStartup.prototype = {
         let entries = message.data;
         let changes = entries.map(function(entry) {
           return {
-            op : "bump",
-            fieldname : entry.name,
-            value : entry.value,
+            op: "bump",
+            fieldname: entry.name,
+            value: entry.value,
           }
         });
 

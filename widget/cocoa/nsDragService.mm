@@ -34,7 +34,7 @@
 using namespace mozilla;
 using namespace mozilla::gfx;
 
-extern PRLogModuleInfo* sCocoaLog;
+extern mozilla::LazyLogModule sCocoaLog;
 
 extern void EnsureLogInitialized();
 
@@ -208,7 +208,7 @@ nsDragService::ConstructDragImage(nsIDOMNode* aDOMNode,
 bool
 nsDragService::IsValidType(NSString* availableType, bool allowFileURL)
 {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
 
   // Prevent exposing fileURL for non-fileURL type.
   // We need URL provided by dropped webloc file, but don't need file's URL.
@@ -220,7 +220,7 @@ nsDragService::IsValidType(NSString* availableType, bool allowFileURL)
 
   return true;
 
-  NS_OBJC_END_TRY_ABORT_BLOCK(false);
+  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(false);
 }
 
 NSString*
@@ -277,9 +277,6 @@ nsDragService::GetFilePath(NSPasteboardItem* item)
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
 }
 
-// We can only invoke NSView's 'dragImage:at:offset:event:pasteboard:source:slideBack:' from
-// within NSView's 'mouseDown:' or 'mouseDragged:'. Luckily 'mouseDragged' is always on the
-// stack when InvokeDragSession gets called.
 nsresult
 nsDragService::InvokeDragSessionImpl(nsIArray* aTransferableArray,
                                      nsIScriptableRegion* aDragRgn,
@@ -287,13 +284,21 @@ nsDragService::InvokeDragSessionImpl(nsIArray* aTransferableArray,
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
+  if (!gLastDragView) {
+    // gLastDragView is only set during -[ChildView mouseDragged:].
+    // InvokeDragSessionImpl is only called while Gecko processes a mouse move
+    // event. So if we get here with gLastDragView being null, that means that
+    // the mouse button has already been released, and mouseMoved is on the
+    // stack instead of mouseDragged. In that case we need to abort the drag
+    // because the OS won't know where to drop whatever's being dragged, and we
+    // might end up with a stuck drag & drop session.
+    return NS_ERROR_FAILURE;
+  }
+
   mDataItems = aTransferableArray;
 
   // Save the transferables away in case a promised file callback is invoked.
   gDraggedTransferables = aTransferableArray;
-
-  nsBaseDragService::StartDragSession();
-  nsBaseDragService::OpenDragPopup();
 
   // We need to retain the view and the event during the drag in case either
   // gets destroyed.
@@ -344,6 +349,9 @@ nsDragService::InvokeDragSessionImpl(nsIArray* aTransferableArray,
     [[NSDraggingItem alloc] initWithPasteboardWriter:pbItem];
   [pbItem release];
   [dragItem setDraggingFrame:localDragRect contents:image];
+
+  nsBaseDragService::StartDragSession();
+  nsBaseDragService::OpenDragPopup();
 
   NSDraggingSession* draggingSession =
     [mNativeDragView beginDraggingSessionWithItems:
@@ -704,7 +712,7 @@ nsDragService::DragMovedWithView(NSDraggingSession* aSession, NSPoint aPoint)
 }
 
 NS_IMETHODIMP
-nsDragService::EndDragSession(bool aDoneDrag)
+nsDragService::EndDragSession(bool aDoneDrag, uint32_t aKeyModifiers)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
@@ -719,7 +727,7 @@ nsDragService::EndDragSession(bool aDoneDrag)
 
   mUserCancelled = gUserCancelledDrag;
 
-  nsresult rv = nsBaseDragService::EndDragSession(aDoneDrag);
+  nsresult rv = nsBaseDragService::EndDragSession(aDoneDrag, aKeyModifiers);
   mDataItems = nullptr;
   return rv;
 

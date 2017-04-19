@@ -45,6 +45,7 @@ import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.InputOptionsUtils;
+import org.mozilla.gecko.util.IntentUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.ViewUtil;
 
@@ -122,6 +123,9 @@ public class GeckoPreferences
     public static final String PREFS_HEALTHREPORT_UPLOAD_ENABLED = NON_PREF_PREFIX + "healthreport.uploadEnabled";
     public static final String PREFS_SYNC = NON_PREF_PREFIX + "sync";
 
+    // Has this activity recently started another Gecko activity?
+    private boolean mGeckoActivityOpened;
+
     private static boolean sIsCharEncodingEnabled;
     private boolean mInitialized;
     private PrefsHelper.PrefHandler mPrefsRequest;
@@ -153,6 +157,7 @@ public class GeckoPreferences
     private static final String PREFS_CLEAR_PRIVATE_DATA_EXIT = NON_PREF_PREFIX + "history.clear_on_exit";
     private static final String PREFS_SCREEN_ADVANCED = NON_PREF_PREFIX + "advanced_screen";
     public static final String PREFS_HOMEPAGE = NON_PREF_PREFIX + "homepage";
+    public static final String PREFS_HOMEPAGE_FOR_EVERY_NEW_TAB = NON_PREF_PREFIX + "newtab.load_homepage";
     public static final String PREFS_HOMEPAGE_PARTNER_COPY = GeckoPreferences.PREFS_HOMEPAGE + ".partner";
     public static final String PREFS_HISTORY_SAVED_SEARCH = NON_PREF_PREFIX + "search.search_history.enabled";
     private static final String PREFS_FAQ_LINK = NON_PREF_PREFIX + "faq.link";
@@ -164,10 +169,14 @@ public class GeckoPreferences
     public static final String PREFS_READ_PARTNER_CUSTOMIZATIONS_PROVIDER = NON_PREF_PREFIX + "distribution.read_partner_customizations_provider";
     public static final String PREFS_READ_PARTNER_BOOKMARKS_PROVIDER = NON_PREF_PREFIX + "distribution.read_partner_bookmarks_provider";
     public static final String PREFS_CUSTOM_TABS = NON_PREF_PREFIX + "customtabs";
-    public static final String PREFS_ACTIVITY_STREAM = NON_PREF_PREFIX + "activitystream";
+    public static final String PREFS_ACTIVITY_STREAM = NON_PREF_PREFIX + "experiments.activitystream";
     public static final String PREFS_CATEGORY_EXPERIMENTAL_FEATURES = NON_PREF_PREFIX + "category_experimental";
     public static final String PREFS_COMPACT_TABS = NON_PREF_PREFIX + "compact_tabs";
     public static final String PREFS_SHOW_QUIT_MENU = NON_PREF_PREFIX + "distribution.show_quit_menu";
+    public static final String PREFS_SEARCH_SUGGESTIONS_ENABLED = "browser.search.suggest.enabled";
+    public static final String PREFS_DEFAULT_BROWSER = NON_PREF_PREFIX + "default_browser.link";
+    public static final String PREFS_SYSTEM_FONT_SIZE = NON_PREF_PREFIX + "font.size.use_system_font_size";
+    public static final String PREFS_SET_AS_HOMEPAGE = NON_PREF_PREFIX + "distribution.set_as_homepage";
 
     private static final String ACTION_STUMBLER_UPLOAD_PREF = "STUMBLER_PREF";
 
@@ -178,6 +187,7 @@ public class GeckoPreferences
     public static final String PREFS_RESTORE_SESSION = NON_PREF_PREFIX + "restoreSession3";
     public static final String PREFS_RESTORE_SESSION_FROM_CRASH = "browser.sessionstore.resume_from_crash";
     public static final String PREFS_RESTORE_SESSION_MAX_CRASH_RESUMES = "browser.sessionstore.max_resumed_crashes";
+    public static final String PREFS_RESTORE_SESSION_ONCE = "browser.sessionstore.resume_session_once";
     public static final String PREFS_TAB_QUEUE = NON_PREF_PREFIX + "tab_queue";
     public static final String PREFS_TAB_QUEUE_LAST_SITE = NON_PREF_PREFIX + "last_site";
     public static final String PREFS_TAB_QUEUE_LAST_TIME = NON_PREF_PREFIX + "last_time";
@@ -233,6 +243,14 @@ public class GeckoPreferences
         }
     }
 
+    private void updateHomeAsUpIndicator() {
+        final ActionBar actionBar = getSupportActionBar();
+        if (actionBar == null) {
+            return;
+        }
+        actionBar.setHomeAsUpIndicator(android.support.v7.appcompat.R.drawable.abc_ic_ab_back_mtrl_am_alpha);
+    }
+
     /**
      * We only call this method for pre-HC versions of Android.
      */
@@ -263,10 +281,8 @@ public class GeckoPreferences
         //  If activity is not recreated, also update locale to current activity configuration
         BrowserLocaleManager.getInstance().updateConfiguration(GeckoPreferences.this, newLocale);
         ViewUtil.setLayoutDirection(getWindow().getDecorView(), newLocale);
-
         //  Force update navigate up icon by current layout direction
-        final ActionBar actionBar = getSupportActionBar();
-        actionBar.setHomeAsUpIndicator(android.support.v7.appcompat.R.drawable.abc_ic_ab_back_mtrl_am_alpha);
+        updateHomeAsUpIndicator();
 
         this.lastLocale = newLocale;
 
@@ -326,6 +342,11 @@ public class GeckoPreferences
     }
 
     private void checkLocale() {
+        if (AppConstants.Versions.feature21Plus && AppConstants.Versions.preMarshmallow) {
+            //  Force update navigate up icon by current layout direction
+            updateHomeAsUpIndicator();
+        }
+
         final Locale currentLocale = Locale.getDefault();
         Log.v(LOGTAG, "Checking locale: " + currentLocale + " vs " + lastLocale);
         if (currentLocale.equals(lastLocale)) {
@@ -546,6 +567,7 @@ public class GeckoPreferences
 
         if (getApplication() instanceof GeckoApplication) {
             ((GeckoApplication) getApplication()).onActivityResume(this);
+            mGeckoActivityOpened = false;
         }
 
         // Watch prefs, otherwise we don't reliably get told when they change.
@@ -569,6 +591,12 @@ public class GeckoPreferences
     }
 
     @Override
+    public void startActivityForResult(Intent intent, int request) {
+        mGeckoActivityOpened = IntentUtils.checkIfGeckoActivity(intent);
+        super.startActivityForResult(intent, request);
+    }
+
+    @Override
     public void startWithFragment(String fragmentName, Bundle args,
             Fragment resultTo, int resultRequestCode, int titleRes, int shortTitleRes) {
         Log.v(LOGTAG, "Starting with fragment: " + fragmentName + ", title " + titleRes);
@@ -578,6 +606,7 @@ public class GeckoPreferences
         if (resultTo == null) {
             startActivityForResultChoosingTransition(intent, REQUEST_CODE_PREF_SCREEN);
         } else {
+            mGeckoActivityOpened = IntentUtils.checkIfGeckoActivity(intent);
             resultTo.startActivityForResult(intent, resultRequestCode);
             if (NO_TRANSITIONS) {
                 overridePendingTransition(0, 0);
@@ -688,8 +717,8 @@ public class GeckoPreferences
                     i--;
                     continue;
                 } else if (PREFS_CATEGORY_EXPERIMENTAL_FEATURES.equals(key)
-                        && !AppConstants.MOZ_ANDROID_ACTIVITY_STREAM
-                        && !AppConstants.MOZ_ANDROID_CUSTOM_TABS) {
+                        && !AppConstants.MOZ_ANDROID_CUSTOM_TABS
+                        && !ActivityStream.isUserSwitchable(this)) {
                     preferences.removePreference(pref);
                     i--;
                     continue;
@@ -889,7 +918,8 @@ public class GeckoPreferences
                     preferences.removePreference(pref);
                     i--;
                     continue;
-                } else if (PREFS_ACTIVITY_STREAM.equals(key) && !ActivityStream.isUserEligible(this)) {
+                } else if (PREFS_ACTIVITY_STREAM.equals(key)
+                        && !ActivityStream.isUserSwitchable(this)) {
                     preferences.removePreference(pref);
                     i--;
                     continue;
@@ -948,10 +978,10 @@ public class GeckoPreferences
      * Restore default search engines in Gecko and retrigger a search engine refresh.
      */
     protected void restoreDefaultSearchEngines() {
-        GeckoAppShell.notifyObservers("SearchEngines:RestoreDefaults", null);
+        EventDispatcher.getInstance().dispatch("SearchEngines:RestoreDefaults", null);
 
         // Send message to Gecko to get engines. SearchPreferenceCategory listens for the response.
-        GeckoAppShell.notifyObservers("SearchEngines:GetVisible", null);
+        EventDispatcher.getInstance().dispatch("SearchEngines:GetVisible", null);
     }
 
     @Override
@@ -1215,16 +1245,13 @@ public class GeckoPreferences
             }
         } else if (PREFS_NOTIFICATIONS_CONTENT.equals(prefName)) {
             FeedService.setup(this);
-        } else if (PREFS_ACTIVITY_STREAM.equals(prefName)) {
-            ThreadUtils.postDelayedToUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    GeckoAppShell.scheduleRestart();
-                }
-            }, 1000);
         } else if (HANDLERS.containsKey(prefName)) {
             PrefHandler handler = HANDLERS.get(prefName);
             handler.onChange(this, preference, newValue);
+        } else if (PREFS_SEARCH_SUGGESTIONS_ENABLED.equals(prefName)) {
+            // Tell Gecko to transmit the current search engine data again, so
+            // BrowserSearch is notified immediately about the new enabled state.
+            EventDispatcher.getInstance().dispatch("SearchEngines:GetVisible", null);
         }
 
         // Send Gecko-side pref changes to Gecko
@@ -1240,9 +1267,6 @@ public class GeckoPreferences
         } else if (preference instanceof LinkPreference) {
             setResult(RESULT_CODE_EXIT_SETTINGS);
             finishChoosingTransition();
-        } else if (preference instanceof FontSizePreference) {
-            final FontSizePreference fontSizePref = (FontSizePreference) preference;
-            fontSizePref.setSummary(fontSizePref.getSavedFontSizeName());
         }
 
         return true;
@@ -1468,16 +1492,6 @@ public class GeckoPreferences
                         ((ListPreference) pref).setSummary(selectedEntry);
                     }
                 });
-            } else if (pref instanceof FontSizePreference) {
-                final FontSizePreference fontSizePref = (FontSizePreference) pref;
-                fontSizePref.setSavedFontSize(value);
-                final String fontSizeName = fontSizePref.getSavedFontSizeName();
-                ThreadUtils.postToUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        fontSizePref.setSummary(fontSizeName); // Ex: "Small".
-                    }
-                });
             }
         }
 
@@ -1509,7 +1523,7 @@ public class GeckoPreferences
 
     @Override
     public boolean isGeckoActivityOpened() {
-        return false;
+        return mGeckoActivityOpened;
     }
 
     /**

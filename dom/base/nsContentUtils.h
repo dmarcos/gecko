@@ -22,6 +22,7 @@
 #include "js/RootingAPI.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/GuardObjects.h"
+#include "mozilla/TaskCategory.h"
 #include "mozilla/TimeStamp.h"
 #include "nsContentListDeclarations.h"
 #include "nsMathUtils.h"
@@ -66,12 +67,14 @@ class nsIDOMKeyEvent;
 class nsIDOMNode;
 class nsIDragSession;
 class nsIEditor;
+class nsIEventTarget;
 class nsIFragmentContentSink;
 class nsIFrame;
 class nsIImageLoadingContent;
 class nsIInterfaceRequestor;
 class nsIIOService;
 class nsILineBreaker;
+class nsILoadInfo;
 class nsILoadGroup;
 class nsIMessageBroadcaster;
 class nsNameSpaceManager;
@@ -115,6 +118,7 @@ template<class K, class V> class nsRefPtrHashtable;
 template<class T> class nsReadingIterator;
 
 namespace mozilla {
+class Dispatcher;
 class ErrorResult;
 class EventListenerManager;
 
@@ -263,7 +267,24 @@ public:
                                   JS::MutableHandle<JS::PropertyDescriptor> aDesc);
 
   // Check whether we should avoid leaking distinguishing information to JS/CSS.
+  static bool ShouldResistFingerprinting();
   static bool ShouldResistFingerprinting(nsIDocShell* aDocShell);
+
+  // A helper function to calculate the rounded window size for fingerprinting
+  // resistance. The rounded size is based on the chrome UI size and available
+  // screen size. If the inputWidth/Height is greater than the available content
+  // size, this will report the available content size. Otherwise, it will
+  // round the size to the nearest upper 200x100.
+  static void CalcRoundedWindowSizeForResistingFingerprinting(int32_t  aChromeWidth,
+                                                              int32_t  aChromeHeight,
+                                                              int32_t  aScreenWidth,
+                                                              int32_t  aScreenHeight,
+                                                              int32_t  aInputWidth,
+                                                              int32_t  aInputHeight,
+                                                              bool     aSetOuterWidth,
+                                                              bool     aSetOuterHeight,
+                                                              int32_t* aOutputWidth,
+                                                              int32_t* aOutputHeight);
 
   /**
    * Returns the parent node of aChild crossing document boundaries.
@@ -503,6 +524,12 @@ public:
   // aWindow can be either outer or inner window.
   static bool CanCallerAccess(nsPIDOMWindowInner* aWindow);
 
+  // Check if the principal is chrome or an addon with the permission.
+  static bool PrincipalHasPermission(nsIPrincipal* aPrincipal, const nsAString& aPerm);
+
+  // Check if the JS caller is chrome or an addon with the permission.
+  static bool CallerHasPermission(JSContext* aCx, const nsAString& aPerm);
+
   /**
    * GetDocumentFromCaller gets its document by looking at the last called
    * function and finding the document that the function itself relates to.
@@ -541,6 +568,10 @@ public:
   {
     return sSecurityManager;
   }
+
+  // Returns the subject principal from the JSContext. May only be called
+  // from the main thread and assumes an existing compartment.
+  static nsIPrincipal* SubjectPrincipal(JSContext* aCx);
 
   // Returns the subject principal. Guaranteed to return non-null. May only
   // be called when nsContentUtils is initialized.
@@ -786,11 +817,13 @@ public:
   static bool IsDraggableLink(const nsIContent* aContent);
 
   /**
-   * Convenience method to create a new nodeinfo that differs only by name
-   * from aNodeInfo.
+   * Convenience method to create a new nodeinfo that differs only by prefix and
+   * name from aNodeInfo. The new nodeinfo's name is set to aName, and prefix is
+   * set to null.
    */
-  static nsresult NameChanged(mozilla::dom::NodeInfo* aNodeInfo, nsIAtom* aName,
-                              mozilla::dom::NodeInfo** aResult);
+  static nsresult QNameChanged(mozilla::dom::NodeInfo* aNodeInfo,
+                               nsIAtom* aName,
+                               mozilla::dom::NodeInfo** aResult);
 
   /**
    * Returns the appropriate event argument names for the specified
@@ -813,6 +846,16 @@ public:
    **/
   static mozilla::OriginAttributes
   GetOriginAttributes(nsILoadGroup* aLoadGroup);
+
+  /**
+   * Returns true if this document is in a Private Browsing window.
+   */
+  static bool IsInPrivateBrowsing(nsIDocument* aDoc);
+
+  /**
+   * Returns true if this loadGroup uses Private Browsing.
+   */
+  static bool IsInPrivateBrowsing(nsILoadGroup* aLoadGroup);
 
   /**
    * If aNode is not an element, return true exactly when aContent's binding
@@ -880,6 +923,37 @@ public:
                                               uint32_t aColumnNumber = 0,
                                               MissingErrorLocationMode aLocationMode
                                                 = eUSE_CALLING_LOCATION);
+
+  /**
+   * Report a non-localized error message to the error console base on the
+   * innerWindowID.
+   *   @param aErrorText the error message
+   *   @param aErrorFlags See nsIScriptError.
+   *   @param aCategory Name of module reporting error.
+   *   @param [aInnerWindowID] Inner window ID for document which triggered the
+   *          message.
+   *   @param [aURI=nullptr] (Optional) URI of resource containing error.
+   *   @param [aSourceLine=EmptyString()] (Optional) The text of the line that
+              contains the error (may be empty).
+   *   @param [aLineNumber=0] (Optional) Line number within resource
+              containing error.
+   *   @param [aColumnNumber=0] (Optional) Column number within resource
+              containing error.
+              If aURI is null, then aDocument->GetDocumentURI() is used.
+   *   @param [aLocationMode] (Optional) Specifies the behavior if
+              error location information is omitted.
+   */
+  static nsresult ReportToConsoleByWindowID(const nsAString& aErrorText,
+                                            uint32_t aErrorFlags,
+                                            const nsACString& aCategory,
+                                            uint64_t aInnerWindowID,
+                                            nsIURI* aURI = nullptr,
+                                            const nsAFlatString& aSourceLine
+                                              = EmptyString(),
+                                            uint32_t aLineNumber = 0,
+                                            uint32_t aColumnNumber = 0,
+                                            MissingErrorLocationMode aLocationMode
+                                              = eUSE_CALLING_LOCATION);
 
   /**
    * Report a localized error message to the error console.
@@ -1203,7 +1277,7 @@ public:
                                       bool *aDefaultAction = nullptr);
 
   /**
-   * Helper function for dispatching a "DOMServiceWorkerFocusClient" event to
+   * Helper function for dispatching a "DOMWindowFocus" event to
    * the chrome event handler of the given DOM Window. This has the effect
    * of focusing the corresponding tab and bringing the browser window
    * to the foreground.
@@ -1525,12 +1599,12 @@ public:
   static bool IsSystemPrincipal(nsIPrincipal* aPrincipal);
 
   /**
-   * Returns true if aPrincipal is an nsExpandedPrincipal.
+   * Returns true if aPrincipal is an ExpandedPrincipal.
    */
   static bool IsExpandedPrincipal(nsIPrincipal* aPrincipal);
 
   /**
-   * Returns true if aPrincipal is the system or an nsExpandedPrincipal.
+   * Returns true if aPrincipal is the system or an ExpandedPrincipal.
    */
   static bool IsSystemOrExpandedPrincipal(nsIPrincipal* aPrincipal)
   {
@@ -2000,7 +2074,7 @@ public:
    * a mouse-click or key press), unless this check has been disabled by
    * setting the pref "full-screen-api.allow-trusted-requests-only" to false.
    */
-  static bool IsRequestFullScreenAllowed();
+  static bool IsRequestFullScreenAllowed(mozilla::dom::CallerType aCallerType);
 
   /**
    * Returns true if calling execCommand with 'cut' or 'copy' arguments
@@ -2013,10 +2087,10 @@ public:
 
   /**
    * Returns true if calling execCommand with 'cut' or 'copy' arguments is
-   * allowed in the current context. These are only allowed if the user initiated
-   * them (like with a mouse-click or key press).
+   * allowed for the given subject principal. These are only allowed if the user
+   * initiated them (like with a mouse-click or key press).
    */
-  static bool IsCutCopyAllowed();
+  static bool IsCutCopyAllowed(nsIPrincipal* aSubjectPrincipal);
 
   /*
    * Returns true if the performance timing APIs are enabled.
@@ -2056,23 +2130,6 @@ public:
   static bool IsFrameTimingEnabled();
 
   /*
-   * Returns true if URL setters should percent encode the Hash/Ref segment
-   * and getters should return the percent decoded value of the segment
-   */
-  static bool EncodeDecodeURLHash()
-  {
-    return sEncodeDecodeURLHash;
-  }
-
-  /*
-   * Returns true if URL getters should percent decode the value of the segment
-   */
-  static bool GettersDecodeURLHash()
-  {
-    return sGettersDecodeURLHash && sEncodeDecodeURLHash;
-  }
-
-  /*
    * Returns true if the browser should attempt to prevent the given caller type
    * from collecting distinctive information about the browser that could
    * be used to "fingerprint" and track the user across websites.
@@ -2089,6 +2146,30 @@ public:
   static bool UseActivityCursor()
   {
     return sUseActivityCursor;
+  }
+
+  /**
+   * Returns true if the DOM Animations API should be enabled.
+   */
+  static bool AnimationsAPICoreEnabled()
+  {
+    return sAnimationsAPICoreEnabled;
+  }
+
+  /*
+   * Returns true if the DOM Animations Element.animate() API should be enabled.
+   */
+  static bool AnimationsAPIElementAnimateEnabled()
+  {
+    return sAnimationsAPIElementAnimateEnabled;
+  }
+
+  /**
+   * Returns true if the getBoxQuads API should be enabled.
+   */
+  static bool GetBoxQuadsEnabled()
+  {
+    return sGetBoxQuadsEnabled;
   }
 
   /**
@@ -2364,8 +2445,8 @@ public:
    */
   static void GetSelectionInTextControl(mozilla::dom::Selection* aSelection,
                                         Element* aRoot,
-                                        int32_t& aOutStartOffset,
-                                        int32_t& aOutEndOffset);
+                                        uint32_t& aOutStartOffset,
+                                        uint32_t& aOutEndOffset);
 
   /**
    * Takes a frame for anonymous content within a text control (<input> or
@@ -2444,9 +2525,14 @@ public:
   static bool IsForbiddenResponseHeader(const nsACString& aHeader);
 
   /**
-   * Returns the inner window ID for the window associated with a request,
+   * Returns the inner window ID for the window associated with a request.
    */
   static uint64_t GetInnerWindowID(nsIRequest* aRequest);
+
+  /**
+   * Returns the inner window ID for the window associated with a load group.
+   */
+  static uint64_t GetInnerWindowID(nsILoadGroup* aLoadGroup);
 
   /**
    * If the hostname for aURI is an IPv6 it encloses it in brackets,
@@ -2743,6 +2829,40 @@ public:
                                         nsIPrincipal** aLoadingPrincipal,
                                         nsContentPolicyType& aContentPolicyType);
 
+  static nsresult
+  CreateJSValueFromSequenceOfObject(JSContext* aCx,
+                                    const mozilla::dom::Sequence<JSObject*>& aTransfer,
+                                    JS::MutableHandle<JS::Value> aValue);
+
+  static bool
+  IsWebComponentsEnabled() { return sIsWebComponentsEnabled; }
+
+  /**
+   * Walks up the tree from aElement until it finds an element that is
+   * not native anonymous content.  aElement must be NAC itself.
+   */
+  static Element* GetClosestNonNativeAnonymousAncestor(Element* aElement);
+
+  /**
+   * Returns one of the nsIObjectLoadingContent::TYPE_ values describing the
+   * content type which will be used for the given MIME type when loaded within
+   * an nsObjectLoadingContent.
+   *
+   * NOTE: This method doesn't take capabilities into account. The caller must
+   * take that into account.
+   *
+   * @param aMIMEType  The MIME type of the document being loaded.
+   * @param aContent The nsIContent object which is performing the load. May be
+   *                 nullptr in which case the docshell's plugin permissions
+   *                 will not be checked.
+   */
+  static uint32_t
+  HtmlObjectContentTypeForMIMEType(const nsCString& aMIMEType,
+                                   nsIContent* aContent);
+
+  static already_AddRefed<nsIEventTarget>
+  GetEventTargetByLoadInfo(nsILoadInfo* aLoadInfo, mozilla::TaskCategory aCategory);
+
 private:
   static bool InitializeEventTable();
 
@@ -2769,7 +2889,8 @@ private:
 
   static void DropFragmentParsers();
 
-  static bool MatchClassNames(nsIContent* aContent, int32_t aNamespaceID,
+  static bool MatchClassNames(mozilla::dom::Element* aElement,
+                              int32_t aNamespaceID,
                               nsIAtom* aAtom, void* aData);
   static void DestroyClassNameArray(void* aData);
   static void* AllocClassMatchingInfo(nsINode* aRootNode,
@@ -2848,13 +2969,18 @@ private:
   static bool sIsUserTimingLoggingEnabled;
   static bool sIsFrameTimingPrefEnabled;
   static bool sIsExperimentalAutocompleteEnabled;
-  static bool sEncodeDecodeURLHash;
-  static bool sGettersDecodeURLHash;
+  static bool sIsWebComponentsEnabled;
   static bool sPrivacyResistFingerprinting;
   static bool sSendPerformanceTimingNotifications;
   static bool sUseActivityCursor;
+  static bool sAnimationsAPICoreEnabled;
+  static bool sAnimationsAPIElementAnimateEnabled;
+  static bool sGetBoxQuadsEnabled;
   static uint32_t sCookiesLifetimePolicy;
   static uint32_t sCookiesBehavior;
+
+  static int32_t sPrivacyMaxInnerWidth;
+  static int32_t sPrivacyMaxInnerHeight;
 
   static nsHtml5StringParser* sHTMLFragmentParser;
   static nsIParser* sXMLFragmentParser;

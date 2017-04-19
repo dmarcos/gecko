@@ -1,6 +1,20 @@
 # This file contains a definition of the scalar probes that are recorded in Telemetry.
 # They are submitted with the "main" pings and can be inspected in about:telemetry.
 
+# The following section contains the aushelper system add-on scalars.
+aushelper:
+  websense_reg_version:
+    bug_numbers:
+      - 1305847
+    description: The Websense version from the Windows registry.
+    expires: "60"
+    kind: string
+    notification_emails:
+      - application-update-telemetry-alerts@mozilla.com
+    release_channel_collection: opt-out
+    record_in_processes:
+      - 'main'
+
 # The following section contains the browser engagement scalars.
 browser.engagement:
   max_concurrent_tab_count:
@@ -10,7 +24,7 @@ browser.engagement:
       The count of maximum number of tabs open during a subsession,
       across all windows, including tabs in private windows and restored
       at startup.
-    expires: "55"
+    expires: never
     kind: uint
     notification_emails:
       - rweiss@mozilla.com
@@ -25,7 +39,7 @@ browser.engagement:
       The count of tab open events per subsession, across all windows, after the
       session has been restored. This includes tab open events from private windows
       and from manual session restorations (i.e. after crashes and from about:home).
-    expires: "55"
+    expires: never
     kind: uint
     notification_emails:
       - rweiss@mozilla.com
@@ -39,7 +53,7 @@ browser.engagement:
     description: >
       The count of maximum number of browser windows open during a subsession. This
       includes private windows and the ones opened when starting the browser.
-    expires: "55"
+    expires: never
     kind: uint
     notification_emails:
       - rweiss@mozilla.com
@@ -54,7 +68,7 @@ browser.engagement:
       The count of browser window open events per subsession, after the session
       has been restored. The count includes private windows and the ones from manual
       session restorations (i.e. after crashes and from about:home).
-    expires: "55"
+    expires: never
     kind: uint
     notification_emails:
       - rweiss@mozilla.com
@@ -69,7 +83,7 @@ browser.engagement:
       The count of the total non-unique http(s) URIs visited in a subsession, including
       page reloads, after the session has been restored. This does not include background
       page requests and URIs from embedded pages or private browsing.
-    expires: "55"
+    expires: never
     kind: uint
     notification_emails:
       - rweiss@mozilla.com
@@ -85,7 +99,7 @@ browser.engagement:
       a specific protocol, including page reloads and about:* pages (other than initial
       pages such as about:blank, ...), after the session has been restored. This does
       not include background page requests and URIs from embedded pages or private browsing.
-    expires: "55"
+    expires: never
     kind: uint
     notification_emails:
       - bcolloran@mozilla.com
@@ -102,7 +116,7 @@ browser.engagement:
       (i.e. test.example.com and other.example.com are only counted once).
       This does not include background page requests and domains from embedded pages
       or private browsing. The count is limited to 100 unique domains.
-    expires: "55"
+    expires: never
     kind: uint
     notification_emails:
       - rweiss@mozilla.com
@@ -118,7 +132,7 @@ browser.engagement.navigation:
     description: >
       The count URI loads triggered in a subsession from the urlbar (awesomebar),
       broken down by the originating action.
-    expires: "55"
+    expires: never
     kind: uint
     keyed: true
     notification_emails:
@@ -133,7 +147,7 @@ browser.engagement.navigation:
     description: >
       The count URI loads triggered in a subsession from the searchbar,
       broken down by the originating action.
-    expires: "55"
+    expires: never
     kind: uint
     keyed: true
     notification_emails:
@@ -148,7 +162,7 @@ browser.engagement.navigation:
     description: >
       The count URI loads triggered in a subsession from about:home,
       broken down by the originating action.
-    expires: "55"
+    expires: never
     kind: uint
     keyed: true
     notification_emails:
@@ -163,7 +177,7 @@ browser.engagement.navigation:
     description: >
       The count URI loads triggered in a subsession from about:newtab,
       broken down by the originating action.
-    expires: "55"
+    expires: never
     kind: uint
     keyed: true
     notification_emails:
@@ -178,7 +192,7 @@ browser.engagement.navigation:
     description: >
       The count URI loads triggered in a subsession from the contextmenu,
       broken down by the originating action.
-    expires: "55"
+    expires: never
     kind: uint
     keyed: true
     notification_emails:
@@ -186,6 +200,58 @@ browser.engagement.navigation:
     release_channel_collection: opt-out
     record_in_processes:
       - 'main'
+
+# This section is for probes used to measure use of the Webextensions storage.sync API.
+storage.sync.api.usage:
+  extensions_using:
+    bug_numbers:
+      - 1328974
+    description: >
+      The count of webextensions that have data stored in the chrome.storage.sync API.
+      This includes extensions that have not used the storage.sync API this session.
+      This includes items that were not stored this session.
+      This scalar is collected after every sync.
+    expires: "58"
+    kind: uint
+    keyed: false
+    notification_emails:
+      - eglassercamp@mozilla.com
+    release_channel_collection: opt-out
+    record_in_processes:
+      - main
+  items_stored:
+    bug_numbers:
+      - 1328974
+    description: >
+      The count of items in storage.sync storage, broken down by extension ID.
+      This includes extensions that have not used the storage.sync API this session.
+      This includes items that were not stored this session.
+      This scalar is collected after every sync.
+    expires: "58"
+    kind: uint
+    keyed: true
+    notification_emails:
+      - eglassercamp@mozilla.com
+    release_channel_collection: opt-out
+    record_in_processes:
+      - main
+  storage_consumed:
+    bug_numbers:
+      - 1328974
+    description: >
+      The count of bytes used in storage.sync, broken down by extension ID.
+      This includes extensions that have not used the storage.sync API this session.
+      This includes items that were not stored this session.
+      This scalar is collected after every sync.
+    expires: "58"
+    kind: uint
+    keyed: true
+    notification_emails:
+      - eglassercamp@mozilla.com
+    release_channel_collection: opt-out
+    record_in_processes:
+      - main
+
 
 # The following section is for probes testing the Telemetry system. They will not be
 # submitted in pings and are only used for testing.
@@ -453,3 +519,20 @@ webrtc.nicer:
     record_in_processes:
       - 'main'
       - 'content'
+
+# The following section contains content process base counters.
+dom.contentprocess:
+  troubled_due_to_memory:
+    bug_numbers:
+      - 1305091
+    description: >
+      The number of content processes that were marked as troubled because
+      it was running low on virtual memory.
+    expires: "58"
+    kind: uint
+    notification_emails:
+      - benjamin@smedbergs.us
+      - mconley@mozilla.com
+    release_channel_collection: opt-in
+    record_in_processes:
+      - 'main'

@@ -16,6 +16,7 @@ apt_packages+=('curl')
 apt_packages+=('git')
 apt_packages+=('gyp')
 apt_packages+=('libssl-dev')
+apt_packages+=('libxml2-utils')
 apt_packages+=('ninja-build')
 apt_packages+=('pkg-config')
 apt_packages+=('zlib1g-dev')
@@ -36,6 +37,7 @@ git -C clang-tmp/clang checkout HEAD scripts/update.py
 clang-tmp/clang/scripts/update.py
 rm -fr clang-tmp
 
+# Generate locales.
 locale-gen en_US.UTF-8
 dpkg-reconfigure locales
 

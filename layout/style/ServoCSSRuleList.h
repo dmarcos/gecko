@@ -11,19 +11,24 @@
 
 #include "mozilla/ServoBindingTypes.h"
 #include "mozilla/dom/CSSRuleList.h"
+#include "nsDataHashtable.h"
 
 namespace mozilla {
 
+class ServoStyleRule;
 class ServoStyleSheet;
 namespace css {
+class GroupRule;
 class Rule;
 } // namespace css
 
 class ServoCSSRuleList final : public dom::CSSRuleList
 {
 public:
-  ServoCSSRuleList(ServoStyleSheet* aStyleSheet,
-                   already_AddRefed<ServoCssRules> aRawRules);
+  explicit ServoCSSRuleList(already_AddRefed<ServoCssRules> aRawRules);
+  css::GroupRule* GetParentRule() const { return mParentRule; }
+  void SetParentRule(css::GroupRule* aParentRule);
+  void SetStyleSheet(StyleSheet* aSheet);
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ServoCSSRuleList, dom::CSSRuleList)
@@ -38,6 +43,12 @@ public:
   css::Rule* GetRule(uint32_t aIndex);
   nsresult InsertRule(const nsAString& aRule, uint32_t aIndex);
   nsresult DeleteRule(uint32_t aIndex);
+
+  uint16_t GetRuleType(uint32_t aIndex) const;
+
+  typedef nsDataHashtable<nsPtrHashKey<const RawServoStyleRule>,
+                          ServoStyleRule*> StyleRuleHashtable;
+  void FillStyleRuleHashtable(StyleRuleHashtable& aTable);
 
 private:
   virtual ~ServoCSSRuleList();
@@ -57,8 +68,12 @@ private:
   template<typename Func>
   void EnumerateInstantiatedRules(Func aCallback);
 
+  void DropAllRules();
+
   // mStyleSheet may be nullptr when it drops the reference to us.
-  ServoStyleSheet* mStyleSheet;
+  ServoStyleSheet* mStyleSheet = nullptr;
+  // mParentRule is nullptr if it isn't a nested rule list.
+  css::GroupRule* mParentRule = nullptr;
   RefPtr<ServoCssRules> mRawRules;
   // Array stores either a number indicating rule type, or a pointer to
   // css::Rule. If the value is less than kMaxRuleType, the given rule

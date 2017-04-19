@@ -23,8 +23,7 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cr = Components.results;
 const Cu = Components.utils;
-// True only if this is the version of pdf.js that is included with firefox.
-const MOZ_CENTRAL = JSON.parse("true");
+
 const PDFJS_EVENT_ID = "pdf.js.message";
 const PDF_CONTENT_TYPE = "application/pdf";
 const PREF_PREFIX = "pdfjs";
@@ -34,7 +33,9 @@ const MAX_STRING_PREF_LENGTH = 128;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+  "resource://gre/modules/NetUtil.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "NetworkManager",
   "resource://pdf.js/PdfJsNetwork.jsm");
@@ -94,7 +95,7 @@ function getIntPref(pref, def) {
 
 function getStringPref(pref, def) {
   try {
-    return Services.prefs.getComplexValue(pref, Ci.nsISupportsString).data;
+    return Services.prefs.getStringPref(pref);
   } catch (ex) {
     return def;
   }
@@ -313,7 +314,7 @@ class ChromeActions {
   }
 
   getLocale() {
-    return getStringPref("general.useragent.locale", "en-US");
+    return Services.locale.getRequestedLocale() || "en-US";
   }
 
   getStrings(data) {

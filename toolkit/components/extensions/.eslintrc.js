@@ -1,7 +1,11 @@
 "use strict";
 
-module.exports = { // eslint-disable-line no-undef
+module.exports = {
   "extends": "../../.eslintrc.js",
+
+  "env": {
+    "browser": false,
+  },
 
   "globals": {
     "Cc": true,
@@ -13,8 +17,11 @@ module.exports = { // eslint-disable-line no-undef
     "TextDecoder": false,
     "TextEncoder": false,
     // Specific to WebExtensions:
+    "AppConstants": true,
     "Extension": true,
+    "ExtensionAPI": true,
     "ExtensionManagement": true,
+    "ExtensionUtils": true,
     "extensions": true,
     "getContainerForCookieStoreId": true,
     "getCookieStoreIdForContainer": true,
@@ -30,8 +37,8 @@ module.exports = { // eslint-disable-line no-undef
     "runSafeSync": true,
     "runSafeSyncWithoutClone": true,
     "Services": true,
-    "TabManager": true,
-    "WindowListManager": true,
+    "SingletonEventManager": true,
+    "tabTracker": false,
     "XPCOMUtils": true,
   },
 
@@ -163,6 +170,9 @@ module.exports = { // eslint-disable-line no-undef
 
     // No single if block inside an else block
     "no-lonely-if": "warn",
+
+    // No mixing different operators without parens
+    "no-mixed-operators": ["error", {"groups": [["&&", "||"], ["==", "!=", "===", "!==", ">", ">=", "<", "<="], ["in", "instanceof"]]}],
 
     // No mixing spaces and tabs in indent
     "no-mixed-spaces-and-tabs": ["error", "smart-tabs"],

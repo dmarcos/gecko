@@ -138,7 +138,7 @@ public:
     return NS_OK;
   }
 protected:
-  nsWeakFrame       mFrame;
+  WeakFrame         mFrame;
   nsCOMPtr<nsIAtom> mAttr;
 };
 
@@ -174,6 +174,7 @@ nsMenuFrame::nsMenuFrame(nsStyleContext* aContext):
     mIsMenu(false),
     mChecked(false),
     mIgnoreAccelTextChange(false),
+    mReflowCallbackPosted(false),
     mType(eMenuType_Normal),
     mBlinkState(0)
 {
@@ -196,33 +197,20 @@ nsMenuFrame::GetMenuParent() const
   return nullptr;
 }
 
-class nsASyncMenuInitialization final : public nsIReflowCallback
+bool
+nsMenuFrame::ReflowFinished()
 {
-public:
-  explicit nsASyncMenuInitialization(nsIFrame* aFrame)
-    : mWeakFrame(aFrame)
-  {
-  }
+  mReflowCallbackPosted = false;
 
-  virtual bool ReflowFinished() override
-  {
-    bool shouldFlush = false;
-    nsMenuFrame* menu = do_QueryFrame(mWeakFrame.GetFrame());
-    if (menu) {
-      menu->UpdateMenuType();
-      shouldFlush = true;
-    }
-    delete this;
-    return shouldFlush;
-  }
+  UpdateMenuType();
+  return true;
+}
 
-  virtual void ReflowCallbackCanceled() override
-  {
-    delete this;
-  }
-
-  nsWeakFrame mWeakFrame;
-};
+void
+nsMenuFrame::ReflowCallbackCanceled()
+{
+  mReflowCallbackPosted = false;
+}
 
 void
 nsMenuFrame::Init(nsIContent*       aContent,
@@ -235,8 +223,10 @@ nsMenuFrame::Init(nsIContent*       aContent,
   mTimerMediator = new nsMenuTimerMediator(this);
 
   BuildAcceleratorText(false);
-  nsIReflowCallback* cb = new nsASyncMenuInitialization(this);
-  PresContext()->PresShell()->PostReflowCallback(cb);
+  if (!mReflowCallbackPosted) {
+    mReflowCallbackPosted = true;
+    PresContext()->PresShell()->PostReflowCallback(this);
+  }
 }
 
 const nsFrameList&
@@ -321,6 +311,11 @@ nsMenuFrame::SetInitialChildList(ChildListID     aListID,
 void
 nsMenuFrame::DestroyFrom(nsIFrame* aDestructRoot)
 {
+  if (mReflowCallbackPosted) {
+    PresContext()->PresShell()->CancelReflowCallback(this);
+    mReflowCallbackPosted = false;
+  }
+
   // Kill our timer if one is active. This is not strictly necessary as
   // the pointer to this frame will be cleared from the mediator, but
   // this is done for added safety.
@@ -384,7 +379,7 @@ nsMenuFrame::HandleEvent(nsPresContext* aPresContext,
     return NS_OK;
   }
 
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   if (*aEventStatus == nsEventStatus_eIgnore)
     *aEventStatus = nsEventStatus_eConsumeDoDefault;
 
@@ -530,6 +525,8 @@ nsMenuFrame::HandleEvent(nsPresContext* aPresContext,
 
       // We're a menu, we're built, we're closed, and no timer has been kicked off.
       mOpenTimer = do_CreateInstance("@mozilla.org/timer;1");
+      mOpenTimer->SetTarget(
+          mContent->OwnerDoc()->EventTargetFor(TaskCategory::Other));
       mOpenTimer->InitWithCallback(mTimerMediator, menuDelay, nsITimer::TYPE_ONE_SHOT);
     }
   }
@@ -551,7 +548,7 @@ nsMenuFrame::PopupOpened()
 {
   gMenuJustOpenedOrClosed = true;
 
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::open,
                     NS_LITERAL_STRING("true"), true);
   if (!weakFrame.IsAlive())
@@ -569,7 +566,7 @@ nsMenuFrame::PopupOpened()
 void
 nsMenuFrame::PopupClosed(bool aDeselectMenu)
 {
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   nsContentUtils::AddScriptRunner(
     new nsUnsetAttrRunnable(mContent, nsGkAtoms::open));
   if (!weakFrame.IsAlive())
@@ -605,7 +602,9 @@ nsMenuFrame::PopupClosed(bool aDeselectMenu)
         nsCOMPtr<nsIRunnable> event =
           new nsMenuActivateEvent(current->GetContent(),
                                   PresContext(), true);
-        NS_DispatchToCurrentThread(event);
+        mContent->OwnerDoc()->Dispatch("nsMenuActivateEvent",
+                                       TaskCategory::Other,
+                                       event.forget());
       }
     }
   }
@@ -654,7 +653,9 @@ nsMenuFrame::SelectMenu(bool aActivateFlag)
 
     nsCOMPtr<nsIRunnable> event =
       new nsMenuActivateEvent(mContent, PresContext(), aActivateFlag);
-    NS_DispatchToCurrentThread(event);
+    mContent->OwnerDoc()->Dispatch("nsMenuActivateEvent",
+                                   TaskCategory::Other,
+                                   event.forget());
   }
 
   return NS_OK;
@@ -902,7 +903,7 @@ nsMenuFrame::Notify(nsITimer* aTimer)
       case 1:
         {
           // Turn the highlight back on and wait for a while before closing the menu.
-          nsWeakFrame weakFrame(this);
+          AutoWeakFrame weakFrame(this);
           mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::menuactive,
                             NS_LITERAL_STRING("true"), true);
           if (weakFrame.IsAlive()) {
@@ -947,7 +948,7 @@ nsMenuFrame::UpdateMenuType()
 
     default:
       if (mType != eMenuType_Normal) {
-        nsWeakFrame weakFrame(this);
+        AutoWeakFrame weakFrame(this);
         mContent->UnsetAttr(kNameSpaceID_None, nsGkAtoms::checked,
                             true);
         ENSURE_TRUE(weakFrame.IsAlive());
@@ -1041,7 +1042,7 @@ nsMenuFrame::BuildAcceleratorText(bool aNotify)
   AddStateBits(NS_STATE_ACCELTEXT_IS_DERIVED);
 
   // If anything below fails, just leave the accelerator text blank.
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   mContent->UnsetAttr(kNameSpaceID_None, nsGkAtoms::acceltext, aNotify);
   ENSURE_TRUE(weakFrame.IsAlive());
 
@@ -1225,7 +1226,7 @@ nsMenuFrame::StartBlinking(WidgetGUIEvent* aEvent, bool aFlipChecked)
   }
 
   // Blink off.
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   mContent->UnsetAttr(kNameSpaceID_None, nsGkAtoms::menuactive, true);
   if (!weakFrame.IsAlive())
     return;
@@ -1238,6 +1239,8 @@ nsMenuFrame::StartBlinking(WidgetGUIEvent* aEvent, bool aFlipChecked)
 
   // Set up a timer to blink back on.
   mBlinkTimer = do_CreateInstance("@mozilla.org/timer;1");
+  mBlinkTimer->SetTarget(
+      mContent->OwnerDoc()->EventTargetFor(TaskCategory::Other));
   mBlinkTimer->InitWithCallback(mTimerMediator, kBlinkDelay, nsITimer::TYPE_ONE_SHOT);
   mBlinkState = 1;
 }
@@ -1481,8 +1484,8 @@ NS_IMPL_ISUPPORTS(nsMenuTimerMediator, nsITimerCallback)
  * Constructs a wrapper around an nsMenuFrame.
  * @param aFrame nsMenuFrame to create a wrapper around.
  */
-nsMenuTimerMediator::nsMenuTimerMediator(nsMenuFrame *aFrame) :
-  mFrame(aFrame)
+nsMenuTimerMediator::nsMenuTimerMediator(nsMenuFrame *aFrame)
+  : mFrame(aFrame)
 {
   NS_ASSERTION(mFrame, "Must have frame");
 }
@@ -1511,4 +1514,26 @@ NS_IMETHODIMP nsMenuTimerMediator::Notify(nsITimer* aTimer)
 void nsMenuTimerMediator::ClearFrame()
 {
   mFrame = nullptr;
+}
+
+/**
+ * Get the name of this timer callback.
+ * @param aName the name to return
+ */
+NS_IMETHODIMP
+nsMenuTimerMediator::GetName(nsACString& aName)
+{
+  aName.AssignLiteral("nsMenuTimerMediator");
+  return NS_OK;
+}
+
+/**
+ * Set the name to this timer callback.
+ * @param aName the name to set
+ */
+NS_IMETHODIMP
+nsMenuTimerMediator::SetName(const char* aName)
+{
+  // We don't need to change the name for nsMenuTimerMediator.
+  return NS_ERROR_NOT_IMPLEMENTED;
 }

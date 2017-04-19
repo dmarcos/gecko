@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file expects these globals to be declared before it is included.
+/* global Ci, Cc */
+
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/AddonManager.jsm");
 
@@ -264,7 +267,7 @@ PreferenceBranch.prototype = {
 
     switch (type) {
       case Ci.nsIPrefBranch.PREF_STRING:
-        aValue = this._prefs.getComplexValue(aName, Ci.nsISupportsString).data;
+        aValue = this._prefs.getStringPref(aName);
         break;
       case Ci.nsIPrefBranch.PREF_BOOL:
         aValue = this._prefs.getBoolPref(aName);
@@ -282,10 +285,7 @@ PreferenceBranch.prototype = {
 
     switch (type) {
       case "String":
-        var str = Components.classes["@mozilla.org/supports-string;1"]
-                            .createInstance(Ci.nsISupportsString);
-        str.data = aValue;
-        this._prefs.setComplexValue(aName, Ci.nsISupportsString, str);
+        this._prefs.setStringPref(aName, aValue);
         break;
       case "Boolean":
         this._prefs.setBoolPref(aName, aValue);
@@ -413,7 +413,7 @@ SessionStorage.prototype = {
     return this.has(aName) ? this._storage[aName] : aDefaultValue;
   },
 
-  QueryInterface : XPCOMUtils.generateQI([Ci.extISessionStorage])
+  QueryInterface: XPCOMUtils.generateQI([Ci.extISessionStorage])
 };
 
 // =================================================

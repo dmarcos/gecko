@@ -4,6 +4,7 @@
 
 "use strict";
 
+const {Cu} = require("chrome");
 const Services = require("Services");
 const promise = require("promise");
 const defer = require("devtools/shared/defer");
@@ -193,12 +194,7 @@ DevTools.prototype = {
       return tool;
     }
 
-    let enabled;
-    try {
-      enabled = Services.prefs.getBoolPref(tool.visibilityswitch);
-    } catch (e) {
-      enabled = true;
-    }
+    let enabled = Services.prefs.getBoolPref(tool.visibilityswitch, true);
 
     return enabled ? tool : null;
   },

@@ -10,6 +10,7 @@
 
 #include "mozilla/ErrorResult.h"
 #include "mozilla/OwningNonNull.h"
+#include "mozilla/RefPtr.h"
 
 #include "mozilla/dom/AnalyserNode.h"
 #include "mozilla/dom/AnalyserNodeBinding.h"
@@ -140,6 +141,7 @@ AudioContext::AudioContext(nsPIDOMWindowInner* aWindow,
   , mIsShutDown(false)
   , mCloseCalled(false)
   , mSuspendCalled(false)
+  , mIsDisconnecting(false)
 {
   bool mute = aWindow->AddAudioContext(this);
 
@@ -260,7 +262,9 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
 
 bool AudioContext::CheckClosed(ErrorResult& aRv)
 {
-  if (mAudioContextState == AudioContextState::Closed) {
+  if (mAudioContextState == AudioContextState::Closed ||
+      mIsShutDown ||
+      mIsDisconnecting) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return true;
   }
@@ -640,21 +644,31 @@ AudioContext::CurrentTime() const
   return stream->StreamTimeToSeconds(stream->GetCurrentTime());
 }
 
+void AudioContext::DisconnectFromOwner()
+{
+  mIsDisconnecting = true;
+  Shutdown();
+  DOMEventTargetHelper::DisconnectFromOwner();
+}
+
 void
 AudioContext::Shutdown()
 {
   mIsShutDown = true;
 
-  if (!mIsOffline) {
-    ErrorResult dummy;
-    RefPtr<Promise> ignored = Close(dummy);
-  }
+  // We don't want to touch promises if the global is going away soon.
+  if (!mIsDisconnecting) {
+    if (!mIsOffline) {
+      IgnoredErrorResult dummy;
+      RefPtr<Promise> ignored = Close(dummy);
+    }
 
-  for (auto p : mPromiseGripArray) {
-    p->MaybeReject(NS_ERROR_DOM_INVALID_STATE_ERR);
-  }
+    for (auto p : mPromiseGripArray) {
+      p->MaybeReject(NS_ERROR_DOM_INVALID_STATE_ERR);
+    }
 
-  mPromiseGripArray.Clear();
+    mPromiseGripArray.Clear();
+  }
 
   // Release references to active nodes.
   // Active AudioNodes don't unregister in destructors, at which point the
@@ -749,6 +763,24 @@ private:
   RefPtr<AudioContext> mAudioContext;
 };
 
+
+void
+AudioContext::Dispatch(already_AddRefed<nsIRunnable>&& aRunnable)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  nsCOMPtr<nsIGlobalObject> parentObject =
+    do_QueryInterface(GetParentObject());
+  // It can happen that this runnable took a long time to reach the main thread,
+  // and the global is not valid anymore.
+  if (parentObject) {
+    parentObject->AbstractMainThreadFor(TaskCategory::Other)
+                ->Dispatch(std::move(aRunnable));
+  } else {
+    RefPtr<nsIRunnable> runnable(aRunnable);
+    runnable = nullptr;
+  }
+}
+
 void
 AudioContext::OnStateChanged(void* aPromise, AudioContextState aNewState)
 {
@@ -813,9 +845,8 @@ AudioContext::OnStateChanged(void* aPromise, AudioContextState aNewState)
   }
 
   if (mAudioContextState != aNewState) {
-    RefPtr<OnStateChangeTask> onStateChangeTask =
-      new OnStateChangeTask(this);
-    NS_DispatchToMainThread(onStateChangeTask);
+    RefPtr<OnStateChangeTask> task = new OnStateChangeTask(this);
+    Dispatch(task.forget());
   }
 
   mAudioContextState = aNewState;

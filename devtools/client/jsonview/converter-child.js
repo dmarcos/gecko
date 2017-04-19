@@ -6,17 +6,12 @@
 
 "use strict";
 
-const {Cc, Ci, Cu, Cm, Cr, components} = require("chrome");
-const registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
+const {Cc, Ci, Cu} = require("chrome");
 const { XPCOMUtils } = Cu.import("resource://gre/modules/XPCOMUtils.jsm", {});
 const Services = require("Services");
 
 loader.lazyRequireGetter(this, "NetworkHelper",
                                "devtools/shared/webconsole/network-helper");
-loader.lazyRequireGetter(this, "Events",
-                               "sdk/dom/events");
-loader.lazyRequireGetter(this, "Clipboard",
-                               "sdk/clipboard");
 loader.lazyRequireGetter(this, "JsonViewUtils",
                                "devtools/client/jsonview/utils");
 
@@ -27,12 +22,6 @@ const childProcessMessageManager =
 // Amount of space that will be allocated for the stream's backing-store.
 // Must be power of 2. Used to copy the data stream in onStopRequest.
 const SEGMENT_SIZE = Math.pow(2, 17);
-
-const JSON_VIEW_MIME_TYPE = "application/vnd.mozilla.json.view";
-const CONTRACT_ID = "@mozilla.org/streamconv;1?from=" +
-  JSON_VIEW_MIME_TYPE + "&to=*/*";
-const CLASS_ID = components.ID("{d8c9acee-dec5-11e4-8c75-1681e6b88ec1}");
-const CLASS_DESCRIPTION = "JSONView converter";
 
 // Localization
 loader.lazyGetter(this, "jsonViewStrings", () => {
@@ -113,7 +102,7 @@ Converter.prototype = {
     // Because content might still have a reference to this window,
     // force setting it to a null principal to avoid it being same-
     // origin with (other) content.
-    this.channel.loadInfo.resetPrincipalsToNullPrincipal();
+    this.channel.loadInfo.resetPrincipalToInheritToNullPrincipal();
 
     this.listener.onStartRequest(this.channel, context);
   },
@@ -147,10 +136,10 @@ Converter.prototype = {
 
     JsonViewUtils.exportIntoContentScope(win, Locale, "Locale");
 
-    Events.once(win, "DOMContentLoaded", event => {
+    win.addEventListener("DOMContentLoaded", event => {
       win.addEventListener("contentMessage",
         this.onContentMessage.bind(this), false, true);
-    });
+    }, {once: true});
 
     // The request doesn't have to be always nsIHttpChannel
     // (e.g. in case of data: URLs)
@@ -230,9 +219,7 @@ Converter.prototype = {
       os = "linux";
     }
 
-    let chromeReg = Cc["@mozilla.org/chrome/chrome-registry;1"]
-                        .getService(Ci.nsIXULChromeRegistry);
-    let dir = chromeReg.isLocaleRTL("global") ? "rtl" : "ltr";
+    let dir = Services.locale.isAppLocaleRTL ? "rtl" : "ltr";
 
     return "<!DOCTYPE html>\n" +
       "<html platform=\"" + os + "\" class=\"" + themeClassName +
@@ -268,9 +255,7 @@ Converter.prototype = {
     output += "</div><div id=\"json\">" + this.highlightError(data,
       errorInfo.line, errorInfo.column) + "</div>";
 
-    let chromeReg = Cc["@mozilla.org/chrome/chrome-registry;1"]
-                        .getService(Ci.nsIXULChromeRegistry);
-    let dir = chromeReg.isLocaleRTL("global") ? "rtl" : "ltr";
+    let dir = Services.locale.isAppLocaleRTL ? "rtl" : "ltr";
 
     return "<!DOCTYPE html>\n" +
       "<html><head><title>" + this.htmlEncode(uri + " - Error") + "</title>" +
@@ -292,11 +277,11 @@ Converter.prototype = {
     let value = e.detail.value;
     switch (e.detail.type) {
       case "copy":
-        Clipboard.set(value, "text");
+        copyString(win, value);
         break;
 
       case "copy-headers":
-        this.copyHeaders(value);
+        this.copyHeaders(win, value);
         break;
 
       case "save":
@@ -305,7 +290,7 @@ Converter.prototype = {
     }
   },
 
-  copyHeaders: function (headers) {
+  copyHeaders: function (win, headers) {
     let value = "";
     let eol = (Services.appinfo.OS !== "WINNT") ? "\n" : "\r\n";
 
@@ -323,40 +308,23 @@ Converter.prototype = {
       value += header.name + ": " + header.value + eol;
     }
 
-    Clipboard.set(value, "text");
+    copyString(win, value);
   }
 };
 
-const Factory = {
-  createInstance: function (outer, iid) {
-    if (outer) {
-      throw Cr.NS_ERROR_NO_AGGREGATION;
-    }
-    return new Converter();
-  }
-};
+function copyString(win, string) {
+  win.document.addEventListener("copy", event => {
+    event.clipboardData.setData("text/plain", string);
+    event.preventDefault();
+  }, {once: true});
 
-function register() {
-  if (!registrar.isCIDRegistered(CLASS_ID)) {
-    registrar.registerFactory(CLASS_ID,
-      CLASS_DESCRIPTION,
-      CONTRACT_ID,
-      Factory);
-    return true;
-  }
-
-  return false;
+  win.document.execCommand("copy", false, null);
 }
 
-function unregister() {
-  if (registrar.isCIDRegistered(CLASS_ID)) {
-    registrar.unregisterFactory(CLASS_ID, Factory);
-    return true;
-  }
-  return false;
+function createInstance() {
+  return new Converter();
 }
 
 exports.JsonViewService = {
-  register: register,
-  unregister: unregister
+  createInstance: createInstance,
 };

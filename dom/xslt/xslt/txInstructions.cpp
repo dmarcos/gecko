@@ -27,9 +27,11 @@ txApplyDefaultElementTemplate::execute(txExecutionState& aEs)
     txExecutionState::TemplateRule* rule = aEs.getCurrentTemplateRule();
     txExpandedName mode(rule->mModeNsId, rule->mModeLocalName);
     txStylesheet::ImportFrame* frame = 0;
-    txInstruction* templ =
+    txInstruction* templ;
+    nsresult rv =
         aEs.mStylesheet->findTemplate(aEs.getEvalContext()->getContextNode(),
-                                      mode, &aEs, nullptr, &frame);
+                                      mode, &aEs, nullptr, &templ, &frame);
+    NS_ENSURE_SUCCESS(rv, rv);
 
     aEs.pushTemplateRule(frame, mode, aEs.mTemplateParams);
 
@@ -37,16 +39,7 @@ txApplyDefaultElementTemplate::execute(txExecutionState& aEs)
 }
 
 nsresult
-txApplyImportsEnd::execute(txExecutionState& aEs)
-{
-    aEs.popTemplateRule();
-    aEs.popParamMap();
-    
-    return NS_OK;
-}
-
-nsresult
-txApplyImportsStart::execute(txExecutionState& aEs)
+txApplyImports::execute(txExecutionState& aEs)
 {
     txExecutionState::TemplateRule* rule = aEs.getCurrentTemplateRule();
     // The frame is set to null when there is no current template rule, or
@@ -62,13 +55,20 @@ txApplyImportsStart::execute(txExecutionState& aEs)
 
     txStylesheet::ImportFrame* frame = 0;
     txExpandedName mode(rule->mModeNsId, rule->mModeLocalName);
-    txInstruction* templ =
-        aEs.mStylesheet->findTemplate(aEs.getEvalContext()->getContextNode(),
-                                      mode, &aEs, rule->mFrame, &frame);
+    txInstruction* templ;
+    rv = aEs.mStylesheet->findTemplate(aEs.getEvalContext()->getContextNode(),
+                                       mode, &aEs, rule->mFrame, &templ,
+                                       &frame);
+    NS_ENSURE_SUCCESS(rv, rv);
 
     aEs.pushTemplateRule(frame, mode, rule->mParams);
 
-    return aEs.runTemplate(templ);
+    rv = aEs.runTemplate(templ);
+
+    aEs.popTemplateRule();
+    aEs.popParamMap();
+
+    return rv;
 }
 
 txApplyTemplates::txApplyTemplates(const txExpandedName& aMode)
@@ -80,9 +80,11 @@ nsresult
 txApplyTemplates::execute(txExecutionState& aEs)
 {
     txStylesheet::ImportFrame* frame = 0;
-    txInstruction* templ =
+    txInstruction* templ;
+    nsresult rv =
         aEs.mStylesheet->findTemplate(aEs.getEvalContext()->getContextNode(),
-                                      mMode, &aEs, nullptr, &frame);
+                                      mMode, &aEs, nullptr, &templ, &frame);
+    NS_ENSURE_SUCCESS(rv, rv);
 
     aEs.pushTemplateRule(frame, mMode, aEs.mTemplateParams);
 

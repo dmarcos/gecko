@@ -5,6 +5,7 @@
 
 #include "nspr.h"
 #include "mozilla/Logging.h"
+#include "mozilla/IntegerPrintfMacros.h"
 
 #include "nsDocLoader.h"
 #include "nsCURILoader.h"
@@ -137,7 +138,7 @@ nsDocLoader::Init()
   if (NS_FAILED(rv)) return rv;
 
   MOZ_LOG(gDocLoaderLog, LogLevel::Debug,
-         ("DocLoader:%p: load group %x.\n", this, mLoadGroup.get()));
+         ("DocLoader:%p: load group %p.\n", this, mLoadGroup.get()));
 
   return NS_OK;
 }
@@ -460,7 +461,24 @@ nsDocLoader::OnStartRequest(nsIRequest *request, nsISupports *aCtxt)
   NS_ASSERTION(!mIsLoadingDocument || mDocumentRequest,
                "mDocumentRequest MUST be set for the duration of a page load!");
 
-  doStartURLLoad(request);
+  // This is the only way to catch document request start event after a redirect
+  // has occured without changing inherited Firefox behaviour significantly.
+  // Problem description:
+  // The combination of |STATE_START + STATE_IS_DOCUMENT| is only sent for
+  // initial request (see |doStartDocumentLoad| call above).
+  // And |STATE_REDIRECTING + STATE_IS_DOCUMENT| is sent with old channel, which
+  // makes it impossible to filter by destination URL (see
+  // |AsyncOnChannelRedirect| implementation).
+  // Fixing any of those bugs may cause unpredictable consequences in any part
+  // of the browser, so we just add a custom flag for this exact situation.
+  int32_t extraFlags = 0;
+  if (mIsLoadingDocument &&
+      !bJustStartedLoading &&
+      (loadFlags & nsIChannel::LOAD_DOCUMENT_URI) &&
+      (loadFlags & nsIChannel::LOAD_REPLACE)) {
+    extraFlags = nsIWebProgressListener::STATE_IS_REDIRECTED_DOCUMENT;
+  }
+  doStartURLLoad(request, extraFlags);
 
   return NS_OK;
 }
@@ -481,9 +499,9 @@ nsDocLoader::OnStopRequest(nsIRequest *aRequest,
       mLoadGroup->GetActiveCount(&count);
 
     MOZ_LOG(gDocLoaderLog, LogLevel::Debug,
-           ("DocLoader:%p: OnStopRequest[%p](%s) status=%x mIsLoadingDocument=%s, %u active URLs",
+           ("DocLoader:%p: OnStopRequest[%p](%s) status=%" PRIx32 " mIsLoadingDocument=%s, %u active URLs",
            this, aRequest, name.get(),
-           aStatus, (mIsLoadingDocument ? "true" : "false"),
+            static_cast<uint32_t>(aStatus), (mIsLoadingDocument ? "true" : "false"),
            count));
   }
 
@@ -764,7 +782,7 @@ void nsDocLoader::doStartDocumentLoad(void)
                     NS_OK);
 }
 
-void nsDocLoader::doStartURLLoad(nsIRequest *request)
+void nsDocLoader::doStartURLLoad(nsIRequest *request, int32_t aExtraFlags)
 {
 #if defined(DEBUG)
   nsAutoCString buffer;
@@ -779,7 +797,8 @@ void nsDocLoader::doStartURLLoad(nsIRequest *request)
   FireOnStateChange(this,
                     request,
                     nsIWebProgressListener::STATE_START |
-                    nsIWebProgressListener::STATE_IS_REQUEST,
+                    nsIWebProgressListener::STATE_IS_REQUEST |
+                    aExtraFlags,
                     NS_OK);
 }
 
@@ -791,8 +810,8 @@ void nsDocLoader::doStopURLLoad(nsIRequest *request, nsresult aStatus)
   GetURIStringFromRequest(request, buffer);
     MOZ_LOG(gDocLoaderLog, LogLevel::Debug,
           ("DocLoader:%p: ++ Firing OnStateChange for end url load (...)."
-           "\tURI: %s status=%x\n",
-            this, buffer.get(), aStatus));
+           "\tURI: %s status=%" PRIx32 "\n",
+           this, buffer.get(), static_cast<uint32_t>(aStatus)));
 #endif /* DEBUG */
 
   FireOnStateChange(this,
@@ -820,8 +839,8 @@ void nsDocLoader::doStopDocumentLoad(nsIRequest *request,
   GetURIStringFromRequest(request, buffer);
   MOZ_LOG(gDocLoaderLog, LogLevel::Debug,
          ("DocLoader:%p: ++ Firing OnStateChange for end document load (...)."
-         "\tURI: %s Status=%x\n",
-          this, buffer.get(), aStatus));
+         "\tURI: %s Status=%" PRIx32 "\n",
+          this, buffer.get(), static_cast<uint32_t>(aStatus)));
 #endif /* DEBUG */
 
   // Firing STATE_STOP|STATE_IS_DOCUMENT will fire onload handlers.
@@ -1181,7 +1200,8 @@ void nsDocLoader::FireOnProgressChange(nsDocLoader *aLoadInitiator,
 
   GetURIStringFromRequest(request, buffer);
   MOZ_LOG(gDocLoaderLog, LogLevel::Debug,
-         ("DocLoader:%p: Progress (%s): curSelf: %d maxSelf: %d curTotal: %d maxTotal %d\n",
+         ("DocLoader:%p: Progress (%s): curSelf: %" PRId64 " maxSelf: %"
+          PRId64 " curTotal: %" PRId64 " maxTotal %" PRId64 "\n",
           this, buffer.get(), aProgress, aProgressMax, aTotalProgress, aMaxTotalProgress));
 #endif /* DEBUG */
 

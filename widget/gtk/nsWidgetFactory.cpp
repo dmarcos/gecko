@@ -29,7 +29,6 @@
 #include "nsFilePicker.h"
 #include "nsSound.h"
 #include "nsBidiKeyboard.h"
-#include "nsScreenManagerGtk.h"
 #include "nsGTKToolkit.h"
 #include "WakeLockListener.h"
 
@@ -54,6 +53,7 @@
 #include "nsIComponentRegistrar.h"
 #include "nsComponentManagerUtils.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/widget/ScreenManager.h"
 #include <gtk/gtk.h>
 
 using namespace mozilla;
@@ -74,10 +74,10 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsHTMLFormatConverter)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIdleServiceGTK, nsIdleServiceGTK::GetInstance)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsClipboardHelper)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsClipboard, Init)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsDragService)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsDragService, nsDragService::GetInstance)
 #endif
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSound)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsScreenManagerGtk)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(ScreenManager, ScreenManager::GetAddRefedSingleton)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsImageToPixbuf)
 
 
@@ -88,6 +88,9 @@ static nsresult
 nsNativeThemeGTKConstructor(nsISupports *aOuter, REFNSIID aIID,
                             void **aResult)
 {
+    if (gfxPlatform::IsHeadless()) {
+        return NS_ERROR_NO_INTERFACE;
+    }
     nsresult rv;
     nsNativeThemeGTK * inst;
 
@@ -243,7 +246,7 @@ static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
 #endif
     { &kNS_HTMLFORMATCONVERTER_CID, false, nullptr, nsHTMLFormatConverterConstructor },
     { &kNS_BIDIKEYBOARD_CID, false, nullptr, nsBidiKeyboardConstructor },
-    { &kNS_SCREENMANAGER_CID, false, nullptr, nsScreenManagerGtkConstructor,
+    { &kNS_SCREENMANAGER_CID, false, nullptr, ScreenManagerConstructor,
       Module::MAIN_PROCESS_ONLY },
     { &kNS_THEMERENDERER_CID, false, nullptr, nsNativeThemeGTKConstructor },
 #ifdef NS_PRINTING

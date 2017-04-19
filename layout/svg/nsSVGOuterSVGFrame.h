@@ -102,21 +102,22 @@ public:
     return PrincipalChildList().FirstChild()->GetContentInsertionFrame();
   }
 
-  virtual bool IsSVGTransformed(Matrix *aOwnTransform,
-                                Matrix *aFromParentTransform) const override {
-    // Our anonymous wrapper performs the transforms. We simply
-    // return whether we are transformed here but don't apply the transforms
-    // themselves.
-    return PrincipalChildList().FirstChild()->IsSVGTransformed();
-  }
+  bool IsSVGTransformed(Matrix* aOwnTransform,
+                        Matrix* aFromParentTransform) const override;
+
+  // Update the style on our anonymous box child.
+  void DoUpdateStyleOfOwnedAnonBoxes(mozilla::ServoStyleSet& aStyleSet,
+                                     nsStyleChangeList& aChangeList,
+                                     nsChangeHint aHintForThisFrame) override;
 
   // nsISVGSVGFrame interface:
   virtual void NotifyViewportOrTransformChanged(uint32_t aFlags) override;
 
-  // nsISVGChildFrame methods:
+  // nsSVGDisplayableFrame methods:
   virtual DrawResult PaintSVG(gfxContext& aContext,
                               const gfxMatrix& aTransform,
-                              const nsIntRect* aDirtyRect = nullptr) override;
+                              const nsIntRect* aDirtyRect = nullptr,
+                              uint32_t aFlags = 0) override;
   virtual SVGBBox GetBBoxContribution(const Matrix &aToBBoxUserspace,
                                       uint32_t aFlags) override;
 
@@ -263,6 +264,9 @@ public:
    */
   virtual nsIAtom* GetType() const override;
 
+  bool IsSVGTransformed(Matrix *aOwnTransform,
+                        Matrix *aFromParentTransform) const override;
+
   // nsSVGContainerFrame methods:
   virtual gfxMatrix GetCanvasTM() override {
     // GetCanvasTM returns the transform from an SVG frame to the frame's
@@ -270,8 +274,6 @@ public:
     // set on us for any CSS border or padding on our nsSVGOuterSVGFrame.
     return static_cast<nsSVGOuterSVGFrame*>(GetParent())->GetCanvasTM();
   }
-
-  virtual bool HasChildrenOnlyTransform(Matrix *aTransform) const override;
 };
 
 #endif

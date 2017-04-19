@@ -8,9 +8,10 @@
  * values they accept
  */
 
+#include "nsCSSProps.h"
+
 #include "mozilla/ArrayUtils.h"
 
-#include "nsCSSProps.h"
 #include "nsCSSKeywords.h"
 #include "nsLayoutUtils.h"
 #include "nsStyleConsts.h"
@@ -520,8 +521,7 @@ nsCSSProps::LookupProperty(const nsACString& aProperty,
 {
   MOZ_ASSERT(gPropertyTable, "no lookup table, needs addref");
 
-  if (nsLayoutUtils::CSSVariablesEnabled() &&
-      IsCustomPropertyName(aProperty)) {
+  if (IsCustomPropertyName(aProperty)) {
     return eCSSPropertyExtra_variable;
   }
 
@@ -551,8 +551,7 @@ nsCSSProps::LookupProperty(const nsACString& aProperty,
 nsCSSPropertyID
 nsCSSProps::LookupProperty(const nsAString& aProperty, EnabledState aEnabled)
 {
-  if (nsLayoutUtils::CSSVariablesEnabled() &&
-      IsCustomPropertyName(aProperty)) {
+  if (IsCustomPropertyName(aProperty)) {
     return eCSSPropertyExtra_variable;
   }
 
@@ -743,6 +742,12 @@ const KTableEntry nsCSSProps::kAnimationPlayStateKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kAppearanceKTable[] = {
+  { eCSSKeyword_auto,    NS_THEME_AUTO },
+  { eCSSKeyword_none,    NS_THEME_NONE },
+  { eCSSKeyword_UNKNOWN, -1 }
+};
+
+const KTableEntry nsCSSProps::kMozAppearanceKTable[] = {
   { eCSSKeyword_none,                   NS_THEME_NONE },
   { eCSSKeyword_button,                 NS_THEME_BUTTON },
   { eCSSKeyword_radio,                  NS_THEME_RADIO },
@@ -889,16 +894,16 @@ const KTableEntry nsCSSProps::kImageLayerAttachmentKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kBackgroundOriginKTable[] = {
-  { eCSSKeyword_border_box, StyleGeometryBox::Border },
-  { eCSSKeyword_padding_box, StyleGeometryBox::Padding },
-  { eCSSKeyword_content_box, StyleGeometryBox::Content },
+  { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
+  { eCSSKeyword_padding_box, StyleGeometryBox::PaddingBox },
+  { eCSSKeyword_content_box, StyleGeometryBox::ContentBox },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
 KTableEntry nsCSSProps::kBackgroundClipKTable[] = {
-  { eCSSKeyword_border_box, StyleGeometryBox::Border },
-  { eCSSKeyword_padding_box, StyleGeometryBox::Padding },
-  { eCSSKeyword_content_box, StyleGeometryBox::Content },
+  { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
+  { eCSSKeyword_padding_box, StyleGeometryBox::PaddingBox },
+  { eCSSKeyword_content_box, StyleGeometryBox::ContentBox },
   // The next entry is controlled by the layout.css.background-clip-text.enabled
   // pref.
   { eCSSKeyword_text, StyleGeometryBox::Text },
@@ -906,22 +911,22 @@ KTableEntry nsCSSProps::kBackgroundClipKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kMaskOriginKTable[] = {
-  { eCSSKeyword_border_box, StyleGeometryBox::Border },
-  { eCSSKeyword_padding_box, StyleGeometryBox::Padding },
-  { eCSSKeyword_content_box, StyleGeometryBox::Content },
-  { eCSSKeyword_fill_box, StyleGeometryBox::Fill },
-  { eCSSKeyword_stroke_box, StyleGeometryBox::Stroke },
-  { eCSSKeyword_view_box, StyleGeometryBox::View },
+  { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
+  { eCSSKeyword_padding_box, StyleGeometryBox::PaddingBox },
+  { eCSSKeyword_content_box, StyleGeometryBox::ContentBox },
+  { eCSSKeyword_fill_box, StyleGeometryBox::FillBox },
+  { eCSSKeyword_stroke_box, StyleGeometryBox::StrokeBox },
+  { eCSSKeyword_view_box, StyleGeometryBox::ViewBox },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
 const KTableEntry nsCSSProps::kMaskClipKTable[] = {
-  { eCSSKeyword_border_box, StyleGeometryBox::Border },
-  { eCSSKeyword_padding_box, StyleGeometryBox::Padding },
-  { eCSSKeyword_content_box, StyleGeometryBox::Content },
-  { eCSSKeyword_fill_box, StyleGeometryBox::Fill },
-  { eCSSKeyword_stroke_box, StyleGeometryBox::Stroke },
-  { eCSSKeyword_view_box, StyleGeometryBox::View },
+  { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
+  { eCSSKeyword_padding_box, StyleGeometryBox::PaddingBox },
+  { eCSSKeyword_content_box, StyleGeometryBox::ContentBox },
+  { eCSSKeyword_fill_box, StyleGeometryBox::FillBox },
+  { eCSSKeyword_stroke_box, StyleGeometryBox::StrokeBox },
+  { eCSSKeyword_view_box, StyleGeometryBox::ViewBox },
   { eCSSKeyword_no_clip, StyleGeometryBox::NoClip },
   { eCSSKeyword_UNKNOWN, -1 }
 };
@@ -1668,8 +1673,8 @@ const KTableEntry nsCSSProps::kGridAutoFlowKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kGridTrackBreadthKTable[] = {
-  { eCSSKeyword_min_content, NS_STYLE_GRID_TRACK_BREADTH_MIN_CONTENT },
-  { eCSSKeyword_max_content, NS_STYLE_GRID_TRACK_BREADTH_MAX_CONTENT },
+  { eCSSKeyword_min_content, StyleGridTrackBreadth::MinContent },
+  { eCSSKeyword_max_content, StyleGridTrackBreadth::MaxContent },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -1999,6 +2004,17 @@ KTableEntry nsCSSProps::kTextAlignLastKTable[] = {
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
+const KTableEntry nsCSSProps::kTextJustifyKTable[] = {
+  { eCSSKeyword_none, StyleTextJustify::None },
+  { eCSSKeyword_auto, StyleTextJustify::Auto },
+  { eCSSKeyword_inter_word, StyleTextJustify::InterWord },
+  { eCSSKeyword_inter_character, StyleTextJustify::InterCharacter },
+  // For legacy reasons, UAs must also support the keyword "distribute" with
+  // the exact same meaning and behavior as "inter-character".
+  { eCSSKeyword_distribute, StyleTextJustify::InterCharacter },
+  { eCSSKeyword_UNKNOWN, -1 }
+};
+
 const KTableEntry nsCSSProps::kTextCombineUprightKTable[] = {
   { eCSSKeyword_none, NS_STYLE_TEXT_COMBINE_UPRIGHT_NONE },
   { eCSSKeyword_all, NS_STYLE_TEXT_COMBINE_UPRIGHT_ALL },
@@ -2012,7 +2028,6 @@ const KTableEntry nsCSSProps::kTextDecorationLineKTable[] = {
   { eCSSKeyword_overline, NS_STYLE_TEXT_DECORATION_LINE_OVERLINE },
   { eCSSKeyword_line_through, NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH },
   { eCSSKeyword_blink, NS_STYLE_TEXT_DECORATION_LINE_BLINK },
-  { eCSSKeyword__moz_anchor_decoration, NS_STYLE_TEXT_DECORATION_LINE_PREF_ANCHORS },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2063,6 +2078,12 @@ const KTableEntry nsCSSProps::kTextOverflowKTable[] = {
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
+const KTableEntry nsCSSProps::kTextSizeAdjustKTable[] = {
+  { eCSSKeyword_none, NS_STYLE_TEXT_SIZE_ADJUST_NONE },
+  { eCSSKeyword_auto, NS_STYLE_TEXT_SIZE_ADJUST_AUTO },
+  { eCSSKeyword_UNKNOWN, -1 }
+};
+
 const KTableEntry nsCSSProps::kTextTransformKTable[] = {
   { eCSSKeyword_none, NS_STYLE_TEXT_TRANSFORM_NONE },
   { eCSSKeyword_capitalize, NS_STYLE_TEXT_TRANSFORM_CAPITALIZE },
@@ -2088,9 +2109,9 @@ const KTableEntry nsCSSProps::kTopLayerKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kTransformBoxKTable[] = {
-  { eCSSKeyword_border_box, NS_STYLE_TRANSFORM_BOX_BORDER_BOX },
-  { eCSSKeyword_fill_box, NS_STYLE_TRANSFORM_BOX_FILL_BOX },
-  { eCSSKeyword_view_box, NS_STYLE_TRANSFORM_BOX_VIEW_BOX },
+  { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
+  { eCSSKeyword_fill_box, StyleGeometryBox::FillBox },
+  { eCSSKeyword_view_box, StyleGeometryBox::ViewBox },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2112,9 +2133,6 @@ const KTableEntry nsCSSProps::kUnicodeBidiKTable[] = {
   { eCSSKeyword_isolate, NS_STYLE_UNICODE_BIDI_ISOLATE },
   { eCSSKeyword_isolate_override, NS_STYLE_UNICODE_BIDI_ISOLATE_OVERRIDE },
   { eCSSKeyword_plaintext, NS_STYLE_UNICODE_BIDI_PLAINTEXT },
-  { eCSSKeyword__moz_isolate, NS_STYLE_UNICODE_BIDI_ISOLATE },
-  { eCSSKeyword__moz_isolate_override, NS_STYLE_UNICODE_BIDI_ISOLATE_OVERRIDE },
-  { eCSSKeyword__moz_plaintext, NS_STYLE_UNICODE_BIDI_PLAINTEXT },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2299,13 +2317,13 @@ const KTableEntry nsCSSProps::kFillRuleKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kClipPathGeometryBoxKTable[] = {
-  { eCSSKeyword_content_box, StyleGeometryBox::Content },
-  { eCSSKeyword_padding_box, StyleGeometryBox::Padding },
-  { eCSSKeyword_border_box, StyleGeometryBox::Border },
-  { eCSSKeyword_margin_box, StyleGeometryBox::Margin },
-  { eCSSKeyword_fill_box, StyleGeometryBox::Fill },
-  { eCSSKeyword_stroke_box, StyleGeometryBox::Stroke },
-  { eCSSKeyword_view_box, StyleGeometryBox::View },
+  { eCSSKeyword_content_box, StyleGeometryBox::ContentBox },
+  { eCSSKeyword_padding_box, StyleGeometryBox::PaddingBox },
+  { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
+  { eCSSKeyword_margin_box, StyleGeometryBox::MarginBox },
+  { eCSSKeyword_fill_box, StyleGeometryBox::FillBox },
+  { eCSSKeyword_stroke_box, StyleGeometryBox::StrokeBox },
+  { eCSSKeyword_view_box, StyleGeometryBox::ViewBox },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2344,10 +2362,10 @@ const KTableEntry nsCSSProps::kMaskTypeKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kShapeOutsideShapeBoxKTable[] = {
-  { eCSSKeyword_content_box, StyleShapeOutsideShapeBox::Content },
-  { eCSSKeyword_padding_box, StyleShapeOutsideShapeBox::Padding },
-  { eCSSKeyword_border_box, StyleShapeOutsideShapeBox::Border },
-  { eCSSKeyword_margin_box, StyleShapeOutsideShapeBox::Margin },
+  { eCSSKeyword_content_box, StyleGeometryBox::ContentBox },
+  { eCSSKeyword_padding_box, StyleGeometryBox::PaddingBox },
+  { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
+  { eCSSKeyword_margin_box, StyleGeometryBox::MarginBox },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2417,6 +2435,12 @@ const KTableEntry nsCSSProps::kColorInterpolationKTable[] = {
 const KTableEntry nsCSSProps::kColumnFillKTable[] = {
   { eCSSKeyword_auto, NS_STYLE_COLUMN_FILL_AUTO },
   { eCSSKeyword_balance, NS_STYLE_COLUMN_FILL_BALANCE },
+  { eCSSKeyword_UNKNOWN, -1 }
+};
+
+const KTableEntry nsCSSProps::kColumnSpanKTable[] = {
+  { eCSSKeyword_all, NS_STYLE_COLUMN_SPAN_ALL },
+  { eCSSKeyword_none, NS_STYLE_COLUMN_SPAN_NONE },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2797,7 +2821,6 @@ static const nsCSSPropertyID gFontSubpropTable[] = {
   eCSSProperty_font_feature_settings,
   eCSSProperty_font_language_override,
   eCSSProperty_font_kerning,
-  eCSSProperty_font_synthesis,
   eCSSProperty_font_variant_alternates,
   eCSSProperty_font_variant_caps,
   eCSSProperty_font_variant_east_asian,

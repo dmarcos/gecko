@@ -15,7 +15,7 @@ Cu.import("resource://gre/modules/FileUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AttributionCode",
                                   "resource:///modules/AttributionCode.jsm");
 
-// Lazy load |LightweightThemeManager|, we won't be using it on Gonk.
+// Lazy load |LightweightThemeManager|.
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
 
@@ -142,6 +142,10 @@ var SysInfo = {
     } catch (ex) {
       throw ex;
     }
+  },
+
+  getPropertyAsUint32(name) {
+      return this.get(name);
   },
 
   get(name) {
@@ -413,13 +417,8 @@ function checkSettingsSection(data) {
                  f + " must have the correct type.");
   }
 
-  // Check "addonCompatibilityCheckEnabled" separately, as it is not available
-  // on Gonk.
-  if (gIsGonk) {
-    Assert.ok(!("addonCompatibilityCheckEnabled" in data.settings), "Must not be available on Gonk.");
-  } else {
-    Assert.equal(data.settings.addonCompatibilityCheckEnabled, AddonManager.checkCompatibility);
-  }
+  // Check "addonCompatibilityCheckEnabled" separately.
+  Assert.equal(data.settings.addonCompatibilityCheckEnabled, AddonManager.checkCompatibility);
 
   // Check "isDefaultBrowser" separately, as it is not available on Android an can either be
   // null or boolean on other platforms.
@@ -554,8 +553,8 @@ function checkSystemSection(data) {
   Assert.ok(Number.isFinite(cpuData.count), "CPU count must be a number.");
   Assert.ok(Array.isArray(cpuData.extensions), "CPU extensions must be available.");
 
-  // Device data is only available on Android or Gonk.
-  if (gIsAndroid || gIsGonk) {
+  // Device data is only available on Android.
+  if (gIsAndroid) {
     let deviceData = data.system.device;
     Assert.ok(checkNullOrString(deviceData.model));
     Assert.ok(checkNullOrString(deviceData.manufacturer));
@@ -584,7 +583,7 @@ function checkSystemSection(data) {
       Assert.ok((osData["windowsUBR"] === null) || Number.isFinite(osData["windowsUBR"]),
                 "windowsUBR must be null or a number.");
     }
-  } else if (gIsAndroid || gIsGonk) {
+  } else if (gIsAndroid) {
     Assert.ok(checkNullOrString(osData.kernelVersion));
   }
 
@@ -789,6 +788,23 @@ function checkAddonsSection(data, expectBrokenAddons) {
   Assert.ok(checkNullOrString(data.addons.persona));
 }
 
+function checkExperimentsSection(data) {
+  // We don't expect the experiments section to be always available.
+  let experiments = data.experiments || {};
+  if (Object.keys(experiments).length == 0) {
+    return;
+  }
+
+  for (let id in experiments) {
+    Assert.ok(checkString(id), id + " must be a valid string.");
+
+    // Check that we have valid experiment info.
+    let experimentData = experiments[id];
+    Assert.ok("branch" in experimentData, "The experiment must have branch data.")
+    Assert.ok(checkString(experimentData.branch), "The experiment data must be valid.");
+  }
+}
+
 function checkEnvironmentData(data, isInitial = false, expectBrokenAddons = false) {
   checkBuildSection(data);
   checkSettingsSection(data);
@@ -796,6 +812,7 @@ function checkEnvironmentData(data, isInitial = false, expectBrokenAddons = fals
   checkPartnerSection(data, isInitial);
   checkSystemSection(data);
   checkAddonsSection(data, expectBrokenAddons);
+  checkExperimentsSection(data);
 }
 
 add_task(function* setup() {
@@ -813,11 +830,9 @@ add_task(function* setup() {
   system_addon.lastModifiedTime = SYSTEM_ADDON_INSTALL_DATE;
   loadAddonManager(APP_ID, APP_NAME, APP_VERSION, PLATFORM_VERSION);
 
-  // Spoof the persona ID, but not on Gonk.
-  if (!gIsGonk) {
-    LightweightThemeManager.currentTheme =
-      spoofTheme(PERSONA_ID, PERSONA_NAME, PERSONA_DESCRIPTION);
-  }
+  // Spoof the persona ID.
+  LightweightThemeManager.currentTheme =
+    spoofTheme(PERSONA_ID, PERSONA_NAME, PERSONA_DESCRIPTION);
   // Register a fake plugin host for consistent flash version data.
   registerFakePluginHost();
 
@@ -849,7 +864,7 @@ add_task(function* test_checkEnvironment() {
   checkEnvironmentData(environmentData, true);
 
   spoofPartnerInfo();
-  Services.obs.notifyObservers(null, DISTRIBUTION_CUSTOMIZATION_COMPLETE_TOPIC, null);
+  Services.obs.notifyObservers(null, DISTRIBUTION_CUSTOMIZATION_COMPLETE_TOPIC);
 
   environmentData = TelemetryEnvironment.currentEnvironment;
   checkEnvironmentData(environmentData);
@@ -938,6 +953,24 @@ add_task(function* test_prefWatch_prefReset() {
   TelemetryEnvironment.unregisterChangeListener("testWatchPrefs_reset");
 });
 
+add_task(function* test_prefDefault() {
+  const PREF_TEST = "toolkit.telemetry.test.defaultpref1";
+  const expectedValue = "some-test-value";
+
+  const PREFS_TO_WATCH = new Map([
+    [PREF_TEST, {what: TelemetryEnvironment.RECORD_DEFAULTPREF_VALUE}],
+  ]);
+
+  // Set the preference to a default value.
+  Services.prefs.getDefaultBranch(null).setCharPref(PREF_TEST, expectedValue);
+
+  // Set the Environment preferences to watch.
+  // We're not watching, but this function does the setup we need.
+  TelemetryEnvironment.testWatchPreferences(PREFS_TO_WATCH);
+
+  Assert.strictEqual(TelemetryEnvironment.currentEnvironment.settings.userPrefs[PREF_TEST], expectedValue);
+});
+
 add_task(function* test_addonsWatch_InterestingChange() {
   const ADDON_INSTALL_URL = gDataRoot + "restartless.xpi";
   const ADDON_ID = "tel-restartless-xpi@tests.mozilla.org";
@@ -1010,7 +1043,7 @@ add_task(function* test_pluginsWatch_Add() {
   };
   TelemetryEnvironment.registerChangeListener("testWatchPlugins_Add", callback);
 
-  Services.obs.notifyObservers(null, PLUGIN_UPDATED_TOPIC, null);
+  Services.obs.notifyObservers(null, PLUGIN_UPDATED_TOPIC);
   yield deferred.promise;
 
   Assert.equal(TelemetryEnvironment.currentEnvironment.addons.activePlugins.length, 2);
@@ -1041,7 +1074,7 @@ add_task(function* test_pluginsWatch_Remove() {
   };
   TelemetryEnvironment.registerChangeListener("testWatchPlugins_Remove", callback);
 
-  Services.obs.notifyObservers(null, PLUGIN_UPDATED_TOPIC, null);
+  Services.obs.notifyObservers(null, PLUGIN_UPDATED_TOPIC);
   yield deferred.promise;
 
   TelemetryEnvironment.unregisterChangeListener("testWatchPlugins_Remove");
@@ -1159,8 +1192,7 @@ add_task(function* test_addonsAndPlugins() {
   Assert.ok(targetPlugin.mimeTypes.find(m => m == PLUGIN_MIME_TYPE2));
   Assert.ok(!targetPlugin.mimeTypes.find(m => m == "Not There."));
 
-  let personaId = (gIsGonk) ? null : PERSONA_ID;
-  Assert.equal(data.addons.persona, personaId, "The correct Persona Id must be reported.");
+  Assert.equal(data.addons.persona, PERSONA_ID, "The correct Persona Id must be reported.");
 
   // Uninstall the addon.
   yield AddonManagerTesting.uninstallAddonByID(ADDON_ID);
@@ -1362,7 +1394,7 @@ add_task(function* test_defaultSearchEngine() {
   data = TelemetryEnvironment.currentEnvironment;
   checkEnvironmentData(data);
   Assert.equal(data.settings.defaultSearchEngine, "NONE");
-  Assert.deepEqual(data.settings.defaultSearchEngineData, {name:"NONE"});
+  Assert.deepEqual(data.settings.defaultSearchEngineData, {name: "NONE"});
 
   // Add a new search engine (this will have no engine identifier).
   const SEARCH_ENGINE_ID = "telemetry_default";
@@ -1408,7 +1440,7 @@ add_task(function* test_defaultSearchEngine() {
       } catch (ex) {
         reject(ex);
       }
-    }, "browser-search-engine-modified", false);
+    }, "browser-search-engine-modified");
     Services.search.addEngine("file://" + do_get_cwd().path + "/engine.xml",
                               null, null, false);
   });
@@ -1418,7 +1450,7 @@ add_task(function* test_defaultSearchEngine() {
   data = TelemetryEnvironment.currentEnvironment;
   checkEnvironmentData(data);
   Assert.deepEqual(data.settings.defaultSearchEngineData,
-                   {"name":"engine-telemetry", "loadPath":"[other]/engine.xml", "origin":"verified"});
+                   {"name": "engine-telemetry", "loadPath": "[other]/engine.xml", "origin": "verified"});
 
   // Now break this engine's load path hash.
   promise = new Promise(resolve => {
@@ -1502,6 +1534,148 @@ add_task(function* test_osstrings() {
   // Clean up.
   SysInfo.overrides = {};
   yield TelemetryEnvironment.testCleanRestart().onInitialized();
+});
+
+add_task(function* test_experimentsAPI() {
+  const EXPERIMENT1 = "experiment-1";
+  const EXPERIMENT1_BRANCH = "nice-branch";
+  const EXPERIMENT2 = "experiment-2";
+  const EXPERIMENT2_BRANCH = "other-branch";
+
+  let checkExperiment = (id, branch, environmentData) => {
+    Assert.ok("experiments" in environmentData,
+              "The current environment must report the experiment annotations.");
+    Assert.ok(id in environmentData.experiments,
+              "The experiments section must contain the expected experiment id.");
+    Assert.equal(environmentData.experiments[id].branch, branch,
+                 "The experiment branch must be correct.");
+  };
+
+  // Clean the environment and check that it's reporting the correct info.
+  yield TelemetryEnvironment.testCleanRestart().onInitialized();
+  let data = TelemetryEnvironment.currentEnvironment;
+  checkEnvironmentData(data);
+
+  // We don't expect the experiments section to be there if no annotation
+  // happened.
+  Assert.ok(!("experiments" in data),
+            "No experiments section must be reported if nothing was annotated.");
+
+  // Add a change listener and add an experiment annotation.
+  let deferred = PromiseUtils.defer();
+  TelemetryEnvironment.registerChangeListener("test_experimentsAPI", (reason, env) => {
+    deferred.resolve(env);
+  });
+  TelemetryEnvironment.setExperimentActive(EXPERIMENT1, EXPERIMENT1_BRANCH);
+  let eventEnvironmentData = yield deferred.promise;
+
+  // Check that the old environment does not contain the experiments.
+  checkEnvironmentData(eventEnvironmentData);
+  Assert.ok(!("experiments" in eventEnvironmentData),
+            "No experiments section must be reported in the old environment.");
+
+  // Check that the current environment contains the right experiment.
+  data = TelemetryEnvironment.currentEnvironment;
+  checkEnvironmentData(data);
+  checkExperiment(EXPERIMENT1, EXPERIMENT1_BRANCH, data);
+
+  TelemetryEnvironment.unregisterChangeListener("test_experimentsAPI");
+
+  // Add a second annotation and check that both experiments are there.
+  deferred = PromiseUtils.defer();
+  TelemetryEnvironment.registerChangeListener("test_experimentsAPI2", (reason, env) => {
+    deferred.resolve(env);
+  });
+  TelemetryEnvironment.setExperimentActive(EXPERIMENT2, EXPERIMENT2_BRANCH);
+  eventEnvironmentData = yield deferred.promise;
+
+  // Check that the current environment contains both the experiment.
+  data = TelemetryEnvironment.currentEnvironment;
+  checkEnvironmentData(data);
+  checkExperiment(EXPERIMENT1, EXPERIMENT1_BRANCH, data);
+  checkExperiment(EXPERIMENT2, EXPERIMENT2_BRANCH, data);
+
+  // The previous environment should only contain the first experiment.
+  checkExperiment(EXPERIMENT1, EXPERIMENT1_BRANCH, eventEnvironmentData);
+  Assert.ok(!(EXPERIMENT2 in eventEnvironmentData),
+            "The old environment must not contain the new experiment annotation.");
+
+  TelemetryEnvironment.unregisterChangeListener("test_experimentsAPI2");
+
+  // Check that removing an unknown experiment annotation does not trigger
+  // a notification.
+  TelemetryEnvironment.registerChangeListener("test_experimentsAPI3", () => {
+    Assert.ok(false, "Removing an unknown experiment annotation must not trigger a change.");
+  });
+  TelemetryEnvironment.setExperimentInactive("unknown-experiment-id");
+  // Also make sure that passing non-string parameters arguments doesn't throw nor
+  // trigger a notification.
+  TelemetryEnvironment.setExperimentActive({}, "some-branch");
+  TelemetryEnvironment.setExperimentActive("some-id", {});
+  TelemetryEnvironment.unregisterChangeListener("test_experimentsAPI3");
+
+  // Check that removing a known experiment leaves the other in place and triggers
+  // a change.
+  deferred = PromiseUtils.defer();
+  TelemetryEnvironment.registerChangeListener("test_experimentsAPI4", (reason, env) => {
+    deferred.resolve(env);
+  });
+  TelemetryEnvironment.setExperimentInactive(EXPERIMENT1);
+  eventEnvironmentData = yield deferred.promise;
+
+  // Check that the current environment contains just the second experiment.
+  data = TelemetryEnvironment.currentEnvironment;
+  checkEnvironmentData(data);
+  Assert.ok(!(EXPERIMENT1 in data),
+            "The current environment must not contain the removed experiment annotation.");
+  checkExperiment(EXPERIMENT2, EXPERIMENT2_BRANCH, data);
+
+  // The previous environment should contain both annotations.
+  checkExperiment(EXPERIMENT1, EXPERIMENT1_BRANCH, eventEnvironmentData);
+  checkExperiment(EXPERIMENT2, EXPERIMENT2_BRANCH, eventEnvironmentData);
+
+  TelemetryEnvironment.unregisterChangeListener("test_experimentsAPI5");
+});
+
+add_task(function* test_experimentsAPI_limits() {
+  const EXPERIMENT = "experiment-2-experiment-2-experiment-2-experiment-2-experiment-2" +
+                     "-experiment-2-experiment-2-experiment-2-experiment-2";
+  const EXPERIMENT_BRANCH = "other-branch-other-branch-other-branch-other-branch-other" +
+                            "-branch-other-branch-other-branch-other-branch-other-branch";
+  const EXPERIMENT_TRUNCATED = EXPERIMENT.substring(0, 100);
+  const EXPERIMENT_BRANCH_TRUNCATED = EXPERIMENT_BRANCH.substring(0, 100);
+
+  // Clean the environment and check that it's reporting the correct info.
+  yield TelemetryEnvironment.testCleanRestart().onInitialized();
+  let data = TelemetryEnvironment.currentEnvironment;
+  checkEnvironmentData(data);
+
+  // We don't expect the experiments section to be there if no annotation
+  // happened.
+  Assert.ok(!("experiments" in data),
+            "No experiments section must be reported if nothing was annotated.");
+
+  // Add a change listener and wait for the annotation to happen.
+  let deferred = PromiseUtils.defer();
+  TelemetryEnvironment.registerChangeListener("test_experimentsAPI",
+                                              () => deferred.resolve());
+  TelemetryEnvironment.setExperimentActive(EXPERIMENT, EXPERIMENT_BRANCH);
+  yield deferred.promise;
+
+  // Check that the current environment contains the truncated values
+  // for the experiment data.
+  data = TelemetryEnvironment.currentEnvironment;
+  checkEnvironmentData(data);
+  Assert.ok("experiments" in data,
+            "The environment must contain an experiments section.");
+  Assert.ok(EXPERIMENT_TRUNCATED in data.experiments,
+            "The experiments must be reporting the truncated id.");
+  Assert.ok(!(EXPERIMENT in data.experiments),
+            "The experiments must not be reporting the full id.");
+  Assert.equal(EXPERIMENT_BRANCH_TRUNCATED, data.experiments[EXPERIMENT_TRUNCATED].branch,
+            "The experiments must be reporting the truncated branch.");
+
+  TelemetryEnvironment.unregisterChangeListener("test_experimentsAPI");
 });
 
 add_task(function* test_environmentShutdown() {

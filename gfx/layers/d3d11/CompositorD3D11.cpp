@@ -15,7 +15,10 @@
 #include "mozilla/gfx/GPUParent.h"
 #include "mozilla/layers/ImageHost.h"
 #include "mozilla/layers/ContentHost.h"
+#include "mozilla/layers/Diagnostics.h"
+#include "mozilla/layers/DiagnosticsD3D11.h"
 #include "mozilla/layers/Effects.h"
+#include "mozilla/layers/HelpersD3D11.h"
 #include "nsWindowsHelpers.h"
 #include "gfxPrefs.h"
 #include "gfxConfig.h"
@@ -30,9 +33,9 @@
 #include "BlendShaderConstants.h"
 
 #include "D3D11ShareHandleImage.h"
-#include "D3D9SurfaceImage.h"
 
-#include <dxgi1_2.h>
+#include <VersionHelpers.h> // For IsWindows8OrGreater
+#include <winsdkver.h>
 
 namespace mozilla {
 
@@ -55,6 +58,8 @@ static const GUID sLayerManagerCount =
 { 0x88041664, 0xc835, 0x4aa8, { 0xac, 0xb8, 0x7e, 0xc8, 0x32, 0x35, 0x7e, 0xd8 } };
 
 const FLOAT sBlendFactor[] = { 0, 0, 0, 0 };
+
+static const size_t kInitialMaximumTriangles = 64;
 
 namespace TexSlot {
   static const int RGB = 0;
@@ -84,14 +89,22 @@ struct DeviceAttachmentsD3D11
           PixelShaderArray;
 
   RefPtr<ID3D11InputLayout> mInputLayout;
+  RefPtr<ID3D11InputLayout> mDynamicInputLayout;
+
   RefPtr<ID3D11Buffer> mVertexBuffer;
+  RefPtr<ID3D11Buffer> mDynamicVertexBuffer;
 
   VertexShaderArray mVSQuadShader;
   VertexShaderArray mVSQuadBlendShader;
+
+  VertexShaderArray mVSDynamicShader;
+  VertexShaderArray mVSDynamicBlendShader;
+
   PixelShaderArray mSolidColorShader;
   PixelShaderArray mRGBAShader;
   PixelShaderArray mRGBShader;
   PixelShaderArray mYCbCrShader;
+  PixelShaderArray mNV12Shader;
   PixelShaderArray mComponentAlphaShader;
   PixelShaderArray mBlendShader;
   RefPtr<ID3D11Buffer> mPSConstantBuffer;
@@ -99,6 +112,7 @@ struct DeviceAttachmentsD3D11
   RefPtr<ID3D11RasterizerState> mRasterizerState;
   RefPtr<ID3D11SamplerState> mLinearSamplerState;
   RefPtr<ID3D11SamplerState> mPointSamplerState;
+
   RefPtr<ID3D11BlendState> mPremulBlendState;
   RefPtr<ID3D11BlendState> mNonPremulBlendState;
   RefPtr<ID3D11BlendState> mComponentBlendState;
@@ -150,6 +164,8 @@ CompositorD3D11::CompositorD3D11(CompositorBridgeParent* aParent, widget::Compos
   , mDisableSequenceForNextFrame(false)
   , mAllowPartialPresents(false)
   , mVerifyBuffersFailed(false)
+  , mIsDoubleBuffered(false)
+  , mMaximumTriangles(kInitialMaximumTriangles)
 {
 }
 
@@ -178,6 +194,65 @@ CompositorD3D11::~CompositorD3D11()
   }
 }
 
+
+template<typename VertexType>
+void
+CompositorD3D11::SetVertexBuffer(ID3D11Buffer* aBuffer)
+{
+  UINT size = sizeof(VertexType);
+  UINT offset = 0;
+  mContext->IASetVertexBuffers(0, 1, &aBuffer, &size, &offset);
+}
+
+bool
+CompositorD3D11::SupportsLayerGeometry() const
+{
+  return gfxPrefs::D3D11LayerGeometry();
+}
+
+bool
+CompositorD3D11::UpdateDynamicVertexBuffer(const nsTArray<gfx::TexturedTriangle>& aTriangles)
+{
+  HRESULT hr;
+
+  // Resize the dynamic vertex buffer if needed.
+  if (aTriangles.Length() > mMaximumTriangles) {
+    CD3D11_BUFFER_DESC bufferDesc(sizeof(TexturedVertex) * aTriangles.Length() * 3,
+                                  D3D11_BIND_VERTEX_BUFFER,
+                                  D3D11_USAGE_DYNAMIC,
+                                  D3D11_CPU_ACCESS_WRITE);
+
+    hr = mDevice->CreateBuffer(&bufferDesc, nullptr,
+                               getter_AddRefs(mAttachments->mDynamicVertexBuffer));
+
+    if (Failed(hr, "resize dynamic vertex buffer")) {
+      return false;
+    }
+
+    mMaximumTriangles = aTriangles.Length();
+  }
+
+  MOZ_ASSERT(mMaximumTriangles >= aTriangles.Length());
+
+  D3D11_MAPPED_SUBRESOURCE resource {};
+  hr = mContext->Map(mAttachments->mDynamicVertexBuffer, 0,
+                     D3D11_MAP_WRITE_DISCARD, 0, &resource);
+
+  if (Failed(hr, "map dynamic vertex buffer")) {
+    return false;
+  }
+
+  const nsTArray<TexturedVertex> vertices =
+    TexturedTrianglesToVertexArray(aTriangles);
+
+  memcpy(resource.pData, vertices.Elements(),
+         vertices.Length() * sizeof(TexturedVertex));
+
+  mContext->Unmap(mAttachments->mDynamicVertexBuffer, 0);
+
+  return true;
+}
+
 bool
 CompositorD3D11::Initialize(nsCString* const out_failureReason)
 {
@@ -199,6 +274,7 @@ CompositorD3D11::Initialize(nsCString* const out_failureReason)
     return false;
   }
 
+  mDiagnostics = MakeUnique<DiagnosticsD3D11>(mDevice, mContext);
   mFeatureLevel = mDevice->GetFeatureLevel();
 
   mHwnd = mWidget->AsWindows()->GetHwnd();
@@ -245,8 +321,37 @@ CompositorD3D11::Initialize(nsCString* const out_failureReason)
     data.pSysMem = (void*)vertices;
 
     hr = mDevice->CreateBuffer(&bufferDesc, &data, getter_AddRefs(mAttachments->mVertexBuffer));
-
     if (Failed(hr, "create vertex buffer")) {
+      *out_failureReason = "FEATURE_FAILURE_D3D11_VERTEX_BUFFER";
+      return false;
+    }
+
+    // Create a second input layout for layers with dynamic geometry.
+    D3D11_INPUT_ELEMENT_DESC dynamicLayout[] =
+    {
+      { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+      { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
+    hr = mDevice->CreateInputLayout(dynamicLayout,
+                                    sizeof(dynamicLayout) / sizeof(D3D11_INPUT_ELEMENT_DESC),
+                                    LayerDynamicVS,
+                                    sizeof(LayerDynamicVS),
+                                    getter_AddRefs(mAttachments->mDynamicInputLayout));
+
+    if (Failed(hr, "CreateInputLayout")) {
+      *out_failureReason = "FEATURE_FAILURE_D3D11_INPUT_LAYOUT";
+      return false;
+    }
+
+    // Allocate memory for the dynamic vertex buffer.
+    bufferDesc = CD3D11_BUFFER_DESC(sizeof(TexturedVertex) * mMaximumTriangles * 3,
+                                    D3D11_BIND_VERTEX_BUFFER,
+                                    D3D11_USAGE_DYNAMIC,
+                                    D3D11_CPU_ACCESS_WRITE);
+
+    hr = mDevice->CreateBuffer(&bufferDesc, nullptr, getter_AddRefs(mAttachments->mDynamicVertexBuffer));
+    if (Failed(hr, "create dynamic vertex buffer")) {
       *out_failureReason = "FEATURE_FAILURE_D3D11_VERTEX_BUFFER";
       return false;
     }
@@ -373,36 +478,82 @@ CompositorD3D11::Initialize(nsCString* const out_failureReason)
     RefPtr<IDXGIFactory> dxgiFactory;
     dxgiAdapter->GetParent(IID_PPV_ARGS(dxgiFactory.StartAssignment()));
 
-    DXGI_SWAP_CHAIN_DESC swapDesc;
-    ::ZeroMemory(&swapDesc, sizeof(swapDesc));
-    swapDesc.BufferDesc.Width = 0;
-    swapDesc.BufferDesc.Height = 0;
-    swapDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    swapDesc.BufferDesc.RefreshRate.Numerator = 60;
-    swapDesc.BufferDesc.RefreshRate.Denominator = 1;
-    swapDesc.SampleDesc.Count = 1;
-    swapDesc.SampleDesc.Quality = 0;
-    swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapDesc.BufferCount = 1;
-    swapDesc.OutputWindow = mHwnd;
-    swapDesc.Windowed = TRUE;
-    swapDesc.Flags = 0;
-    swapDesc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
+    RefPtr<IDXGIFactory2> dxgiFactory2;
+    hr = dxgiFactory->QueryInterface((IDXGIFactory2**)getter_AddRefs(dxgiFactory2));
+
+#if (_WIN32_WINDOWS_MAXVER >= 0x0A00)
+    if (gfxPrefs::Direct3D11UseDoubleBuffering() && SUCCEEDED(hr) && dxgiFactory2 && IsWindows10OrGreater()) {
+      // DXGI_SCALING_NONE is not available on Windows 7 with Platform Update.
+      // This looks awful for things like the awesome bar and browser window resizing
+      // so we don't use a flip buffer chain here. When using EFFECT_SEQUENTIAL
+      // it looks like windows doesn't stretch the surface when resizing.
+      // We chose not to run this before Windows 10 because it appears sometimes this breaks
+      // our ability to test ASAP compositing.
+      RefPtr<IDXGISwapChain1> swapChain;
+
+      DXGI_SWAP_CHAIN_DESC1 swapDesc;
+      ::ZeroMemory(&swapDesc, sizeof(swapDesc));
+      swapDesc.Width = 0;
+      swapDesc.Height = 0;
+      swapDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      swapDesc.SampleDesc.Count = 1;
+      swapDesc.SampleDesc.Quality = 0;
+      swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+      swapDesc.BufferCount = 2;
+      swapDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+      swapDesc.Scaling = DXGI_SCALING_NONE;
+      mIsDoubleBuffered = true;
+      swapDesc.Flags = 0;
+
+      /**
+      * Create a swap chain, this swap chain will contain the backbuffer for
+      * the window we draw to. The front buffer is the full screen front
+      * buffer.
+      */
+      hr = dxgiFactory2->CreateSwapChainForHwnd(mDevice, mHwnd, &swapDesc, nullptr, nullptr, getter_AddRefs(swapChain));
+      if (Failed(hr, "create swap chain")) {
+        *out_failureReason = "FEATURE_FAILURE_D3D11_SWAP_CHAIN";
+        return false;
+      }
+
+      DXGI_RGBA color = { 1.0f, 1.0f, 1.0f, 1.0f };
+      swapChain->SetBackgroundColor(&color);
+
+      mSwapChain = swapChain;
+    } else
+#endif
+    {
+      DXGI_SWAP_CHAIN_DESC swapDesc;
+      ::ZeroMemory(&swapDesc, sizeof(swapDesc));
+      swapDesc.BufferDesc.Width = 0;
+      swapDesc.BufferDesc.Height = 0;
+      swapDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      swapDesc.BufferDesc.RefreshRate.Numerator = 60;
+      swapDesc.BufferDesc.RefreshRate.Denominator = 1;
+      swapDesc.SampleDesc.Count = 1;
+      swapDesc.SampleDesc.Quality = 0;
+      swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+      swapDesc.BufferCount = 1;
+      swapDesc.OutputWindow = mHwnd;
+      swapDesc.Windowed = TRUE;
+      swapDesc.Flags = 0;
+      swapDesc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
 
 
-    /**
-     * Create a swap chain, this swap chain will contain the backbuffer for
-     * the window we draw to. The front buffer is the full screen front
-     * buffer.
-     */
-    hr = dxgiFactory->CreateSwapChain(dxgiDevice, &swapDesc, getter_AddRefs(mSwapChain));
-    if (Failed(hr, "create swap chain")) {
-      *out_failureReason = "FEATURE_FAILURE_D3D11_SWAP_CHAIN";
-      return false;
+      /**
+      * Create a swap chain, this swap chain will contain the backbuffer for
+      * the window we draw to. The front buffer is the full screen front
+      * buffer.
+      */
+      hr = dxgiFactory->CreateSwapChain(dxgiDevice, &swapDesc, getter_AddRefs(mSwapChain));
+      if (Failed(hr, "create swap chain")) {
+        *out_failureReason = "FEATURE_FAILURE_D3D11_SWAP_CHAIN";
+        return false;
+      }
     }
 
     // We need this because we don't want DXGI to respond to Alt+Enter.
-    dxgiFactory->MakeWindowAssociation(swapDesc.OutputWindow,
+    dxgiFactory->MakeWindowAssociation(mHwnd,
                                        DXGI_MWA_NO_WINDOW_CHANGES);
   }
 
@@ -633,8 +784,14 @@ CompositorD3D11::SetRenderTarget(CompositingRenderTarget* aRenderTarget)
 }
 
 ID3D11PixelShader*
-CompositorD3D11::GetPSForEffect(Effect* aEffect, MaskType aMaskType)
+CompositorD3D11::GetPSForEffect(Effect* aEffect,
+                                const bool aUseBlendShader,
+                                const MaskType aMaskType)
 {
+  if (aUseBlendShader) {
+    return mAttachments->mBlendShader[MaskType::MaskNone];
+  }
+
   switch (aEffect->mType) {
   case EffectTypes::SOLID_COLOR:
     return mAttachments->mSolidColorShader[aMaskType];
@@ -646,6 +803,8 @@ CompositorD3D11::GetPSForEffect(Effect* aEffect, MaskType aMaskType)
            ? mAttachments->mRGBAShader[aMaskType]
            : mAttachments->mRGBShader[aMaskType];
   }
+  case EffectTypes::NV12:
+    return mAttachments->mNV12Shader[aMaskType];
   case EffectTypes::YCBCR:
     return mAttachments->mYCbCrShader[aMaskType];
   case EffectTypes::COMPONENT_ALPHA:
@@ -659,6 +818,10 @@ CompositorD3D11::GetPSForEffect(Effect* aEffect, MaskType aMaskType)
 void
 CompositorD3D11::ClearRect(const gfx::Rect& aRect)
 {
+  if (aRect.IsEmpty()) {
+    return;
+  }
+
   mContext->OMSetBlendState(mAttachments->mDisabledBlendState, sBlendFactor, 0xFFFFFFFF);
 
   Matrix4x4 identity;
@@ -691,6 +854,7 @@ CompositorD3D11::ClearRect(const gfx::Rect& aRect)
 
   mContext->Draw(4, 0);
 
+  // Restore the default blend state.
   mContext->OMSetBlendState(mAttachments->mPremulBlendState, sBlendFactor, 0xFFFFFFFF);
 }
 
@@ -719,6 +883,8 @@ EffectToBlendLayerType(Effect* aEffect)
     return PS_LAYER_RGBA;
   case EffectTypes::YCBCR:
     return PS_LAYER_YCBCR;
+  case EffectTypes::NV12:
+    return PS_LAYER_NV12;
   default:
     MOZ_ASSERT_UNREACHABLE("blending not supported for this layer type");
     return 0;
@@ -732,6 +898,116 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
                           gfx::Float aOpacity,
                           const gfx::Matrix4x4& aTransform,
                           const gfx::Rect& aVisibleRect)
+{
+  DrawGeometry(aRect, aRect, aClipRect, aEffectChain,
+               aOpacity, aTransform, aVisibleRect);
+}
+
+void
+CompositorD3D11::DrawTriangles(const nsTArray<gfx::TexturedTriangle>& aTriangles,
+                               const gfx::Rect& aRect,
+                               const gfx::IntRect& aClipRect,
+                               const EffectChain& aEffectChain,
+                               gfx::Float aOpacity,
+                               const gfx::Matrix4x4& aTransform,
+                               const gfx::Rect& aVisibleRect)
+{
+  DrawGeometry(aTriangles, aRect, aClipRect, aEffectChain,
+               aOpacity, aTransform, aVisibleRect);
+}
+
+void
+CompositorD3D11::PrepareDynamicVertexBuffer()
+{
+  mContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  mContext->IASetInputLayout(mAttachments->mDynamicInputLayout);
+  SetVertexBuffer<TexturedVertex>(mAttachments->mDynamicVertexBuffer);
+}
+
+void
+CompositorD3D11::PrepareStaticVertexBuffer()
+{
+  mContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+  mContext->IASetInputLayout(mAttachments->mInputLayout);
+  SetVertexBuffer<Vertex>(mAttachments->mVertexBuffer);
+}
+
+void
+CompositorD3D11::Draw(const nsTArray<gfx::TexturedTriangle>& aTriangles,
+                      const gfx::Rect*)
+{
+  if (!UpdateConstantBuffers()) {
+    NS_WARNING("Failed to update shader constant buffers");
+    return;
+  }
+
+  PrepareDynamicVertexBuffer();
+
+  if (!UpdateDynamicVertexBuffer(aTriangles)) {
+    NS_WARNING("Failed to update shader dynamic buffers");
+    return;
+  }
+
+  mContext->Draw(3 * aTriangles.Length(), 0);
+
+  PrepareStaticVertexBuffer();
+}
+
+void
+CompositorD3D11::Draw(const gfx::Rect& aRect,
+                      const gfx::Rect* aTexCoords)
+{
+  Rect layerRects[4] = { aRect };
+  Rect textureRects[4] = { };
+  size_t rects = 1;
+
+  if (aTexCoords) {
+    rects = DecomposeIntoNoRepeatRects(aRect, *aTexCoords,
+                                       &layerRects, &textureRects);
+  }
+
+  for (size_t i = 0; i < rects; i++) {
+    mVSConstants.layerQuad = layerRects[i];
+    mVSConstants.textureCoords = textureRects[i];
+
+    if (!UpdateConstantBuffers()) {
+      NS_WARNING("Failed to update shader constant buffers");
+      break;
+    }
+
+    mContext->Draw(4, 0);
+  }
+}
+
+ID3D11VertexShader*
+CompositorD3D11::GetVSForGeometry(const nsTArray<gfx::TexturedTriangle>& aTriangles,
+                                  const bool aUseBlendShaders,
+                                  const MaskType aMaskType)
+{
+  return aUseBlendShaders
+    ? mAttachments->mVSDynamicBlendShader[aMaskType]
+    : mAttachments->mVSDynamicShader[aMaskType];
+}
+
+ID3D11VertexShader*
+CompositorD3D11::GetVSForGeometry(const gfx::Rect& aRect,
+                                  const bool aUseBlendShaders,
+                                  const MaskType aMaskType)
+{
+  return aUseBlendShaders
+    ? mAttachments->mVSQuadBlendShader[aMaskType]
+    : mAttachments->mVSQuadShader[aMaskType];
+}
+
+template<typename Geometry>
+void
+CompositorD3D11::DrawGeometry(const Geometry& aGeometry,
+                              const gfx::Rect& aRect,
+                              const gfx::IntRect& aClipRect,
+                              const EffectChain& aEffectChain,
+                              gfx::Float aOpacity,
+                              const gfx::Matrix4x4& aTransform,
+                              const gfx::Rect& aVisibleRect)
 {
   if (mCurrentClip.IsEmpty()) {
     return;
@@ -768,8 +1044,14 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
     const gfx::Matrix4x4& maskTransform = maskEffect->mMaskTransform;
     NS_ASSERTION(maskTransform.Is2D(), "How did we end up with a 3D transform here?!");
     Rect bounds = Rect(Point(), Size(maskEffect->mSize));
+    bounds = maskTransform.As2D().TransformBounds(bounds);
 
-    mVSConstants.maskQuad = maskTransform.As2D().TransformBounds(bounds);
+    Matrix4x4 transform;
+    transform._11 = 1.0f / bounds.width;
+    transform._22 = 1.0f / bounds.height;
+    transform._41 = float(-bounds.x) / bounds.width;
+    transform._42 = float(-bounds.y) / bounds.height;
+    memcpy(mVSConstants.maskTransform, &transform._11, 64);
   }
 
   D3D11_RECT scissor;
@@ -788,9 +1070,7 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
   scissor.top = clipRect.y;
   scissor.bottom = clipRect.YMost();
 
-  RefPtr<ID3D11VertexShader> vertexShader = mAttachments->mVSQuadShader[maskType];
-  RefPtr<ID3D11PixelShader> pixelShader = GetPSForEffect(aEffectChain.mPrimaryEffect, maskType);
-
+  bool useBlendShaders = false;
   RefPtr<ID3D11Texture2D> mixBlendBackdrop;
   gfx::CompositionOp blendMode = gfx::CompositionOp::OP_OVER;
   if (aEffectChain.mSecondaryEffects[EffectTypes::BLEND_MODE]) {
@@ -808,8 +1088,7 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
       if (CopyBackdrop(rect, &mixBlendBackdrop, &srv) &&
           mAttachments->InitBlendShaders())
       {
-        vertexShader = mAttachments->mVSQuadBlendShader[maskType];
-        pixelShader = mAttachments->mBlendShader[MaskType::MaskNone];
+        useBlendShaders = true;
 
         ID3D11ShaderResourceView* srView = srv.get();
         mContext->PSSetShaderResources(TexSlot::Backdrop, 1, &srView);
@@ -825,7 +1104,13 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
   }
 
   mContext->RSSetScissorRects(1, &scissor);
-  mContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+
+  RefPtr<ID3D11VertexShader> vertexShader =
+    GetVSForGeometry(aGeometry, useBlendShaders, maskType);
+
+  RefPtr<ID3D11PixelShader> pixelShader =
+    GetPSForEffect(aEffectChain.mPrimaryEffect, useBlendShaders, maskType);
+
   mContext->VSSetShader(vertexShader, nullptr, 0);
   mContext->PSSetShader(pixelShader, nullptr, 0);
 
@@ -867,6 +1152,47 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
       SetSamplerForSamplingFilter(texturedEffect->mSamplingFilter);
     }
     break;
+  case EffectTypes::NV12:
+    {
+      TexturedEffect* texturedEffect =
+        static_cast<TexturedEffect*>(aEffectChain.mPrimaryEffect.get());
+
+      pTexCoordRect = &texturedEffect->mTextureCoords;
+
+      TextureSourceD3D11* source = texturedEffect->mTexture->AsSourceD3D11();
+      if (!source) {
+        NS_WARNING("Missing texture source!");
+        return;
+      }
+
+      RefPtr<ID3D11Texture2D> texture = source->GetD3D11Texture();
+      if (!texture) {
+        NS_WARNING("No texture found in texture source!");
+      }
+
+      // Might want to cache these for efficiency.
+      RefPtr<ID3D11ShaderResourceView> srViewY;
+      RefPtr<ID3D11ShaderResourceView> srViewCbCr;
+      D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc =
+        CD3D11_SHADER_RESOURCE_VIEW_DESC(D3D11_SRV_DIMENSION_TEXTURE2D,
+                                         DXGI_FORMAT_R8_UNORM);
+      mDevice->CreateShaderResourceView(texture,
+                                        &srvDesc,
+                                        getter_AddRefs(srViewY));
+      srvDesc.Format = DXGI_FORMAT_R8G8_UNORM;
+      mDevice->CreateShaderResourceView(texture,
+                                        &srvDesc,
+                                        getter_AddRefs(srViewCbCr));
+
+      ID3D11ShaderResourceView* views[] = { srViewY, srViewCbCr };
+      mContext->PSSetShaderResources(TexSlot::Y, 2, views);
+
+      const float* yuvToRgb = gfxUtils::YuvToRgbMatrix4x3RowMajor(YUVColorSpace::BT601);
+      memcpy(&mPSConstants.yuvColorMatrix, yuvToRgb, sizeof(mPSConstants.yuvColorMatrix));
+
+      SetSamplerForSamplingFilter(texturedEffect->mSamplingFilter);
+    }
+    break;
   case EffectTypes::YCBCR: {
       EffectYCbCr* ycbcrEffect =
         static_cast<EffectYCbCr*>(aEffectChain.mPrimaryEffect.get());
@@ -889,7 +1215,7 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
         return;
       }
 
-      float* yuvToRgb = gfxUtils::Get4x3YuvColorMatrix(ycbcrEffect->mYUVColorSpace);
+      const float* yuvToRgb = gfxUtils::YuvToRgbMatrix4x3RowMajor(ycbcrEffect->mYUVColorSpace);
       memcpy(&mPSConstants.yuvColorMatrix, yuvToRgb, sizeof(mPSConstants.yuvColorMatrix));
 
       TextureSourceD3D11* sourceY  = source->GetSubSource(Y)->AsSourceD3D11();
@@ -935,32 +1261,7 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
     return;
   }
 
-  if (pTexCoordRect) {
-    Rect layerRects[4];
-    Rect textureRects[4];
-    size_t rects = DecomposeIntoNoRepeatRects(aRect,
-                                              *pTexCoordRect,
-                                              &layerRects,
-                                              &textureRects);
-    for (size_t i = 0; i < rects; i++) {
-      mVSConstants.layerQuad = layerRects[i];
-      mVSConstants.textureCoords = textureRects[i];
-
-      if (!UpdateConstantBuffers()) {
-        NS_WARNING("Failed to update shader constant buffers");
-        break;
-      }
-      mContext->Draw(4, 0);
-    }
-  } else {
-    mVSConstants.layerQuad = aRect;
-
-    if (!UpdateConstantBuffers()) {
-      NS_WARNING("Failed to update shader constant buffers");
-    } else {
-      mContext->Draw(4, 0);
-    }
-  }
+  Draw(aGeometry, pTexCoordRect);
 
   if (restoreBlendMode) {
     mContext->OMSetBlendState(mAttachments->mPremulBlendState, sBlendFactor, 0xFFFFFFFF);
@@ -1003,13 +1304,7 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
 
   LayoutDeviceIntSize oldSize = mSize;
 
-  // Failed to create a render target or the view.
-  if (!UpdateRenderTarget() || !mDefaultRT || !mDefaultRT->mRTView ||
-      mSize.width <= 0 || mSize.height <= 0) {
-    ReadUnlockTextures();
-    *aRenderBoundsOut = IntRect();
-    return;
-  }
+  EnsureSize();
 
   IntRect intRect = IntRect(IntPoint(0, 0), mSize.ToUnknownSize());
   // Sometimes the invalid region is larger than we want to draw.
@@ -1034,15 +1329,21 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
     return;
   }
 
-  mContext->IASetInputLayout(mAttachments->mInputLayout);
+  PrepareStaticVertexBuffer();
 
-  ID3D11Buffer* buffer = mAttachments->mVertexBuffer;
-  UINT size = sizeof(Vertex);
-  UINT offset = 0;
-  mContext->IASetVertexBuffers(0, 1, &buffer, &size, &offset);
+  mBackBufferInvalid.Or(mBackBufferInvalid, invalidRegionSafe);
+  if (mIsDoubleBuffered) {
+    mFrontBufferInvalid.Or(mFrontBufferInvalid, invalidRegionSafe);
+  }
 
-  mInvalidRect = IntRect(invalidRect.x, invalidRect.y, invalidRect.width, invalidRect.height);
-  mInvalidRegion = invalidRegionSafe;
+  // We have to call UpdateRenderTarget after we've determined the invalid regi
+  // Failed to create a render target or the view.
+  if (!UpdateRenderTarget() || !mDefaultRT || !mDefaultRT->mRTView ||
+    mSize.width <= 0 || mSize.height <= 0) {
+    ReadUnlockTextures();
+    *aRenderBoundsOut = IntRect();
+    return;
+  }
 
   if (aClipRectOut) {
     *aClipRectOut = IntRect(0, 0, mSize.width, mSize.height);
@@ -1051,14 +1352,18 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
     *aRenderBoundsOut = IntRect(0, 0, mSize.width, mSize.height);
   }
 
-  mCurrentClip = IntRect(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+  mCurrentClip = mBackBufferInvalid.GetBounds();
 
   mContext->RSSetState(mAttachments->mRasterizerState);
 
   SetRenderTarget(mDefaultRT);
 
-  // ClearRect will set the correct blend state for us.
-  ClearRect(Rect(clipRect.x, clipRect.y, clipRect.width, clipRect.height));
+  IntRegion regionToClear(mCurrentClip);
+  regionToClear.Sub(regionToClear, aOpaqueRegion);
+
+  ClearRect(Rect(regionToClear.GetBounds()));
+
+  mContext->OMSetBlendState(mAttachments->mPremulBlendState, sBlendFactor, 0xFFFFFFFF);
 
   if (mAttachments->mSyncTexture) {
     RefPtr<IDXGIKeyedMutex> mutex;
@@ -1085,6 +1390,21 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
       }
     }
   }
+
+  if (gfxPrefs::LayersDrawFPS()) {
+    uint32_t pixelsPerFrame = 0;
+    for (auto iter = mBackBufferInvalid.RectIter(); !iter.Done(); iter.Next()) {
+      pixelsPerFrame += iter.Get().width * iter.Get().height;
+    }
+
+    mDiagnostics->Start(pixelsPerFrame);
+  }
+}
+
+void
+CompositorD3D11::NormalDrawingDone()
+{
+  mDiagnostics->End();
 }
 
 void
@@ -1116,64 +1436,16 @@ CompositorD3D11::EndFrame()
     mContext->End(query);
   }
 
-  UINT presentInterval = 0;
-
-  bool isWARP = DeviceManagerDx::Get()->IsWARP();
-  if (isWARP) {
-    // When we're using WARP we cannot present immediately as it causes us
-    // to tear when rendering. When not using WARP it appears the DWM takes
-    // care of tearing for us.
-    presentInterval = 1;
-  }
-
   if (oldSize == mSize) {
-    RefPtr<IDXGISwapChain1> chain;
-    HRESULT hr = mSwapChain->QueryInterface((IDXGISwapChain1**)getter_AddRefs(chain));
-
-    if (SUCCEEDED(hr) && chain && mAllowPartialPresents) {
-      DXGI_PRESENT_PARAMETERS params;
-      PodZero(&params);
-      params.DirtyRectsCount = mInvalidRegion.GetNumRects();
-      StackArray<RECT, 4> rects(params.DirtyRectsCount);
-
-      uint32_t i = 0;
-      for (auto iter = mInvalidRegion.RectIter(); !iter.Done(); iter.Next()) {
-        const IntRect& r = iter.Get();
-        rects[i].left = r.x;
-        rects[i].top = r.y;
-        rects[i].bottom = r.YMost();
-        rects[i].right = r.XMost();
-        i++;
-      }
-
-      params.pDirtyRects = params.DirtyRectsCount ? rects.data() : nullptr;
-      chain->Present1(presentInterval, mDisableSequenceForNextFrame ? DXGI_PRESENT_DO_NOT_SEQUENCE : 0, &params);
-    } else {
-      hr = mSwapChain->Present(presentInterval, mDisableSequenceForNextFrame ? DXGI_PRESENT_DO_NOT_SEQUENCE : 0);
-      if (FAILED(hr)) {
-        gfxCriticalNote << "D3D11 swap chain preset failed " << hexa(hr);
-        HandleError(hr);
-      }
-    }
-    mDisableSequenceForNextFrame = false;
-    if (mTarget) {
-      PaintToTarget();
-    }
+    Present();
+  } else {
+    mDiagnostics->Cancel();
   }
 
   // Block until the previous frame's work has been completed.
   if (mQuery) {
-    TimeStamp start = TimeStamp::Now();
     BOOL result;
-    while (mContext->GetData(mQuery, &result, sizeof(BOOL), 0) != S_OK) {
-      if (mDevice->GetDeviceRemovedReason() != S_OK) {
-        break;
-      }
-      if ((TimeStamp::Now() - start) > TimeDuration::FromSeconds(2)) {
-        break;
-      }
-      Sleep(0);
-    }
+    WaitForGPUQuery(mDevice, mContext, mQuery, &result);
   }
   // Store the query for this frame so we can flush it next time.
   mQuery = query;
@@ -1184,12 +1456,77 @@ CompositorD3D11::EndFrame()
 }
 
 void
-CompositorD3D11::CancelFrame()
+CompositorD3D11::GetFrameStats(GPUStats* aStats)
+{
+  mDiagnostics->Query(aStats);
+}
+
+void
+CompositorD3D11::Present()
+{
+  UINT presentInterval = 0;
+
+  bool isWARP = DeviceManagerDx::Get()->IsWARP();
+  if (isWARP) {
+    // When we're using WARP we cannot present immediately as it causes us
+    // to tear when rendering. When not using WARP it appears the DWM takes
+    // care of tearing for us.
+    presentInterval = 1;
+  }
+
+  // This must be called before present so our back buffer has the validated window content.
+  if (mTarget) {
+    PaintToTarget();
+  }
+
+  RefPtr<IDXGISwapChain1> chain;
+  HRESULT hr = mSwapChain->QueryInterface((IDXGISwapChain1**)getter_AddRefs(chain));
+
+  if (SUCCEEDED(hr) && mAllowPartialPresents) {
+    DXGI_PRESENT_PARAMETERS params;
+    PodZero(&params);
+    params.DirtyRectsCount = mBackBufferInvalid.GetNumRects();
+    StackArray<RECT, 4> rects(params.DirtyRectsCount);
+
+    uint32_t i = 0;
+    for (auto iter = mBackBufferInvalid.RectIter(); !iter.Done(); iter.Next()) {
+      const IntRect& r = iter.Get();
+      rects[i].left = r.x;
+      rects[i].top = r.y;
+      rects[i].bottom = r.YMost();
+      rects[i].right = r.XMost();
+      i++;
+    }
+
+    params.pDirtyRects = params.DirtyRectsCount ? rects.data() : nullptr;
+    chain->Present1(presentInterval, mDisableSequenceForNextFrame ? DXGI_PRESENT_DO_NOT_SEQUENCE : 0, &params);
+  } else {
+    HRESULT hr = mSwapChain->Present(0, mDisableSequenceForNextFrame ? DXGI_PRESENT_DO_NOT_SEQUENCE : 0);
+    if (FAILED(hr)) {
+      gfxCriticalNote << "D3D11 swap chain preset failed " << hexa(hr);
+      HandleError(hr);
+    }
+  }
+
+  if (mIsDoubleBuffered) {
+    mBackBufferInvalid = mFrontBufferInvalid;
+    mFrontBufferInvalid.SetEmpty();
+  } else {
+    mBackBufferInvalid.SetEmpty();
+  }
+
+  mDisableSequenceForNextFrame = false;
+}
+
+void
+CompositorD3D11::CancelFrame(bool aNeedFlush)
 {
   ReadUnlockTextures();
   // Flush the context, otherwise the driver might hold some resources alive
   // until the next flush or present.
-  mContext->Flush();
+  if (aNeedFlush) {
+    mContext->Flush();
+  }
 }
 
 void
@@ -1217,6 +1554,11 @@ CompositorD3D11::ForcePresent()
 
   if (desc.BufferDesc.Width == size.width && desc.BufferDesc.Height == size.height) {
     mSwapChain->Present(0, 0);
+    if (mIsDoubleBuffered) {
+      // Make sure we present what was the front buffer before that we know is completely
+      // valid. This non v-synced present should be pretty much 'free' for a flip chain.
+      mSwapChain->Present(0, 0);
+    }
   }
 }
 
@@ -1303,7 +1645,7 @@ CompositorD3D11::VerifyBufferSize()
     }
   }
 
-  hr = mSwapChain->ResizeBuffers(1, mSize.width, mSize.height,
+  hr = mSwapChain->ResizeBuffers(0, mSize.width, mSize.height,
                                  DXGI_FORMAT_B8G8R8A8_UNORM,
                                  0);
 
@@ -1313,30 +1655,27 @@ CompositorD3D11::VerifyBufferSize()
     HandleError(hr);
   }
 
+  mBackBufferInvalid = mFrontBufferInvalid = IntRect(0, 0, mSize.width, mSize.height);
+
   return !mVerifyBuffersFailed;
 }
 
 bool
 CompositorD3D11::UpdateRenderTarget()
 {
-  EnsureSize();
+  HRESULT hr;
+
+  RefPtr<ID3D11Texture2D> backBuf;
+
   if (!VerifyBufferSize()) {
     gfxCriticalNote << "Failed VerifyBufferSize in UpdateRenderTarget " << mSize;
     return false;
-  }
-
-  if (mDefaultRT) {
-    return true;
   }
 
   if (mSize.width <= 0 || mSize.height <= 0) {
     gfxCriticalNote << "Invalid size in UpdateRenderTarget " << mSize << ", " << (int)mVerifyBuffersFailed;
     return false;
   }
-
-  HRESULT hr;
-
-  RefPtr<ID3D11Texture2D> backBuf;
 
   hr = mSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)backBuf.StartAssignment());
   if (hr == DXGI_ERROR_INVALID_CALL) {
@@ -1346,10 +1685,35 @@ CompositorD3D11::UpdateRenderTarget()
       return false;
     }
   }
+
   if (FAILED(hr)) {
     gfxCriticalNote << "Failed in UpdateRenderTarget " << hexa(hr) << ", " << mSize << ", " << (int)mVerifyBuffersFailed;
     HandleError(hr);
     return false;
+  }
+
+  IntRegion validFront;
+  validFront.Sub(mBackBufferInvalid, mFrontBufferInvalid);
+
+  if (!validFront.IsEmpty()) {
+    RefPtr<ID3D11Texture2D> frontBuf;
+    hr = mSwapChain->GetBuffer(1, __uuidof(ID3D11Texture2D), (void**)frontBuf.StartAssignment());
+
+    if (SUCCEEDED(hr)) {
+      for (auto iter = validFront.RectIter(); !iter.Done(); iter.Next()) {
+        const IntRect& rect = iter.Get();
+
+        D3D11_BOX box;
+        box.back = 1;
+        box.front = 0;
+        box.left = rect.x;
+        box.right = rect.XMost();
+        box.top = rect.y;
+        box.bottom = rect.YMost();
+        mContext->CopySubresourceRegion(backBuf, 0, rect.x, rect.y, 0, frontBuf, 0, &box);
+      }
+      mBackBufferInvalid = mFrontBufferInvalid;
+    }
   }
 
   mDefaultRT = new CompositingRenderTargetD3D11(backBuf, IntPoint(0, 0));
@@ -1404,6 +1768,12 @@ DeviceAttachmentsD3D11::InitBlendShaders()
     InitVertexShader(sLayerQuadBlendVS, mVSQuadBlendShader, MaskType::MaskNone);
     InitVertexShader(sLayerQuadBlendMaskVS, mVSQuadBlendShader, MaskType::Mask);
   }
+
+  if (!mVSDynamicBlendShader[MaskType::MaskNone]) {
+    InitVertexShader(sLayerDynamicBlendVS, mVSDynamicBlendShader, MaskType::MaskNone);
+    InitVertexShader(sLayerDynamicBlendMaskVS, mVSDynamicBlendShader, MaskType::Mask);
+  }
+
   if (!mBlendShader[MaskType::MaskNone]) {
     InitPixelShader(sBlendShader, mBlendShader, MaskType::MaskNone);
   }
@@ -1416,6 +1786,9 @@ DeviceAttachmentsD3D11::CreateShaders()
   InitVertexShader(sLayerQuadVS, mVSQuadShader, MaskType::MaskNone);
   InitVertexShader(sLayerQuadMaskVS, mVSQuadShader, MaskType::Mask);
 
+  InitVertexShader(sLayerDynamicVS, mVSDynamicShader, MaskType::MaskNone);
+  InitVertexShader(sLayerDynamicMaskVS, mVSDynamicShader, MaskType::Mask);
+
   InitPixelShader(sSolidColorShader, mSolidColorShader, MaskType::MaskNone);
   InitPixelShader(sSolidColorShaderMask, mSolidColorShader, MaskType::Mask);
   InitPixelShader(sRGBShader, mRGBShader, MaskType::MaskNone);
@@ -1424,6 +1797,8 @@ DeviceAttachmentsD3D11::CreateShaders()
   InitPixelShader(sRGBAShaderMask, mRGBAShader, MaskType::Mask);
   InitPixelShader(sYCbCrShader, mYCbCrShader, MaskType::MaskNone);
   InitPixelShader(sYCbCrShaderMask, mYCbCrShader, MaskType::Mask);
+  InitPixelShader(sNV12Shader, mNV12Shader, MaskType::MaskNone);
+  InitPixelShader(sNV12ShaderMask, mNV12Shader, MaskType::Mask);
   if (gfxPrefs::ComponentAlphaEnabled()) {
     InitPixelShader(sComponentAlphaShader, mComponentAlphaShader, MaskType::MaskNone);
     InitPixelShader(sComponentAlphaShaderMask, mComponentAlphaShader, MaskType::Mask);

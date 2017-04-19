@@ -1,4 +1,3 @@
-
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set ts=8 sts=4 et sw=4 tw=99: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -62,8 +61,6 @@ static const JSClass kFakeBackstagePassJSClass = { "FakeBackstagePass" };
 static const char kXPConnectServiceContractID[] = "@mozilla.org/js/xpc/XPConnect;1";
 static const char kObserverServiceContractID[] = "@mozilla.org/observer-service;1";
 static const char kJSCachePrefix[] = "jsloader";
-
-#define HAVE_PR_MEMMAP
 
 /**
  * Buffer sizes for serialization and deserialization of scripts.
@@ -378,7 +375,7 @@ mozJSComponentLoader::LoadModule(FileLocation& aFile)
 
     ModuleEntry* mod;
     if (mModules.Get(spec, &mod))
-    return mod;
+        return mod;
 
     dom::AutoJSAPI jsapi;
     jsapi.Init();
@@ -507,7 +504,6 @@ mozJSComponentLoader::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf)
 }
 
 // Some stack based classes for cleaning up on early return
-#ifdef HAVE_PR_MEMMAP
 class FileAutoCloser
 {
  public:
@@ -525,16 +521,6 @@ class FileMapAutoCloser
  private:
     PRFileMap* mMap;
 };
-#else
-class ANSIFileAutoCloser
-{
- public:
-    explicit ANSIFileAutoCloser(FILE* file) : mFile(file) {}
-    ~ANSIFileAutoCloser() { fclose(mFile); }
- private:
-    FILE* mFile;
-};
-#endif
 
 JSObject*
 mozJSComponentLoader::PrepareObjectForLocation(JSContext* aCx,
@@ -562,7 +548,7 @@ mozJSComponentLoader::PrepareObjectForLocation(JSContext* aCx,
         CompartmentOptions options;
 
         options.creationOptions()
-               .setZone(SystemZone)
+               .setSystemZone()
                .setAddonId(aReuseLoaderGlobal ? nullptr : MapURIToAddonID(aURI));
 
         options.behaviors().setVersion(JSVERSION_LATEST);
@@ -752,7 +738,6 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
                .setSourceIsLazy(!mReuseLoaderGlobal && !!cache);
 
         if (realFile) {
-#ifdef HAVE_PR_MEMMAP
             int64_t fileSize;
             rv = aComponentFile->GetFileSize(&fileSize);
             if (NS_FAILED(rv)) {
@@ -810,58 +795,6 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
             }
 
             PR_MemUnmap(buf, fileSize32);
-
-#else  /* HAVE_PR_MEMMAP */
-
-            /**
-             * No memmap implementation, so fall back to
-             * reading in the file
-             */
-
-            FILE* fileHandle;
-            rv = aComponentFile->OpenANSIFileDesc("r", &fileHandle);
-            if (NS_FAILED(rv)) {
-                return NS_ERROR_FILE_NOT_FOUND;
-            }
-
-            // Ensure file fclose
-            ANSIFileAutoCloser fileCloser(fileHandle);
-
-            int64_t len;
-            rv = aComponentFile->GetFileSize(&len);
-            if (NS_FAILED(rv) || len < 0) {
-                NS_WARNING("Failed to get file size");
-                return NS_ERROR_FAILURE;
-            }
-
-            char* buf = (char*) malloc(len * sizeof(char));
-            if (!buf) {
-                return NS_ERROR_FAILURE;
-            }
-
-            size_t rlen = fread(buf, 1, len, fileHandle);
-            if (rlen != (uint64_t)len) {
-                free(buf);
-                NS_WARNING("Failed to read file");
-                return NS_ERROR_FAILURE;
-            }
-
-            if (!mReuseLoaderGlobal) {
-                script = Compile(cx, options, buf, fileSize32);
-            } else {
-                // Note: exceptions will get handled further down;
-                // don't early return for them here.
-                AutoObjectVector envChain(cx);
-                if (envChain.append(obj)) {
-                    CompileFunction(cx, envChain,
-                                    options, nullptr, 0, nullptr,
-                                    buf, fileSize32, &function);
-                }
-            }
-
-            free(buf);
-
-#endif /* HAVE_PR_MEMMAP */
         } else {
             rv = aInfo.EnsureScriptChannel();
             NS_ENSURE_SUCCESS(rv, rv);

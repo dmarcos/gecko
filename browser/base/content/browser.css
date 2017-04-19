@@ -9,6 +9,20 @@
 :root {
   --identity-popup-expander-width: 38px;
   --panelui-subview-transition-duration: 150ms;
+  --lwt-additional-images: none;
+  --lwt-background-alignment: right top;
+  --lwt-background-tiling: no-repeat;
+}
+
+:root:-moz-lwtheme {
+  color: var(--lwt-text-color) !important;
+}
+
+:root:-moz-lwtheme:not([customization-lwtheme]) {
+  background-color: var(--lwt-accent-color) !important;
+  background-image: var(--lwt-header-image), var(--lwt-additional-images) !important;
+  background-position: var(--lwt-background-alignment) !important;
+  background-repeat: var(--lwt-background-tiling) !important;
 }
 
 #main-window:not([chromehidden~="toolbar"]) {
@@ -324,6 +338,10 @@ toolbarpaletteitem > toolbaritem[sdkstylewidget="true"][cui-areatype="toolbar"] 
   .webextension-page-action {
     list-style-image: var(--webextension-urlbar-image);
   }
+
+  .webextension-menuitem {
+    list-style-image: var(--webextension-menuitem-image);
+  }
 }
 
 @media (min-resolution: 1.1dppx) {
@@ -339,6 +357,15 @@ toolbarpaletteitem > toolbaritem[sdkstylewidget="true"][cui-areatype="toolbar"] 
   .webextension-page-action {
     list-style-image: var(--webextension-urlbar-image-2x);
   }
+
+  .webextension-menuitem {
+    list-style-image: var(--webextension-menuitem-image-2x);
+  }
+}
+
+toolbarbutton.webextension-menuitem > .toolbarbutton-icon {
+  width: 16px;
+  height: 16px;
 }
 
 toolbarpaletteitem[removable="false"] {
@@ -429,9 +456,11 @@ toolbar:not(#TabsToolbar) > #personal-bookmarks {
 }
 %endif
 
-#browser-bottombox[lwthemefooter="true"] {
+:root[lwthemefooter=true] #browser-bottombox:-moz-lwtheme {
   background-repeat: no-repeat;
   background-position: bottom left;
+  background-color: var(--lwt-accent-color);
+  background-image: var(--lwt-footer-image);
 }
 
 .menuitem-iconic-tooltip {
@@ -548,7 +577,7 @@ toolbar:not(#TabsToolbar) > #personal-bookmarks {
   transition: none;
 }
 
-#DateTimePickerPanel {
+#DateTimePickerPanel[active="true"] {
   -moz-binding: url("chrome://global/content/bindings/datetimepopup.xml#datetime-popup");
 }
 
@@ -810,7 +839,6 @@ html|*#fullscreen-exit-button {
 .popup-anchor {
   /* should occupy space but not be visible */
   opacity: 0;
-  visibility: hidden;
   pointer-events: none;
   -moz-stack-sizing: ignore;
 }
@@ -842,10 +870,9 @@ statuspanel {
   pointer-events: none;
 }
 
-statuspanel:-moz-locale-dir(ltr)[mirror],
-statuspanel:-moz-locale-dir(rtl):not([mirror]) {
-  left: auto;
-  right: 0;
+statuspanel[mirror] {
+  offset-inline-start: auto;
+  offset-inline-end: 0;
 }
 
 statuspanel[sizelimit] {
@@ -864,6 +891,9 @@ statuspanel[type=status] {
 
 statuspanel[type=overLink] {
   transition: opacity 120ms ease-out;
+}
+
+statuspanel[type=overLink] > .statuspanel-inner {
   direction: ltr;
 }
 
@@ -963,10 +993,14 @@ toolbarpaletteitem[place="palette"] > #downloads-button[indicator] > #downloads-
   display: none;
 }
 
-#downloads-button:-moz-any([progress], [counter], [paused]) #downloads-indicator-icon,
-#downloads-button:not(:-moz-any([progress], [counter], [paused]))
-                                                   #downloads-indicator-progress-area
-{
+#downloads-button.withProgressBar:-moz-any([progress], [counter], [paused]) #downloads-indicator-icon,
+#downloads-button:not(:-moz-any([progress], [counter], [paused])) #downloads-indicator-progress-area {
+  visibility: hidden;
+}
+
+/* Hide elements for another type of progressmeter if it's not in use. */
+#downloads-button.withProgressBar #downloads-indicator-progress-icon,
+#downloads-button:not(.withProgressBar) #downloads-indicator-progress-area {
   visibility: hidden;
 }
 
@@ -1149,7 +1183,7 @@ toolbarpaletteitem[place="palette"][hidden] {
   max-width: 10em;
 }
 
-#main-window[customizing=true] #PanelUI-update-status {
+#main-window[customizing=true] .PanelUI-notification-menu-item {
   display: none;
 }
 
@@ -1237,3 +1271,5 @@ toolbarpaletteitem[place="palette"][hidden] {
   opacity: 0.65;
   -moz-window-shadow: none;
 }
+
+%include theme-vars.inc.css

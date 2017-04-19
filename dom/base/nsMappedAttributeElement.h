@@ -13,13 +13,14 @@
 #define NS_MAPPEDATTRIBUTEELEMENT_H_
 
 #include "mozilla/Attributes.h"
+#include "mozilla/GenericSpecifiedValues.h"
 #include "nsStyledElement.h"
 
 class nsMappedAttributes;
 struct nsRuleData;
 
 typedef void (*nsMapRuleToAttributesFunc)(const nsMappedAttributes* aAttributes, 
-                                          nsRuleData* aData);
+                                          mozilla::GenericSpecifiedValues* aData);
 
 typedef nsStyledElement nsMappedAttributeElementBase;
 
@@ -36,13 +37,14 @@ public:
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const;
 
   static void MapNoAttributesInto(const nsMappedAttributes* aAttributes, 
-                                  nsRuleData* aRuleData);
+                                  mozilla::GenericSpecifiedValues* aGenericData);
 
   NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) override;
-  virtual bool SetMappedAttribute(nsIDocument* aDocument,
-                                    nsIAtom* aName,
-                                    nsAttrValue& aValue,
-                                    nsresult* aRetval) override;
+  virtual bool SetMappedAttribute(nsIAtom* aName,
+                                  nsAttrValue& aValue,
+                                  nsresult* aRetval) override;
+
+  virtual void NodeInfoChanged(nsIDocument* aOldDoc) override;
 };
 
 #endif // NS_MAPPEDATTRIBUTEELEMENT_H_

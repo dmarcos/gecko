@@ -16,11 +16,13 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Casting.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/PodOperations.h"
 #include "mozilla/PublicSSL.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/Unused.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsCRT.h"
@@ -36,9 +38,11 @@
 #include "nsITokenPasswordDialogs.h"
 #include "nsIWindowWatcher.h"
 #include "nsIXULRuntime.h"
+#include "nsLiteralString.h"
 #include "nsNSSCertificateDB.h"
 #include "nsNSSHelper.h"
 #include "nsNSSShutDown.h"
+#include "nsPrintfCString.h"
 #include "nsServiceManagerUtils.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
@@ -66,11 +70,6 @@
 #include "nsIWindowsRegKey.h"
 #endif
 
-#ifdef ANDROID
-#include "mozilla/PodOperations.h"
-#include "nsPrintfCString.h"
-#endif // ANDROID
-
 using namespace mozilla;
 using namespace mozilla::psm;
 
@@ -82,18 +81,8 @@ int nsNSSComponent::mInstanceCount = 0;
 // to ensure that NSS is initialized.
 bool EnsureNSSInitializedChromeOrContent()
 {
-  nsresult rv;
-  if (XRE_IsParentProcess()) {
-    nsCOMPtr<nsISupports> nss = do_GetService(PSM_COMPONENT_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  // If this is a content process and not the main thread (i.e. probably a
-  // worker) then forward this call to the main thread.
+  // If this is not the main thread (i.e. probably a worker) then forward this
+  // call to the main thread.
   if (!NS_IsMainThread()) {
     static Atomic<bool> initialized(false);
 
@@ -118,6 +107,14 @@ bool EnsureNSSInitializedChromeOrContent()
     return initialized;
   }
 
+  if (XRE_IsParentProcess()) {
+    nsCOMPtr<nsISupports> nss = do_GetService(PSM_COMPONENT_CONTRACTID);
+    if (!nss) {
+      return false;
+    }
+    return true;
+  }
+
   if (NSS_IsInitialized()) {
     return true;
   }
@@ -134,89 +131,18 @@ bool EnsureNSSInitializedChromeOrContent()
   return true;
 }
 
-// We must ensure that the nsNSSComponent has been loaded before
-// creating any other components.
-bool EnsureNSSInitialized(EnsureNSSOperator op)
-{
-  if (GeckoProcessType_Default != XRE_GetProcessType())
-  {
-    if (op == nssEnsureOnChromeOnly)
-    {
-      // If the component needs PSM/NSS initialized only on the chrome process,
-      // pretend we successfully initiated it but in reality we bypass it.
-      // It's up to the programmer to check for process type in such components
-      // and take care not to call anything that needs NSS/PSM initiated.
-      return true;
-    }
-
-    NS_ERROR("Trying to initialize PSM/NSS in a non-chrome process!");
-    return false;
-  }
-
-  static bool loading = false;
-  static int32_t haveLoaded = 0;
-
-  switch (op)
-  {
-    // In following 4 cases we are protected by monitor of XPCOM component
-    // manager - we are inside of do_GetService call for nss component, so it is
-    // safe to move with the flags here.
-  case nssLoadingComponent:
-    if (loading)
-      return false; // We are reentered during nss component creation
-    loading = true;
-    return true;
-
-  case nssInitSucceeded:
-    MOZ_ASSERT(loading, "Bad call to EnsureNSSInitialized(nssInitSucceeded)");
-    loading = false;
-    PR_AtomicSet(&haveLoaded, 1);
-    return true;
-
-  case nssInitFailed:
-    MOZ_ASSERT(loading, "Bad call to EnsureNSSInitialized(nssInitFailed)");
-    loading = false;
-    MOZ_FALLTHROUGH;
-
-  case nssShutdown:
-    PR_AtomicSet(&haveLoaded, 0);
-    return false;
-
-    // In this case we are called from a component to ensure nss initilization.
-    // If the component has not yet been loaded and is not currently loading
-    // call do_GetService for nss component to ensure it.
-  case nssEnsure:
-  case nssEnsureOnChromeOnly:
-  case nssEnsureChromeOrContent:
-    // We are reentered during nss component creation or nss component is already up
-    if (PR_AtomicAdd(&haveLoaded, 0) || loading)
-      return true;
-
-    {
-    nsCOMPtr<nsINSSComponent> nssComponent
-      = do_GetService(PSM_COMPONENT_CONTRACTID);
-
-    // Nss component failed to initialize, inform the caller of that fact.
-    // Flags are appropriately set by component constructor itself.
-    if (!nssComponent)
-      return false;
-
-    bool isInitialized;
-    nsresult rv = nssComponent->IsNSSInitialized(&isInitialized);
-    return NS_SUCCEEDED(rv) && isInitialized;
-    }
-
-  default:
-    MOZ_ASSERT_UNREACHABLE("Bad operator to EnsureNSSInitialized");
-    return false;
-  }
-}
+static const uint32_t OCSP_TIMEOUT_MILLISECONDS_SOFT_DEFAULT = 2000;
+static const uint32_t OCSP_TIMEOUT_MILLISECONDS_SOFT_MAX = 5000;
+static const uint32_t OCSP_TIMEOUT_MILLISECONDS_HARD_DEFAULT = 10000;
+static const uint32_t OCSP_TIMEOUT_MILLISECONDS_HARD_MAX = 20000;
 
 static void
 GetRevocationBehaviorFromPrefs(/*out*/ CertVerifier::OcspDownloadConfig* odc,
                                /*out*/ CertVerifier::OcspStrictConfig* osc,
                                /*out*/ CertVerifier::OcspGetConfig* ogc,
                                /*out*/ uint32_t* certShortLifetimeInDays,
+                               /*out*/ TimeDuration& softTimeout,
+                               /*out*/ TimeDuration& hardTimeout,
                                const MutexAutoLock& /*proofOfLock*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -251,6 +177,20 @@ GetRevocationBehaviorFromPrefs(/*out*/ CertVerifier::OcspDownloadConfig* odc,
     Preferences::GetUint("security.pki.cert_short_lifetime_in_days",
                          static_cast<uint32_t>(0));
 
+  uint32_t softTimeoutMillis =
+    Preferences::GetUint("security.OCSP.timeoutMilliseconds.soft",
+                         OCSP_TIMEOUT_MILLISECONDS_SOFT_DEFAULT);
+  softTimeoutMillis = std::min(softTimeoutMillis,
+                               OCSP_TIMEOUT_MILLISECONDS_SOFT_MAX);
+  softTimeout = TimeDuration::FromMilliseconds(softTimeoutMillis);
+
+  uint32_t hardTimeoutMillis =
+    Preferences::GetUint("security.OCSP.timeoutMilliseconds.hard",
+                         OCSP_TIMEOUT_MILLISECONDS_HARD_DEFAULT);
+  hardTimeoutMillis = std::min(hardTimeoutMillis,
+                               OCSP_TIMEOUT_MILLISECONDS_HARD_MAX);
+  hardTimeout = TimeDuration::FromMilliseconds(hardTimeoutMillis);
+
   SSL_ClearSessionCache();
 }
 
@@ -280,11 +220,6 @@ nsNSSComponent::~nsNSSComponent()
   SharedSSLState::GlobalCleanup();
   RememberCertErrorsTable::Cleanup();
   --mInstanceCount;
-  nsNSSShutDownList::shutdown();
-
-  // We are being freed, drop the haveLoaded flag to re-enable
-  // potential nss initialization later.
-  EnsureNSSInitialized(nssShutdown);
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::dtor finished\n"));
 }
@@ -659,7 +594,8 @@ PCCERT_CONTEXTToCERTCertificate(PCCERT_CONTEXT pccert)
                             true)); // copy DER
 }
 
-static const char* kMicrosoftFamilySafetyCN = "Microsoft Family Safety";
+static NS_NAMED_LITERAL_CSTRING(kMicrosoftFamilySafetyCN,
+                                "Microsoft Family Safety");
 
 nsresult
 nsNSSComponent::MaybeImportFamilySafetyRoot(PCCERT_CONTEXT certificate,
@@ -682,7 +618,7 @@ nsNSSComponent::MaybeImportFamilySafetyRoot(PCCERT_CONTEXT certificate,
   UniquePORTString subjectName(CERT_GetCommonName(&nssCertificate->subject));
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
           ("subject name is '%s'", subjectName.get()));
-  if (nsCRT::strcmp(subjectName.get(), kMicrosoftFamilySafetyCN) == 0) {
+  if (kMicrosoftFamilySafetyCN.Equals(subjectName.get())) {
     wasFamilySafetyRoot = true;
     CERTCertTrust trust = {
       CERTDB_TRUSTED_CA | CERTDB_VALID_CA | CERTDB_USER,
@@ -1062,7 +998,7 @@ nsNSSComponent::ImportEnterpriseRootsForLocation(DWORD locationFlag)
     // Safety support).
     UniquePORTString subjectName(
       CERT_GetCommonName(&nssCertificate->subject));
-    if (nsCRT::strcmp(subjectName.get(), kMicrosoftFamilySafetyCN) == 0) {
+    if (kMicrosoftFamilySafetyCN.Equals(subjectName.get())) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("skipping Family Safety Root"));
       continue;
     }
@@ -1608,10 +1544,13 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
   CertVerifier::OcspStrictConfig osc;
   CertVerifier::OcspGetConfig ogc;
   uint32_t certShortLifetimeInDays;
+  TimeDuration softTimeout;
+  TimeDuration hardTimeout;
 
   GetRevocationBehaviorFromPrefs(&odc, &osc, &ogc, &certShortLifetimeInDays,
-                                 lock);
-  mDefaultCertVerifier = new SharedCertVerifier(odc, osc, ogc,
+                                 softTimeout, hardTimeout, lock);
+  mDefaultCertVerifier = new SharedCertVerifier(odc, osc, ogc, softTimeout,
+                                                hardTimeout,
                                                 certShortLifetimeInDays,
                                                 pinningMode, sha1Mode,
                                                 nameMatchingMode,
@@ -1696,16 +1635,9 @@ GetNSSProfilePath(nsAutoCString& aProfilePath)
   return NS_OK;
 }
 
-#ifdef ANDROID
-static char sCrashReasonBuffer[1024];
-#endif // ANDROID
-
 nsresult
 nsNSSComponent::InitializeNSS()
 {
-  // Can be called both during init and profile change.
-  // Needs mutex protection.
-
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::InitializeNSS\n"));
 
   static_assert(nsINSSErrorsService::NSS_SEC_ERROR_BASE == SEC_ERROR_BASE &&
@@ -1715,12 +1647,6 @@ nsNSSComponent::InitializeNSS()
                 "You must update the values in nsINSSErrorsService.idl");
 
   MutexAutoLock lock(mutex);
-
-  if (mNSSInitialized) {
-    // We should never try to initialize NSS more than once in a process.
-    MOZ_ASSERT_UNREACHABLE("Trying to initialize NSS twice");
-    return NS_ERROR_FAILURE;
-  }
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS Initialization beginning\n"));
 
@@ -1753,10 +1679,8 @@ nsNSSComponent::InitializeNSS()
   }
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("inSafeMode: %u\n", inSafeMode));
 
-#ifdef ANDROID
   PRErrorCode savedPRErrorCode1 = 0;
   PRErrorCode savedPRErrorCode2 = 0;
-#endif // ANDROID
 
   if (!nocertdb && !profileStr.IsEmpty()) {
     // First try to initialize the NSS DB in read/write mode.
@@ -1764,16 +1688,12 @@ nsNSSComponent::InitializeNSS()
     init_rv = ::mozilla::psm::InitializeNSS(profileStr.get(), false, !inSafeMode);
     // If that fails, attempt read-only mode.
     if (init_rv != SECSuccess) {
-#ifdef ANDROID
       savedPRErrorCode1 = PR_GetError();
-#endif // ANDROID
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("could not init NSS r/w in %s\n", profileStr.get()));
       init_rv = ::mozilla::psm::InitializeNSS(profileStr.get(), true, !inSafeMode);
     }
     if (init_rv != SECSuccess) {
-#ifdef ANDROID
       savedPRErrorCode2 = PR_GetError();
-#endif // ANDROID
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("could not init in r/o either\n"));
     }
   }
@@ -1782,19 +1702,12 @@ nsNSSComponent::InitializeNSS()
   // pref has been set to "true", attempt to initialize with no DB.
   if (nocertdb || init_rv != SECSuccess) {
     init_rv = NSS_NoDB_Init(nullptr);
-#ifdef ANDROID
     if (init_rv != SECSuccess) {
       PRErrorCode savedPRErrorCode3 = PR_GetError();
-      nsPrintfCString message("NSS initialization failed PRErrorCodes %d %d %d",
+      MOZ_CRASH_UNSAFE_PRINTF("NSS initialization failed PRErrorCodes %d %d %d",
                               savedPRErrorCode1, savedPRErrorCode2,
                               savedPRErrorCode3);
-      mozilla::PodArrayZero(sCrashReasonBuffer);
-      strncpy(sCrashReasonBuffer, message.get(),
-              sizeof(sCrashReasonBuffer) - 1);
-      MOZ_CRASH_ANNOTATE(sCrashReasonBuffer);
-      MOZ_REALLY_CRASH();
     }
-#endif // ANDROID
   }
   if (init_rv != SECSuccess) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("could not initialize NSS - panicking\n"));
@@ -1804,8 +1717,6 @@ nsNSSComponent::InitializeNSS()
   // ensure we have an initial value for the content signer root
   mContentSigningRootHash =
     Preferences::GetString("security.content.signature.root_hash");
-
-  mNSSInitialized = true;
 
   PK11_SetPasswordFunc(PK11PasswordPrompt);
 
@@ -1877,12 +1788,6 @@ nsNSSComponent::InitializeNSS()
     return NS_ERROR_FAILURE;
   }
 
-  // ensure the CertBlocklist is initialised
-  nsCOMPtr<nsICertBlocklist> certList = do_GetService(NS_CERTBLOCKLIST_CONTRACTID);
-  if (!certList) {
-    return NS_ERROR_FAILURE;
-  }
-
   // dynamic options from prefs
   setValidationOptions(true, lock);
 
@@ -1892,35 +1797,18 @@ nsNSSComponent::InitializeNSS()
 
   mozilla::pkix::RegisterErrorTable();
 
-  // Initialize the site security service
-  nsCOMPtr<nsISiteSecurityService> sssService =
-    do_GetService(NS_SSSERVICE_CONTRACTID);
-  if (!sssService) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("Cannot initialize site security service\n"));
-    return NS_ERROR_FAILURE;
-  }
-
-  // Initialize the cert override service
-  nsCOMPtr<nsICertOverrideService> coService =
-    do_GetService(NS_CERTOVERRIDE_CONTRACTID);
-  if (!coService) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("Cannot initialize cert override service\n"));
-    return NS_ERROR_FAILURE;
-  }
-
   if (PK11_IsFIPS()) {
     Telemetry::Accumulate(Telemetry::FIPS_ENABLED, true);
   }
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS Initialization done\n"));
+  mNSSInitialized = true;
+
   return NS_OK;
 }
 
 void
 nsNSSComponent::ShutdownNSS()
 {
-  // Can be called both during init and profile change,
-  // needs mutex protection.
-
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::ShutdownNSS\n"));
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
@@ -1947,12 +1835,11 @@ nsNSSComponent::ShutdownNSS()
     Unused << SSL_ShutdownServerSessionIDCache();
 
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("evaporating psm resources"));
-    if (NS_FAILED(nsNSSShutDownList::evaporateAllNSSResources())) {
+    if (NS_FAILED(nsNSSShutDownList::evaporateAllNSSResourcesAndShutDown())) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("failed to evaporate resources"));
       return;
     }
     UnloadLoadableRoots();
-    EnsureNSSInitialized(nssShutdown);
     if (SECSuccess != ::NSS_Shutdown()) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("NSS SHUTDOWN FAILURE"));
     } else {
@@ -1969,11 +1856,14 @@ nsNSSComponent::Init()
     return NS_ERROR_NOT_SAME_THREAD;
   }
 
-  nsresult rv = NS_OK;
+  MOZ_ASSERT(XRE_IsParentProcess());
+  if (!XRE_IsParentProcess()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("Beginning NSS initialization\n"));
 
-  rv = InitializePIPNSSBundle();
+  nsresult rv = InitializePIPNSSBundle();
   if (NS_FAILED(rv)) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("Unable to create pipnss bundle.\n"));
     return rv;
@@ -1984,12 +1874,10 @@ nsNSSComponent::Init()
   // - wrong thread: 'NS_IsMainThread()' in nsIOService.cpp
   // when loading error strings on the SSL threads.
   {
-    NS_NAMED_LITERAL_STRING(dummy_name, "dummy");
+    const char16_t* dummy = u"dummy";
     nsXPIDLString result;
-    mPIPNSSBundle->GetStringFromName(dummy_name.get(),
-                                     getter_Copies(result));
-    mNSSErrorsBundle->GetStringFromName(dummy_name.get(),
-                                        getter_Copies(result));
+    mPIPNSSBundle->GetStringFromName(dummy, getter_Copies(result));
+    mNSSErrorsBundle->GetStringFromName(dummy, getter_Copies(result));
   }
 
 
@@ -2018,7 +1906,7 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
 {
   if (nsCRT::strcmp(aTopic, PROFILE_BEFORE_CHANGE_TOPIC) == 0) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("receiving profile change topic\n"));
-    DoProfileBeforeChange();
+    ShutdownNSS();
   } else if (nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID) == 0) {
     nsNSSShutDownPreventionLock locker;
     bool clearSessionCache = true;
@@ -2056,7 +1944,9 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
                prefName.EqualsLiteral("security.cert_pinning.enforcement_level") ||
                prefName.EqualsLiteral("security.pki.sha1_enforcement_level") ||
                prefName.EqualsLiteral("security.pki.name_matching_mode") ||
-               prefName.EqualsLiteral("security.pki.netscape_step_up_policy")) {
+               prefName.EqualsLiteral("security.pki.netscape_step_up_policy") ||
+               prefName.EqualsLiteral("security.OCSP.timeoutMilliseconds.soft") ||
+               prefName.EqualsLiteral("security.OCSP.timeoutMilliseconds.hard")) {
       MutexAutoLock lock(mutex);
       setValidationOptions(false, lock);
 #ifdef DEBUG
@@ -2103,32 +1993,6 @@ nsNSSComponent::GetNewPrompter(nsIPrompt** result)
   return rv;
 }
 
-/*static*/ nsresult
-nsNSSComponent::ShowAlertWithConstructedString(const nsString& message)
-{
-  nsCOMPtr<nsIPrompt> prompter;
-  nsresult rv = GetNewPrompter(getter_AddRefs(prompter));
-  if (prompter) {
-    rv = prompter->Alert(nullptr, message.get());
-  }
-  return rv;
-}
-
-NS_IMETHODIMP
-nsNSSComponent::ShowAlertFromStringBundle(const char* messageID)
-{
-  nsString message;
-  nsresult rv;
-
-  rv = GetPIPNSSBundleString(messageID, message);
-  if (NS_FAILED(rv)) {
-    NS_ERROR("GetPIPNSSBundleString failed");
-    return rv;
-  }
-
-  return ShowAlertWithConstructedString(message);
-}
-
 nsresult nsNSSComponent::LogoutAuthenticatedPK11()
 {
   nsCOMPtr<nsICertOverrideService> icos =
@@ -2163,35 +2027,6 @@ nsNSSComponent::RegisterObservers()
   // least as long as the observer service.
   observerService->AddObserver(this, PROFILE_BEFORE_CHANGE_TOPIC, false);
 
-  return NS_OK;
-}
-
-void
-nsNSSComponent::DoProfileBeforeChange()
-{
-  bool needsCleanup = true;
-
-  {
-    MutexAutoLock lock(mutex);
-
-    if (!mNSSInitialized) {
-      // Make sure we don't try to cleanup if we have already done so.
-      // This makes sure we behave safely, in case we are notified
-      // multiple times.
-      needsCleanup = false;
-    }
-  }
-
-  if (needsCleanup) {
-    ShutdownNSS();
-  }
-}
-
-NS_IMETHODIMP
-nsNSSComponent::IsNSSInitialized(bool* initialized)
-{
-  MutexAutoLock lock(mutex);
-  *initialized = mNSSInitialized;
   return NS_OK;
 }
 
@@ -2350,7 +2185,7 @@ setPassword(PK11SlotInfo* slot, nsIInterfaceRequestor* ctx,
 
     bool canceled;
     NS_ConvertUTF8toUTF16 tokenName(PK11_GetTokenName(slot));
-    rv = dialogs->SetPassword(ctx, tokenName.get(), &canceled);
+    rv = dialogs->SetPassword(ctx, tokenName, &canceled);
     if (NS_FAILED(rv)) {
       return rv;
     }

@@ -21,7 +21,6 @@
 #include "nsIComponentManager.h"
 #include "prio.h"
 #include "private/pprio.h"  // To get PR_ImportFile
-#include "prprf.h"
 #include "prmem.h"
 #include "nsHashKeys.h"
 
@@ -62,10 +61,10 @@
 using namespace mozilla;
 
 #define CHECK_mWorkingPath()                    \
-    PR_BEGIN_MACRO                              \
+    do {                                        \
         if (mWorkingPath.IsEmpty())             \
             return NS_ERROR_NOT_INITIALIZED;    \
-    PR_END_MACRO
+    } while(0)
 
 // CopyFileEx only supports unbuffered I/O in Windows Vista and above
 #ifndef COPY_FILE_NO_BUFFERING

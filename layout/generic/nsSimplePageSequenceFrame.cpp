@@ -22,7 +22,6 @@
 #include "nsDisplayList.h"
 #include "nsHTMLCanvasFrame.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
-#include "mozilla/gfx/DrawEventRecorder.h"
 #include "nsICanvasRenderingContextInternal.h"
 #include "nsServiceManagerUtils.h"
 #include <algorithm>
@@ -156,7 +155,7 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
   NS_FRAME_TRACE_REFLOW_IN("nsSimplePageSequenceFrame::Reflow");
 
-  aStatus = NS_FRAME_COMPLETE;  // we're always complete
+  aStatus.Reset();  // we're always complete
 
   // Don't do incremental reflow until we've taught tables how to do
   // it right in paginated mode.
@@ -283,7 +282,7 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
     // Is the page complete?
     nsIFrame* kidNextInFlow = kidFrame->GetNextInFlow();
 
-    if (NS_FRAME_IS_FULLY_COMPLETE(status)) {
+    if (status.IsFullyComplete()) {
       NS_ASSERTION(!kidNextInFlow, "bad child flow list");
     } else if (!kidNextInFlow) {
       // The page isn't complete and it doesn't have a next-in-flow, so
@@ -630,7 +629,7 @@ nsSimplePageSequenceFrame::PrePrintNextPage(nsITimerCallback* aCallback, bool* a
 
       mCalledBeginPage = true;
       
-      RefPtr<gfxContext> renderingContext = dc->CreateReferenceRenderingContext();
+      RefPtr<gfxContext> renderingContext = dc->CreateRenderingContext();
       NS_ENSURE_TRUE(renderingContext, NS_ERROR_OUT_OF_MEMORY);
 
       DrawTarget* drawTarget = renderingContext->GetDrawTarget();
@@ -642,12 +641,8 @@ nsSimplePageSequenceFrame::PrePrintNextPage(nsITimerCallback* aCallback, bool* a
         HTMLCanvasElement* canvas = mCurrentCanvasList[i];
         nsIntSize size = canvas->GetSize();
 
-        RefPtr<mozilla::gfx::DrawEventRecorder> recorder =
-          new mozilla::gfx::DrawEventRecorderMemory();
         RefPtr<DrawTarget> canvasTarget =
           drawTarget->CreateSimilarDrawTarget(size, drawTarget->GetFormat());
-        canvasTarget =
-          mozilla::gfx::Factory::CreateRecordingDrawTarget(recorder, canvasTarget);
         if (!canvasTarget) {
           continue;
         }
@@ -661,7 +656,7 @@ nsSimplePageSequenceFrame::PrePrintNextPage(nsITimerCallback* aCallback, bool* a
         ctx->InitializeWithDrawTarget(nullptr, WrapNotNull(canvasTarget));
 
         // Start the rendering process.
-        nsWeakFrame weakFrame = this;
+        AutoWeakFrame weakFrame = this;
         canvas->DispatchPrintCallback(aCallback);
         NS_ENSURE_STATE(weakFrame.IsAlive());
       }

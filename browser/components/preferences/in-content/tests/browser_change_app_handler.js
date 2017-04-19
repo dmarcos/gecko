@@ -9,14 +9,14 @@ function setupFakeHandler() {
   let handler = info.possibleLocalHandlers.queryElementAt(0, Ci.nsILocalHandlerApp);
 
   let infoToModify = gMimeSvc.getFromTypeAndExtension("text/x-test-handler", null);
-  infoToModify.possibleApplicationHandlers.appendElement(handler, false);
+  infoToModify.possibleApplicationHandlers.appendElement(handler);
 
   gHandlerSvc.store(infoToModify);
 }
 
 add_task(function*() {
   setupFakeHandler();
-  yield openPreferencesViaOpenPreferencesAPI("applications", null, {leaveOpen: true});
+  yield openPreferencesViaOpenPreferencesAPI("applications", {leaveOpen: true});
   info("Preferences page opened on the applications pane.");
   let win = gBrowser.selectedBrowser.contentWindow;
 

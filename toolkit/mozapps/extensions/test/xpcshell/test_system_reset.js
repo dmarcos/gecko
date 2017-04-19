@@ -1,6 +1,5 @@
 // Tests that we reset to the default system add-ons correctly when switching
 // application versions
-const PREF_SYSTEM_ADDON_SET = "extensions.systemAddonSet";
 
 BootstrapMonitor.init();
 
@@ -176,7 +175,7 @@ add_task(function* test_updated() {
   updatesDir.append(dirname);
 
   // Copy in the system add-ons
-    let file = do_get_file("data/system_addons/system2_2.xpi");
+  let file = do_get_file("data/system_addons/system2_2.xpi");
   file.copyTo(updatesDir, "system2@tests.mozilla.org.xpi");
   file = do_get_file("data/system_addons/system3_2.xpi");
   file.copyTo(updatesDir, "system3@tests.mozilla.org.xpi");
@@ -360,6 +359,10 @@ add_task(function* test_bad_app_cert() {
   distroDir.leafName = "app3";
   startupManager();
 
+  // Since we updated the app version, the system addon set should be reset as well.
+  let addonSet = Services.prefs.getCharPref(PREF_SYSTEM_ADDON_SET);
+  do_check_eq(addonSet, `{"schema":1,"addons":{}}`);
+
   // Add-on will still be present
   let addon = yield promiseAddonByID("system1@tests.mozilla.org");
   do_check_neq(addon, null);
@@ -377,7 +380,7 @@ add_task(function* test_bad_app_cert() {
 });
 
 // A failed upgrade should revert to the default set.
-add_task(function* test_updated() {
+add_task(function* test_updated_bad_update_set() {
   // Create a random dir to install into
   let dirname = makeUUID();
   FileUtils.getDir("ProfD", ["features", dirname], true);
@@ -414,3 +417,4 @@ add_task(function* test_updated() {
 
   yield promiseShutdownManager();
 });
+

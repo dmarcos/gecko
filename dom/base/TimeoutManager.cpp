@@ -29,19 +29,22 @@ static int32_t gMinTimeoutValue = 0;
 static int32_t gMinBackgroundTimeoutValue = 0;
 static int32_t gMinTrackingTimeoutValue = 0;
 static int32_t gMinTrackingBackgroundTimeoutValue = 0;
+static int32_t gTrackingTimeoutThrottlingDelay = 0;
 static bool    gAnnotateTrackingChannels = false;
 int32_t
 TimeoutManager::DOMMinTimeoutValue(bool aIsTracking) const {
   // First apply any back pressure delay that might be in effect.
   int32_t value = std::max(mBackPressureDelayMS, 0);
-  // Don't use the background timeout value when there are audio contexts
-  // present, so that background audio can keep running smoothly. (bug 1181073)
-  bool isBackground = !mWindow.AsInner()->HasAudioContexts() &&
+  // Don't use the background timeout value when the tab is playing audio.
+  // Until bug 1336484 we only used to do this for pages that use Web Audio.
+  // The original behavior was implemented in bug 11811073.
+  bool isBackground = !mWindow.AsInner()->IsPlayingAudio() &&
     mWindow.IsBackgroundInternal();
-  auto minValue = aIsTracking ? (isBackground ? gMinTrackingBackgroundTimeoutValue
-                                              : gMinTrackingTimeoutValue)
-                              : (isBackground ? gMinBackgroundTimeoutValue
-                                              : gMinTimeoutValue);
+  bool throttleTracking = aIsTracking && mThrottleTrackingTimeouts;
+  auto minValue = throttleTracking ? (isBackground ? gMinTrackingBackgroundTimeoutValue
+                                                   : gMinTrackingTimeoutValue)
+                                   : (isBackground ? gMinBackgroundTimeoutValue
+                                                   : gMinTimeoutValue);
   return std::max(minValue, value);
 }
 
@@ -51,6 +54,9 @@ TimeoutManager::DOMMinTimeoutValue(bool aIsTracking) const {
 #define ALTERNATE_TIMEOUT_BUCKETING_STRATEGY         2 // Put every other timeout in the list of tracking timeouts
 #define RANDOM_TIMEOUT_BUCKETING_STRATEGY            3 // Put timeouts into either the normal or tracking timeouts list randomly
 static int32_t gTimeoutBucketingStrategy = 0;
+
+#define DEFAULT_TRACKING_TIMEOUT_THROTTLING_DELAY  -1  // Only positive integers cause us to introduce a delay for tracking
+                                                       // timeout throttling.
 
 // The number of nested timeouts before we start clamping. HTML5 says 1, WebKit
 // uses 5.
@@ -65,26 +71,35 @@ uint32_t TimeoutManager::sNestingLevel = 0;
 
 namespace {
 
+// The maximum number of timer callbacks we will try to run in a single event
+// loop runnable.
+#define DEFAULT_TARGET_MAX_CONSECUTIVE_CALLBACKS 5
+uint32_t gTargetMaxConsecutiveCallbacks;
+
 // The number of queued runnables within the TabGroup ThrottledEventQueue
 // at which to begin applying back pressure to the window.
-const uint32_t kThrottledEventQueueBackPressure = 5000;
+#define DEFAULT_THROTTLED_EVENT_QUEUE_BACK_PRESSURE 5000
+static uint32_t gThrottledEventQueueBackPressure;
 
 // The amount of delay to apply to timers when back pressure is triggered.
 // As the length of the ThrottledEventQueue grows delay is increased.  The
 // delay is scaled such that every kThrottledEventQueueBackPressure runnables
 // in the queue equates to an additional kBackPressureDelayMS.
-const double kBackPressureDelayMS = 500;
+#define DEFAULT_BACK_PRESSURE_DELAY_MS 250
+static uint32_t gBackPressureDelayMS;
 
 // This defines a limit for how much the delay must drop before we actually
 // reduce back pressure throttle amount.  This makes the throttle delay
 // a bit "sticky" once we enter back pressure.
-const double kBackPressureDelayReductionThresholdMS = 400;
+#define DEFAULT_BACK_PRESSURE_DELAY_REDUCTION_THRESHOLD_MS 1000
+static uint32_t gBackPressureDelayReductionThresholdMS;
 
 // The minimum delay we can reduce back pressure to before we just floor
 // the value back to zero.  This allows us to ensure that we can exit
 // back pressure event if there are always a small number of runnables
 // queued up.
-const double kBackPressureDelayMinimumMS = 100;
+#define DEFAULT_BACK_PRESSURE_DELAY_MINIMUM_MS 100
+static uint32_t gBackPressureDelayMinimumMS;
 
 // Convert a ThrottledEventQueue length to a timer delay in milliseconds.
 // This will return a value between 0 and INT32_MAX.
@@ -92,8 +107,8 @@ int32_t
 CalculateNewBackPressureDelayMS(uint32_t aBacklogDepth)
 {
   double multiplier = static_cast<double>(aBacklogDepth) /
-                      static_cast<double>(kThrottledEventQueueBackPressure);
-  double value = kBackPressureDelayMS * multiplier;
+                      static_cast<double>(gThrottledEventQueueBackPressure);
+  double value = static_cast<double>(gBackPressureDelayMS) * multiplier;
   // Avoid overflow
   if (value > INT32_MAX) {
     value = INT32_MAX;
@@ -102,7 +117,7 @@ CalculateNewBackPressureDelayMS(uint32_t aBacklogDepth)
   // Once we get close to an empty queue just floor the delay back to zero.
   // We want to ensure we don't get stuck in a condition where there is a
   // small amount of delay remaining due to an active, but reasonable, queue.
-  else if (value < kBackPressureDelayMinimumMS) {
+  else if (value < static_cast<double>(gBackPressureDelayMinimumMS)) {
     value = 0;
   }
   return static_cast<int32_t>(value);
@@ -116,7 +131,8 @@ TimeoutManager::TimeoutManager(nsGlobalWindow& aWindow)
     mTimeoutFiringDepth(0),
     mRunningTimeout(nullptr),
     mIdleCallbackTimeoutCounter(1),
-    mBackPressureDelayMS(0)
+    mBackPressureDelayMS(0),
+    mThrottleTrackingTimeouts(gTrackingTimeoutThrottlingDelay <= 0)
 {
   MOZ_DIAGNOSTIC_ASSERT(aWindow.IsInnerWindow());
 
@@ -127,6 +143,8 @@ TimeoutManager::TimeoutManager(nsGlobalWindow& aWindow)
 
 TimeoutManager::~TimeoutManager()
 {
+  MOZ_DIAGNOSTIC_ASSERT(!mThrottleTrackingTimeoutsTimer);
+
   MOZ_LOG(gLog, LogLevel::Debug,
           ("TimeoutManager %p destroyed\n", this));
 }
@@ -150,9 +168,29 @@ TimeoutManager::Initialize()
   Preferences::AddIntVarCache(&gTimeoutBucketingStrategy,
                               "dom.timeout_bucketing_strategy",
                               TRACKING_SEPARATE_TIMEOUT_BUCKETING_STRATEGY);
+  Preferences::AddIntVarCache(&gTrackingTimeoutThrottlingDelay,
+                              "dom.timeout.tracking_throttling_delay",
+                              DEFAULT_TRACKING_TIMEOUT_THROTTLING_DELAY);
   Preferences::AddBoolVarCache(&gAnnotateTrackingChannels,
                                "privacy.trackingprotection.annotate_channels",
                                false);
+
+  Preferences::AddUintVarCache(&gThrottledEventQueueBackPressure,
+                               "dom.timeout.throttled_event_queue_back_pressure",
+                               DEFAULT_THROTTLED_EVENT_QUEUE_BACK_PRESSURE);
+  Preferences::AddUintVarCache(&gBackPressureDelayMS,
+                               "dom.timeout.back_pressure_delay_ms",
+                               DEFAULT_BACK_PRESSURE_DELAY_MS);
+  Preferences::AddUintVarCache(&gBackPressureDelayReductionThresholdMS,
+                               "dom.timeout.back_pressure_delay_reduction_threshold_ms",
+                               DEFAULT_BACK_PRESSURE_DELAY_REDUCTION_THRESHOLD_MS);
+  Preferences::AddUintVarCache(&gBackPressureDelayMinimumMS,
+                               "dom.timeout.back_pressure_delay_minimum_ms",
+                               DEFAULT_BACK_PRESSURE_DELAY_MINIMUM_MS);
+
+  Preferences::AddUintVarCache(&gTargetMaxConsecutiveCallbacks,
+                               "dom.timeout.max_consecutive_callbacks",
+                               DEFAULT_TARGET_MAX_CONSECUTIVE_CALLBACKS);
 }
 
 uint32_t
@@ -310,12 +348,15 @@ TimeoutManager::SetTimeout(nsITimeoutHandler* aHandler,
   *aReturn = timeout->mTimeoutId;
 
   MOZ_LOG(gLog, LogLevel::Debug,
-          ("Set%s(TimeoutManager=%p, timeout=%p, "
-           "delay=%i, minimum=%i, background=%d, realInterval=%i) "
+          ("Set%s(TimeoutManager=%p, timeout=%p, delay=%i, "
+           "minimum=%i, throttling=%s, background=%d, realInterval=%i) "
            "returned %stracking timeout ID %u\n",
            aIsInterval ? "Interval" : "Timeout",
            this, timeout.get(), interval,
            DOMMinTimeoutValue(timeout->mIsTracking),
+           mThrottleTrackingTimeouts ? "yes"
+                                     : (mThrottleTrackingTimeoutsTimer ?
+                                          "pending" : "no"),
            int(mWindow.IsBackgroundInternal()), realInterval,
            timeout->mIsTracking ? "" : "non-",
            timeout->mTimeoutId));
@@ -412,6 +453,10 @@ TimeoutManager::RunTimeout(Timeout* aTimeout)
                                        mTrackingTimeouts,
                                        nullptr,
                                        nullptr);
+
+    uint32_t numTimersToRun = 0;
+    bool targetTimerSeen = false;
+
     while (true) {
       Timeout* timeout = expiredIter.Next();
       if (!timeout || timeout->When() > deadline) {
@@ -429,17 +474,27 @@ TimeoutManager::RunTimeout(Timeout* aTimeout)
           last_expired_tracking_timeout = timeout;
         }
 
-        // Run available timers until we see our target timer.  After
-        // that, however, stop coalescing timers so we can yield the
-        // main thread.  Further timers that are ready will get picked
-        // up by their own nsITimer runnables when they execute.
+        numTimersToRun += 1;
+
+        // Note that we have seen our target timer.  This means we can now
+        // stop processing timers once we hit our threshold below.
+        if (timeout == aTimeout) {
+          targetTimerSeen = true;
+        }
+
+        // Run only a limited number of timers based on the configured
+        // maximum.  Note, we must always run our target timer however.
+        // Further timers that are ready will get picked up by their own
+        // nsITimer runnables when they execute.
         //
         // For chrome windows, however, we do coalesce all timers and
         // do not yield the main thread.  This is partly because we
         // trust chrome windows not to misbehave and partly because a
         // number of browser chrome tests have races that depend on this
         // coalescing.
-        if (timeout == aTimeout && !mWindow.IsChromeWindow()) {
+        if (targetTimerSeen &&
+            numTimersToRun >= gTargetMaxConsecutiveCallbacks &&
+            !mWindow.IsChromeWindow()) {
           break;
         }
       }
@@ -654,7 +709,7 @@ TimeoutManager::MaybeApplyBackPressure()
   // rarely fire under normaly circumstances.  Its low enough, though,
   // that we should have time to slow new runnables from being added before an
   // OOM occurs.
-  if (queue->Length() < kThrottledEventQueueBackPressure) {
+  if (queue->Length() < gThrottledEventQueueBackPressure) {
     return;
   }
 
@@ -712,8 +767,8 @@ TimeoutManager::CancelOrUpdateBackPressure(nsGlobalWindow* aWindow)
   // can be quite expensive.  We only want to call that method if the back log
   // is really clearing.
   else if (newBackPressureDelayMS == 0 ||
-           (newBackPressureDelayMS <=
-           (mBackPressureDelayMS - kBackPressureDelayReductionThresholdMS))) {
+           (static_cast<uint32_t>(mBackPressureDelayMS) >
+           (newBackPressureDelayMS + gBackPressureDelayReductionThresholdMS))) {
     int32_t oldBackPressureDelayMS = mBackPressureDelayMS;
     mBackPressureDelayMS = newBackPressureDelayMS;
 
@@ -916,18 +971,28 @@ TimeoutManager::Timeouts::ResetTimersForThrottleReduction(int32_t aPreviousThrot
       // current timeout in the list.
       Timeout* nextTimeout = timeout->getNext();
 
-      // It is safe to remove and re-insert because When() is now
-      // strictly smaller than it used to be, so we know we'll insert
-      // |timeout| before nextTimeout.
-      NS_ASSERTION(!nextTimeout ||
-                   timeout->When() < nextTimeout->When(), "How did that happen?");
-      timeout->remove();
-      // Insert() will addref |timeout| and reset mFiringDepth.  Make sure to
-      // undo that after calling it.
-      uint32_t firingDepth = timeout->mFiringDepth;
-      Insert(timeout, aSortBy);
-      timeout->mFiringDepth = firingDepth;
-      timeout->Release();
+      // Since we are only reducing intervals in this method we can
+      // make an optimization here.  If the reduction does not cause us
+      // to fall before our previous timeout then we do not have to
+      // remove and re-insert the current timeout.  This is important
+      // because re-insertion makes this algorithm O(n^2).  Since we
+      // will typically be shifting a lot of timers at once this
+      // optimization saves us a lot of work.
+      Timeout* prevTimeout = timeout->getPrevious();
+      if (prevTimeout && prevTimeout->When() > timeout->When()) {
+        // It is safe to remove and re-insert because When() is now
+        // strictly smaller than it used to be, so we know we'll insert
+        // |timeout| before nextTimeout.
+        NS_ASSERTION(!nextTimeout ||
+                     timeout->When() < nextTimeout->When(), "How did that happen?");
+        timeout->remove();
+        // Insert() will addref |timeout| and reset mFiringDepth.  Make sure to
+        // undo that after calling it.
+        uint32_t firingDepth = timeout->mFiringDepth;
+        Insert(timeout, aSortBy);
+        timeout->mFiringDepth = firingDepth;
+        timeout->Release();
+      }
 
       nsresult rv = timeout->InitTimer(aQueue, delay.ToMilliseconds());
 
@@ -1133,8 +1198,16 @@ TimeoutManager::Freeze()
   MOZ_LOG(gLog, LogLevel::Debug,
           ("Freeze(TimeoutManager=%p)\n", this));
 
+  DebugOnly<bool> _seenDummyTimeout = false;
+
   TimeStamp now = TimeStamp::Now();
   ForEachUnorderedTimeout([&](Timeout* aTimeout) {
+    if (!aTimeout->mWindow) {
+      NS_ASSERTION(!_seenDummyTimeout, "More than one dummy timeout?!");
+      _seenDummyTimeout = true;
+      return;
+    }
+
     // Save the current remaining time for this timeout.  We will
     // re-apply it when the window is Thaw()'d.  This effectively
     // shifts timers to the right as if time does not pass while
@@ -1185,4 +1258,80 @@ TimeoutManager::IsTimeoutTracking(uint32_t aTimeoutId)
   return mTrackingTimeouts.ForEachAbortable([&](Timeout* aTimeout) {
       return aTimeout->mTimeoutId == aTimeoutId;
     });
+}
+
+namespace {
+
+class ThrottleTrackingTimeoutsCallback final : public nsITimerCallback
+{
+public:
+  explicit ThrottleTrackingTimeoutsCallback(nsGlobalWindow* aWindow)
+    : mWindow(aWindow)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(aWindow->IsInnerWindow());
+  }
+
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSITIMERCALLBACK
+
+private:
+  ~ThrottleTrackingTimeoutsCallback() {}
+
+private:
+  // The strong reference here keeps the Window and hence the TimeoutManager
+  // object itself alive.
+  RefPtr<nsGlobalWindow> mWindow;
+};
+
+NS_IMPL_ISUPPORTS(ThrottleTrackingTimeoutsCallback, nsITimerCallback)
+
+NS_IMETHODIMP
+ThrottleTrackingTimeoutsCallback::Notify(nsITimer* aTimer)
+{
+  mWindow->AsInner()->TimeoutManager().StartThrottlingTrackingTimeouts();
+  mWindow = nullptr;
+  return NS_OK;
+}
+
+}
+
+void
+TimeoutManager::StartThrottlingTrackingTimeouts()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_DIAGNOSTIC_ASSERT(mThrottleTrackingTimeoutsTimer);
+
+  MOZ_LOG(gLog, LogLevel::Debug,
+          ("TimeoutManager %p started to throttle tracking timeouts\n", this));
+
+  MOZ_DIAGNOSTIC_ASSERT(!mThrottleTrackingTimeouts);
+  mThrottleTrackingTimeouts = true;
+  mThrottleTrackingTimeoutsTimer = nullptr;
+}
+
+void
+TimeoutManager::OnDocumentLoaded()
+{
+  if (gTrackingTimeoutThrottlingDelay <= 0) {
+    return;
+  }
+
+  MOZ_DIAGNOSTIC_ASSERT(!mThrottleTrackingTimeouts);
+
+  MOZ_LOG(gLog, LogLevel::Debug,
+          ("TimeoutManager %p delaying tracking timeout throttling by %dms\n",
+           this, gTrackingTimeoutThrottlingDelay));
+
+  mThrottleTrackingTimeoutsTimer =
+    do_CreateInstance("@mozilla.org/timer;1");
+  if (!mThrottleTrackingTimeoutsTimer) {
+    return;
+  }
+
+  nsCOMPtr<nsITimerCallback> callback =
+    new ThrottleTrackingTimeoutsCallback(&mWindow);
+
+  mThrottleTrackingTimeoutsTimer->InitWithCallback(callback,
+                                                   gTrackingTimeoutThrottlingDelay,
+                                                   nsITimer::TYPE_ONE_SHOT);
 }

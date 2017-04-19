@@ -7,6 +7,7 @@
 #include "HitTestingTreeNode.h"
 
 #include "AsyncPanZoomController.h"                     // for AsyncPanZoomController
+#include "gfxPrefs.h"
 #include "LayersLogging.h"                              // for Stringify
 #include "mozilla/gfx/Point.h"                          // for Point4D
 #include "mozilla/layers/APZThreadUtils.h"              // for AssertOnCompositorThread
@@ -125,6 +126,12 @@ bool
 HitTestingTreeNode::IsScrollbarNode() const
 {
   return mIsScrollbarContainer || (mScrollDir != ScrollDirection::NONE);
+}
+
+FrameMetrics::ViewID
+HitTestingTreeNode::GetScrollTargetId() const
+{
+  return mScrollViewId;
 }
 
 void
@@ -248,7 +255,11 @@ HitTestingTreeNode::Untransform(const ParentLayerPoint& aPoint) const
         mApzc
       ? mApzc->GetCurrentAsyncTransformWithOverscroll(AsyncPanZoomController::NORMAL)
       : AsyncTransformComponentMatrix());
-  return UntransformBy(transform.Inverse(), aPoint);
+  Maybe<ParentLayerToLayerMatrix4x4> inverse = transform.MaybeInverse();
+  if (inverse) {
+    return UntransformBy(inverse.ref(), aPoint);
+  }
+  return Nothing();
 }
 
 HitTestResult

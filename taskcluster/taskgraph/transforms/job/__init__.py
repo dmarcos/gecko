@@ -15,14 +15,18 @@ import copy
 import logging
 import os
 
-from taskgraph.transforms.base import resolve_keyed_by, validate_schema, TransformSequence
+from taskgraph.transforms.base import TransformSequence
+from taskgraph.util.schema import (
+    validate_schema,
+    Schema,
+    optionally_keyed_by,
+)
 from taskgraph.transforms.task import task_description_schema
 from voluptuous import (
     Any,
     Extra,
     Optional,
     Required,
-    Schema,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,13 +52,24 @@ job_description_schema = Schema({
     Optional('expires-after'): task_description_schema['expires-after'],
     Optional('routes'): task_description_schema['routes'],
     Optional('scopes'): task_description_schema['scopes'],
+    Optional('tags'): task_description_schema['tags'],
     Optional('extra'): task_description_schema['extra'],
     Optional('treeherder'): task_description_schema['treeherder'],
     Optional('index'): task_description_schema['index'],
     Optional('run-on-projects'): task_description_schema['run-on-projects'],
     Optional('coalesce-name'): task_description_schema['coalesce-name'],
+    Optional('optimizations'): task_description_schema['optimizations'],
     Optional('needs-sccache'): task_description_schema['needs-sccache'],
-    Optional('when'): task_description_schema['when'],
+
+    # The "when" section contains descriptions of the circumstances
+    # under which this task should be included in the task graph.  This
+    # will be converted into an element in the `optimizations` list.
+    Optional('when'): Any({
+        # This task only needs to be run if a file matching one of the given
+        # patterns has changed in the push.  The patterns use the mozpack
+        # match function (python/mozbuild/mozpack/path.py).
+        Optional('files-changed'): [basestring],
+    }),
 
     # A description of how to run this job.
     'run': {
@@ -65,15 +80,18 @@ job_description_schema = Schema({
         # own schema.
         Extra: object,
     },
-    Optional('platforms'): [basestring],
-    Required('worker-type'): Any(
-        task_description_schema['worker-type'],
-        {'by-platform': {basestring: task_description_schema['worker-type']}},
-    ),
-    Required('worker'): Any(
-        task_description_schema['worker'],
-        {'by-platform': {basestring: task_description_schema['worker']}},
-    ),
+
+    Required('worker-type'): optionally_keyed_by(
+        'platform',
+        task_description_schema['worker-type']),
+
+    # for `worker`, all we need is the implementation; the rest will be verified
+    # by the task description schema
+    Required('worker'): optionally_keyed_by(
+        'platform', {
+            Required('implementation'): basestring,
+            Extra: object,
+        }),
 })
 
 transforms = TransformSequence()
@@ -87,32 +105,26 @@ def validate(config, jobs):
 
 
 @transforms.add
-def expand_platforms(config, jobs):
+def rewrite_when_to_optimization(config, jobs):
     for job in jobs:
-        if 'platforms' not in job:
+        when = job.pop('when', {})
+        files_changed = when.get('files-changed')
+        if not files_changed:
             yield job
             continue
 
-        for platform in job['platforms']:
-            pjob = copy.deepcopy(job)
-            pjob['platform'] = platform
-            del pjob['platforms']
+        # add some common files
+        files_changed.extend([
+            '{}/**'.format(config.path),
+            'taskcluster/taskgraph/**',
+        ])
+        if 'in-tree' in job['worker'].get('docker-image', {}):
+            files_changed.append('taskcluster/docker/{}/**'.format(
+                job['worker']['docker-image']['in-tree']))
 
-            platform, buildtype = platform.rsplit('/', 1)
-            pjob['name'] = '{}-{}-{}'.format(pjob['name'], platform, buildtype)
-            yield pjob
+        job.setdefault('optimizations', []).append(['files-changed', files_changed])
 
-
-@transforms.add
-def handle_keyed_by(config, jobs):
-    fields = [
-        'worker-type',
-        'worker',
-    ]
-
-    for job in jobs:
-        for field in fields:
-            resolve_keyed_by(job, field, item_name=job['name'])
+        assert 'when' not in job
         yield job
 
 
@@ -128,11 +140,6 @@ def make_task_description(config, jobs):
             job['label'] = '{}-{}'.format(config.kind, job['name'])
         if job['name']:
             del job['name']
-        if 'platform' in job:
-            if 'treeherder' in job:
-                job['treeherder']['platform'] = job['platform']
-            del job['platform']
-
         taskdesc = copy.deepcopy(job)
 
         # fill in some empty defaults to make run implementations easier

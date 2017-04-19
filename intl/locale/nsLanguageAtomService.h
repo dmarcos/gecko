@@ -26,10 +26,12 @@ public:
   virtual already_AddRefed<nsIAtom>
     LookupCharSet(const nsACString& aCharSet) override;
 
-  virtual nsIAtom* GetLocaleLanguage(nsresult *aError) override;
+  virtual nsIAtom* GetLocaleLanguage() override;
 
-  virtual nsIAtom* GetLanguageGroup(nsIAtom *aLanguage,
-                                                nsresult *aError) override;
+  virtual nsIAtom* GetLanguageGroup(nsIAtom* aLanguage,
+                                    nsresult* aError) override;
+  virtual already_AddRefed<nsIAtom> GetUncachedLanguageGroup(nsIAtom* aLanguage,
+                                                             nsresult* aError) const final;
 
   nsLanguageAtomService();
 

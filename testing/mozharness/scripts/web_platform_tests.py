@@ -17,11 +17,15 @@ from mozharness.base.script import PreScriptAction
 from mozharness.base.vcs.vcsbase import MercurialScript
 from mozharness.mozilla.blob_upload import BlobUploadMixin, blobupload_config_options
 from mozharness.mozilla.testing.testbase import TestingMixin, testing_config_options, TOOLTOOL_PLATFORM_DIR
+from mozharness.mozilla.testing.codecoverage import (
+    CodeCoverageMixin,
+    code_coverage_config_options
+)
 
 from mozharness.mozilla.structuredlog import StructuredOutputParser
 from mozharness.base.log import INFO
 
-class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin):
+class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin, CodeCoverageMixin):
     config_options = [
         [['--test-type'], {
             "action": "extend",
@@ -50,7 +54,8 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin):
             "default": False,
             "help": "Permits a software GL implementation (such as LLVMPipe) to use the GL compositor."}]
     ] + copy.deepcopy(testing_config_options) + \
-        copy.deepcopy(blobupload_config_options)
+        copy.deepcopy(blobupload_config_options) + \
+        copy.deepcopy(code_coverage_config_options)
 
     def __init__(self, require_config_file=True):
         super(WebPlatformTest, self).__init__(
@@ -142,7 +147,8 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin):
                 "--binary=%s" % self.binary_path,
                 "--symbols-path=%s" % self.query_symbols_url(),
                 "--stackwalk-binary=%s" % self.query_minidump_stackwalk(),
-                "--stackfix-dir=%s" % os.path.join(dirs["abs_test_install_dir"], "bin")]
+                "--stackfix-dir=%s" % os.path.join(dirs["abs_test_install_dir"], "bin"),
+                "--run-by-dir=3"]
 
         for test_type in c.get("test_type", []):
             cmd.append("--test-type=%s" % test_type)
@@ -235,6 +241,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, BlobUploadMixin):
                                         log_compact=True)
 
         env = {'MINIDUMP_SAVE_PATH': dirs['abs_blob_upload_dir']}
+        env['RUST_BACKTRACE'] = '1'
 
         if self.config['allow_software_gl_layers']:
             env['MOZ_LAYERS_ALLOW_SOFTWARE_GL'] = '1'

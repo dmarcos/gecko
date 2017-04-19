@@ -8,6 +8,7 @@
 #include "HttpLog.h"
 
 #include "mozilla/Sprintf.h"
+#include "mozilla/Unused.h"
 
 #include "nsHttp.h"
 #include "nsHttpDigestAuth.h"
@@ -204,7 +205,7 @@ nsHttpDigestAuth::GenerateCredentials(nsIHttpAuthenticableChannel *authChannel,
   bool requireExtraQuotes = false;
   {
     nsAutoCString serverVal;
-    authChannel->GetServerResponseHeader(serverVal);
+    Unused << authChannel->GetServerResponseHeader(serverVal);
     if (!serverVal.IsEmpty()) {
       requireExtraQuotes = !PL_strncasecmp(serverVal.get(), "Microsoft-IIS", 13);
     }
@@ -223,7 +224,8 @@ nsHttpDigestAuth::GenerateCredentials(nsIHttpAuthenticableChannel *authChannel,
   rv = ParseChallenge(challenge, realm, domain, nonce, opaque,
                       &stale, &algorithm, &qop);
   if (NS_FAILED(rv)) {
-    LOG(("nsHttpDigestAuth::GenerateCredentials [ParseChallenge failed rv=%x]\n", rv));
+    LOG(("nsHttpDigestAuth::GenerateCredentials [ParseChallenge failed rv=%" PRIx32 "]\n",
+         static_cast<uint32_t>(rv)));
     return rv;
   }
 
@@ -502,7 +504,8 @@ nsHttpDigestAuth::CalculateHA1(const nsAFlatCString & username,
 
   if (algorithm & ALGO_MD5_SESS) {
     char part1[EXPANDED_DIGEST_LENGTH+1];
-    ExpandToHex(mHashBuf, part1);
+    rv = ExpandToHex(mHashBuf, part1);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
 
     contents.Assign(part1, EXPANDED_DIGEST_LENGTH);
     contents.Append(':');
@@ -566,8 +569,8 @@ nsHttpDigestAuth::ParseChallenge(const char * challenge,
   if (strlen(challenge) > 16000000) {
     return NS_ERROR_INVALID_ARG;
   }
-  
-  const char *p = challenge + 7; // first 7 characters are "Digest "
+
+  const char *p = challenge + 6; // first 6 characters are "Digest"
 
   *stale = false;
   *algorithm = ALGO_MD5; // default is MD5

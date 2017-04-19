@@ -133,19 +133,28 @@ struct MOZ_STACK_CLASS BidiParagraphData
   AutoTArray<nsIFrame*, 16> mLogicalFrames;
   AutoTArray<nsLineBox*, 16> mLinePerFrame;
   nsDataHashtable<nsISupportsHashKey, int32_t> mContentToFrameIndex;
+  // Cached presentation context for the frames we're processing.
+  nsPresContext*      mPresContext;
   bool                mIsVisual;
   nsBidiLevel         mParaLevel;
   nsIContent*         mPrevContent;
-  nsBidi              mBidiEngine;
   nsIFrame*           mPrevFrame;
+#ifdef DEBUG
+  // Only used for NOISY debug output.
+  nsBlockFrame*       mCurrentBlock;
+#endif
 
-  void Init(nsBlockFrame *aBlockFrame)
+  void Init(nsBlockFrame* aBlockFrame)
   {
     mPrevContent = nullptr;
+#ifdef DEBUG
+    mCurrentBlock = aBlockFrame;
+#endif
 
     mParaLevel = nsBidiPresUtils::BidiLevelFromStyle(aBlockFrame->StyleContext());
 
-    mIsVisual = aBlockFrame->PresContext()->IsVisualMode();
+    mPresContext = aBlockFrame->PresContext();
+    mIsVisual = mPresContext->IsVisualMode();
     if (mIsVisual) {
       /**
        * Drill up in content to detect whether this is an element that needs to
@@ -174,8 +183,9 @@ struct MOZ_STACK_CLASS BidiParagraphData
 
   nsresult SetPara()
   {
-    return mBidiEngine.SetPara(mBuffer.get(), BufferLength(),
-                               mParaLevel);
+    return mPresContext->GetBidiEngine()
+             .SetPara(mBuffer.get(), BufferLength(),
+                      mParaLevel);
   }
 
   /**
@@ -187,7 +197,7 @@ struct MOZ_STACK_CLASS BidiParagraphData
   {
     nsBidiLevel paraLevel = mParaLevel;
     if (paraLevel == NSBIDI_DEFAULT_LTR || paraLevel == NSBIDI_DEFAULT_RTL) {
-      mBidiEngine.GetParaLevel(&paraLevel);
+      mPresContext->GetBidiEngine().GetParaLevel(&paraLevel);
     }
     return paraLevel;
   }
@@ -195,18 +205,22 @@ struct MOZ_STACK_CLASS BidiParagraphData
   nsBidiDirection GetDirection()
   {
     nsBidiDirection dir;
-    mBidiEngine.GetDirection(&dir);
+    mPresContext->GetBidiEngine().GetDirection(&dir);
     return dir;
   }
 
-  nsresult CountRuns(int32_t *runCount){ return mBidiEngine.CountRuns(runCount); }
+  nsresult CountRuns(int32_t *runCount)
+  {
+    return mPresContext->GetBidiEngine().CountRuns(runCount);
+  }
 
   nsresult GetLogicalRun(int32_t aLogicalStart, 
                          int32_t* aLogicalLimit,
                          nsBidiLevel* aLevel)
   {
-    nsresult rv = mBidiEngine.GetLogicalRun(aLogicalStart,
-                                            aLogicalLimit, aLevel);
+    nsresult rv =
+      mPresContext->GetBidiEngine().GetLogicalRun(aLogicalStart,
+                                                   aLogicalLimit, aLevel);
     if (mIsVisual || NS_FAILED(rv))
       *aLevel = GetParaLevel();
     return rv;
@@ -342,7 +356,7 @@ struct MOZ_STACK_CLASS BidiParagraphData
       child = parent;
       parent = nsLayoutUtils::GetParentOrPlaceholderFor(child);
     }
-    NS_ASSERTION (parent, "aFrame is not a descendent of aBlockFrame");
+    NS_ASSERTION (parent, "aFrame is not a descendent of a block frame");
     while (!IsFrameInCurrentLine(aLineIter, aPrevFrame, child)) {
 #ifdef DEBUG
       bool hasNext =
@@ -691,26 +705,31 @@ nsBidiPresUtils::Resolve(nsBlockFrame* aBlockFrame)
   }
   for (nsBlockFrame* block = aBlockFrame; block;
        block = static_cast<nsBlockFrame*>(block->GetNextContinuation())) {
+#ifdef DEBUG
+    bpd.mCurrentBlock = block;
+#endif
     block->RemoveStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION);
-    nsBlockInFlowLineIterator lineIter(block, block->LinesBegin());
+    nsBlockInFlowLineIterator it(block, block->LinesBegin());
     bpd.mPrevFrame = nullptr;
-    TraverseFrames(aBlockFrame, &lineIter, block->PrincipalChildList().FirstChild(), &bpd);
-    // XXX what about overflow lines?
+    TraverseFrames(&it, block->PrincipalChildList().FirstChild(), &bpd);
+    nsBlockFrame::FrameLines* overflowLines = block->GetOverflowLines();
+    if (overflowLines) {
+      nsBlockInFlowLineIterator it(block, overflowLines->mLines.begin(), true);
+      bpd.mPrevFrame = nullptr;
+      TraverseFrames(&it, overflowLines->mFrames.FirstChild(), &bpd);
+    }
   }
 
   if (ch != 0) {
     bpd.PopBidiControl(ch);
   }
 
-  return ResolveParagraph(aBlockFrame, &bpd);
+  return ResolveParagraph(&bpd);
 }
 
 nsresult
-nsBidiPresUtils::ResolveParagraph(nsBlockFrame* aBlockFrame,
-                                  BidiParagraphData* aBpd)
+nsBidiPresUtils::ResolveParagraph(BidiParagraphData* aBpd)
 {
-  nsPresContext *presContext = aBlockFrame->PresContext();
-
   if (aBpd->BufferLength() < 1) {
     return NS_OK;
   }
@@ -738,16 +757,16 @@ nsBidiPresUtils::ResolveParagraph(nsBlockFrame* aBlockFrame,
   nsIContent* content = nullptr;
   int32_t     contentTextLength = 0;
 
-  FramePropertyTable *propTable = presContext->PropertyTable();
+  FramePropertyTable* propTable = aBpd->mPresContext->PropertyTable();
   nsLineBox* currentLine = nullptr;
   
 #ifdef DEBUG
 #ifdef NOISY_BIDI
-  printf("Before Resolve(), aBlockFrame=0x%p, mBuffer='%s', frameCount=%d, runCount=%d\n",
-         (void*)aBlockFrame, NS_ConvertUTF16toUTF8(aBpd->mBuffer).get(), frameCount, runCount);
+  printf("Before Resolve(), mCurrentBlock=%p, mBuffer='%s', frameCount=%d, runCount=%d\n",
+         (void*)aBpd->mCurrentBlock, NS_ConvertUTF16toUTF8(aBpd->mBuffer).get(), frameCount, runCount);
 #ifdef REALLY_NOISY_BIDI
   printf(" block frame tree=:\n");
-  aBlockFrame->List(stdout, 0);
+  aBpd->mCurrentBlock->List(stdout, 0);
 #endif
 #endif
 #endif
@@ -976,7 +995,7 @@ nsBidiPresUtils::ResolveParagraph(nsBlockFrame* aBlockFrame,
 #ifdef DEBUG
 #ifdef REALLY_NOISY_BIDI
   printf("---\nAfter Resolve(), frameTree =:\n");
-  aBlockFrame->List(stdout, 0);
+  aBpd->mCurrentBlock->List(stdout, 0);
   printf("===\n");
 #endif
 #endif
@@ -985,8 +1004,7 @@ nsBidiPresUtils::ResolveParagraph(nsBlockFrame* aBlockFrame,
 }
 
 void
-nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
-                                nsBlockInFlowLineIterator* aLineIter,
+nsBidiPresUtils::TraverseFrames(nsBlockInFlowLineIterator* aLineIter,
                                 nsIFrame*                  aCurrentFrame,
                                 BidiParagraphData*         aBpd)
 {
@@ -1008,8 +1026,6 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
      * twice.
      */
     nsIFrame* nextSibling = childFrame->GetNextSibling();
-    bool isLastFrame = !childFrame->GetNextContinuation();
-    bool isFirstFrame = !childFrame->GetPrevContinuation();
 
     // If the real frame for a placeholder is a first letter frame, we need to
     // drill down into it and include its contents in Bidi resolution.
@@ -1022,6 +1038,20 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
         frame = realFrame;
       }
     }
+
+    auto DifferentBidiValues = [](nsIFrame* aFrame1, nsIFrame* aFrame2) {
+      nsStyleContext* sc1 = aFrame1->StyleContext();
+      nsStyleContext* sc2 = aFrame2->StyleContext();
+      return GetBidiControl(sc1) != GetBidiControl(sc2) ||
+             GetBidiOverride(sc1) != GetBidiOverride(sc2);
+    };
+
+    nsIFrame* nextContinuation = frame->GetNextContinuation();
+    nsIFrame* prevContinuation = frame->GetPrevContinuation();
+    bool isLastFrame = !nextContinuation ||
+                       DifferentBidiValues(frame, nextContinuation);
+    bool isFirstFrame = !prevContinuation ||
+                        DifferentBidiValues(frame, prevContinuation);
 
     char16_t controlChar = 0;
     char16_t overrideChar = 0;
@@ -1153,7 +1183,7 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
                 // Mark the line before the newline as dirty.
                 aBpd->GetLineForFrameAt(aBpd->FrameCount() - 1)->MarkDirty();
               }
-              ResolveParagraphWithinBlock(aBlockFrame, aBpd);
+              ResolveParagraphWithinBlock(aBpd);
 
               if (!nextSibling && !createdContinuation) {
                 break;
@@ -1178,7 +1208,7 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
       } else if (nsGkAtoms::brFrame == frameType) {
         // break frame -- append line separator
         aBpd->AppendUnichar(kLineSeparator);
-        ResolveParagraphWithinBlock(aBlockFrame, aBpd);
+        ResolveParagraphWithinBlock(aBpd);
       } else { 
         // other frame type -- see the Unicode Bidi Algorithm:
         // "...inline objects (such as graphics) are treated as if they are ...
@@ -1189,7 +1219,7 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
                             kZWSP : kObjectSubstitute);
         if (!frame->IsInlineOutside()) {
           // if it is not inline, end the paragraph
-          ResolveParagraphWithinBlock(aBlockFrame, aBpd);
+          ResolveParagraphWithinBlock(aBpd);
         }
       }
     } else {
@@ -1198,7 +1228,7 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
       MOZ_ASSERT(!frame->GetChildList(nsIFrame::kOverflowList).FirstChild(),
                  "should have drained the overflow list above");
       if (kid) {
-        TraverseFrames(aBlockFrame, aLineIter, kid, aBpd);
+        TraverseFrames(aLineIter, kid, aBpd);
       }
     }
 
@@ -1220,11 +1250,10 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
 }
 
 void
-nsBidiPresUtils::ResolveParagraphWithinBlock(nsBlockFrame* aBlockFrame,
-                                             BidiParagraphData* aBpd)
+nsBidiPresUtils::ResolveParagraphWithinBlock(BidiParagraphData* aBpd)
 {
   aBpd->ClearBidiControls();
-  ResolveParagraph(aBlockFrame, aBpd);
+  ResolveParagraph(aBpd);
   aBpd->ResetData();
 }
 
@@ -2127,7 +2156,8 @@ nsresult nsBidiPresUtils::ProcessText(const char16_t*       aText,
             const char16_t* visualLeftPart;
             const char16_t* visualRightSide;
             if (dir == NSBIDI_RTL) {
-              // One day, son, this could all be replaced with mBidiEngine.GetVisualIndex ...
+              // One day, son, this could all be replaced with
+              // mPresContext->GetBidiEngine().GetVisualIndex() ...
               posResolve->visualIndex = visualStart + (subRunLength - (posResolve->logicalIndex + 1 - start));
               // Skipping to the "left part".
               visualLeftPart = text + posResolve->logicalIndex + 1;
@@ -2250,9 +2280,9 @@ nsresult nsBidiPresUtils::ProcessTextForRenderingContext(const char16_t*       a
                                              aTextRunConstructionDrawTarget,
                                              &aFontMetrics,
                                              nsPoint(aX, aY));
-  nsBidi bidiEngine;
   return ProcessText(aText, aLength, aBaseLevel, aPresContext, processor,
-                     aMode, aPosResolve, aPosResolveCount, aWidth, &bidiEngine);
+                     aMode, aPosResolve, aPosResolveCount, aWidth,
+                     &aPresContext->GetBidiEngine());
 }
 
 /* static */

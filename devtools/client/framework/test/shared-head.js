@@ -73,7 +73,7 @@ const ConsoleObserver = {
   }
 };
 
-Services.obs.addObserver(ConsoleObserver, "console-api-log-event", false);
+Services.obs.addObserver(ConsoleObserver, "console-api-log-event");
 registerCleanupFunction(() => {
   Services.obs.removeObserver(ConsoleObserver, "console-api-log-event");
 });
@@ -111,6 +111,8 @@ registerCleanupFunction(function* cleanup() {
  * @param {Object} options Object with various optional fields:
  *   - {Boolean} background If true, open the tab in background
  *   - {ChromeWindow} window Firefox top level window we should use to open the tab
+ *   - {Number} userContextId The userContextId of the tab.
+ *   - {String} preferredRemoteType
  * @return a promise that resolves to the tab object when the url is loaded
  */
 var addTab = Task.async(function* (url, options = { background: false, window: window }) {
@@ -118,8 +120,10 @@ var addTab = Task.async(function* (url, options = { background: false, window: w
 
   let { background } = options;
   let { gBrowser } = options.window ? options.window : window;
+  let { userContextId } = options;
 
-  let tab = gBrowser.addTab(url);
+  let tab = gBrowser.addTab(url,
+    {userContextId, preferredRemoteType: options.preferredRemoteType});
   if (!background) {
     gBrowser.selectedTab = tab;
   }

@@ -334,7 +334,7 @@ CallbackObject::CallSetup::~CallSetup()
 
         // IsJSContextException shouldn't be true anymore because we will report
         // the exception on the JSContext ... so throw something else.
-        mErrorResult.Throw(NS_ERROR_UNEXPECTED);
+        mErrorResult.ThrowWithCustomCleanup(NS_ERROR_UNEXPECTED);
       }
     }
   }
@@ -365,6 +365,9 @@ CallbackObjectHolderBase::ToXPCOMCallback(CallbackObject* aCallback,
   JSContext* cx = jsapi.cx();
 
   JS::Rooted<JSObject*> callback(cx, aCallback->CallbackOrNull());
+  if (!callback) {
+    return nullptr;
+  }
 
   JSAutoCompartment ac(cx, callback);
   RefPtr<nsXPCWrappedJS> wrappedJS;

@@ -3,9 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from editBookmarkOverlay.js */
+// Via downloadsViewOverlay.xul -> allDownloadsViewOverlay.xul
+/* import-globals-from ../../../../toolkit/content/contentAreaUtils.js */
+
 Components.utils.import("resource://gre/modules/AppConstants.jsm");
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/TelemetryStopwatch.jsm");
+Components.utils.import("resource://gre/modules/Services.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "MigrationUtils",
                                   "resource:///modules/MigrationUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
@@ -309,7 +314,7 @@ var PlacesOrganizer = {
         // The command execution function will take care of seeing if the
         // selection is a folder or a different container type, and will
         // load its contents in tabs.
-        PlacesUIUtils.openContainerNodeInTabs(selectedNode, aEvent, this._places);
+        PlacesUIUtils.openContainerNodeInTabs(node, aEvent, this._places);
       }
     }
   },
@@ -407,15 +412,14 @@ var PlacesOrganizer = {
   populateRestoreMenu: function PO_populateRestoreMenu() {
     let restorePopup = document.getElementById("fileRestorePopup");
 
-    const locale = Cc["@mozilla.org/chrome/chrome-registry;1"]
-                   .getService(Ci.nsIXULChromeRegistry)
-                   .getSelectedLocale("global", true);
-    const dtOptions = { year: "numeric", month: "long", day: "numeric" };
-    let dateFormatter = new Intl.DateTimeFormat(locale, dtOptions);
+    const dtOptions = {
+      dateStyle: "long"
+    };
+    let dateFormatter = Services.intl.createDateTimeFormat(undefined, dtOptions);
 
     // Remove existing menu items.  Last item is the restoreFromFile item.
     while (restorePopup.childNodes.length > 1)
-      restorePopup.removeChild(restorePopup.firstChild);
+      restorePopup.firstChild.remove();
 
     Task.spawn(function* () {
       let backupFiles = yield PlacesBackups.getBackupFiles();
@@ -1003,7 +1007,7 @@ var ViewMenu = {
       return endElement;
     }
     while (popup.hasChildNodes()) {
-      popup.removeChild(popup.firstChild);
+      popup.firstChild.remove();
     }
     return null;
   },

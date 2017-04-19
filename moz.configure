@@ -103,6 +103,20 @@ js_option('--enable-debug',
 add_old_configure_assignment('MOZ_DEBUG',
                              depends('--enable-debug')(lambda v: bool(v)))
 
+imply_option('--enable-rust-debug',
+             depends('--enable-debug')(lambda v: bool(v) or None))
+
+js_option('--enable-rust-debug',
+          help='Build Rust code with debug assertions turned on.')
+
+@depends('--enable-rust-debug')
+def debug_rust(debug):
+    if debug:
+        return True
+
+set_config('MOZ_DEBUG_RUST', debug_rust)
+set_define('MOZ_DEBUG_RUST', debug_rust)
+
 include('build/moz.configure/pkg.configure')
 # Make this assignment here rather than in pkg.configure to avoid
 # requiring this file in unit tests.
@@ -157,6 +171,23 @@ def build_backends(backends):
 
 set_config('BUILD_BACKENDS', build_backends)
 
+option('--disable-gtest-in-build',
+       help='Force disable building the gtest libxul during the build.',
+       when='--enable-compile-environment')
+
+# Determine whether to build the gtest xul. This happens in automation
+# on Desktop platforms with the exception of Windows PGO, where linking
+# xul-gtest.dll takes too long.
+@depends('MOZ_PGO', build_project, target, 'MOZ_AUTOMATION', '--disable-gtest-in-build',
+         when='--enable-compile-environment')
+def build_gtest(pgo, build_project, target, automation, enabled):
+    if not enabled:
+        return None
+    if (automation and build_project == 'browser' and
+        not (pgo and target.os == 'WINNT')):
+        return True
+
+set_config('LINK_GTEST_DURING_COMPILE', build_gtest)
 
 # Awk detection
 # ==============================================================
@@ -253,14 +284,17 @@ def extra_programs(target):
     if target.kernel == 'Darwin':
         return namespace(
             DSYMUTIL=('dsymutil', 'llvm-dsymutil'),
-            GENISOIMAGE=('genisoimage',),
+            MKFSHFS=('newfs_hfs', 'mkfs.hfsplus'),
+            HFS_TOOL=('hfsplus',)
         )
     if target.os == 'GNU' and target.kernel == 'Linux':
         return namespace(RPMBUILD=('rpmbuild',))
 
 check_prog('DSYMUTIL', delayed_getattr(extra_programs, 'DSYMUTIL'),
            allow_missing=True)
-check_prog('GENISOIMAGE', delayed_getattr(extra_programs, 'GENISOIMAGE'),
+check_prog('MKFSHFS', delayed_getattr(extra_programs, 'MKFSHFS'),
+           allow_missing=True)
+check_prog('HFS_TOOL', delayed_getattr(extra_programs, 'HFS_TOOL'),
            allow_missing=True)
 check_prog('RPMBUILD', delayed_getattr(extra_programs, 'RPMBUILD'),
            allow_missing=True)
@@ -285,6 +319,7 @@ def makensis_progs(target):
         return
 
     candidates = [
+        'makensis-3.01.exe',
         'makensis-3.0b3.exe',
         'makensis-3.0b1.exe',
         'makensis.exe',
@@ -300,7 +335,7 @@ def makensis_progs(target):
 
     return tuple(candidates)
 
-nsis = check_prog('MAKENSISU', makensis_progs)
+nsis = check_prog('MAKENSISU', makensis_progs, allow_missing=True)
 
 # Make sure the version of makensis is up to date.
 @depends_if(nsis)

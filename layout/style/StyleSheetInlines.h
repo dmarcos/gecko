@@ -10,6 +10,7 @@
 #include "mozilla/StyleSheetInfo.h"
 #include "mozilla/ServoStyleSheet.h"
 #include "mozilla/CSSStyleSheet.h"
+#include "nsINode.h"
 
 namespace mozilla {
 
@@ -18,19 +19,13 @@ MOZ_DEFINE_STYLO_METHODS(StyleSheet, CSSStyleSheet, ServoStyleSheet)
 StyleSheetInfo&
 StyleSheet::SheetInfo()
 {
-  if (IsServo()) {
-    return AsServo()->mSheetInfo;
-  }
-  return *AsGecko()->mInner;
+  return *mInner;
 }
 
 const StyleSheetInfo&
 StyleSheet::SheetInfo() const
 {
-  if (IsServo()) {
-    return AsServo()->mSheetInfo;
-  }
-  return *AsGecko()->mInner;
+  return *mInner;
 }
 
 bool
@@ -94,7 +89,7 @@ StyleSheet::GetParentObject() const
   if (mOwningNode) {
     return dom::ParentObject(mOwningNode);
   }
-  return dom::ParentObject(GetParentSheet());
+  return dom::ParentObject(static_cast<nsIDOMCSSStyleSheet*>(mParent), mParent);
 }
 
 nsIPrincipal*

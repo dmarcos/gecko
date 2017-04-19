@@ -1,3 +1,6 @@
+// This file also defines a frame script.
+/* eslint-env mozilla/frame-script */
+
 var Cc = Components.classes;
 var Ci = Components.interfaces;
 var Cu = Components.utils;
@@ -178,7 +181,7 @@ function testObserver() {
       Services.obs.removeObserver(observer, "document-element-inserted");
       observerFired++;
     }
-    Services.obs.addObserver(observer, "document-element-inserted", false);
+    Services.obs.addObserver(observer, "document-element-inserted");
 
     let count = 0;
     const url = baseURL + "browser_addonShims_testpage.html";
@@ -285,7 +288,7 @@ function testAboutModuleRegistration() {
           } catch (e) {}
         }
       };
-      Services.tm.currentThread.dispatch(runnable, Ci.nsIEventTarget.DISPATCH_NORMAL);
+      Services.tm.dispatchToMainThread(runnable);
     },
 
     asyncOpen2(listener) {
@@ -426,6 +429,8 @@ function testAboutModuleRegistration() {
    */
   let testAboutModulesWork = (browser) => {
     let testConnection = () => {
+      // This section is loaded into a frame script.
+      /* global content:false */
       let request = new content.XMLHttpRequest();
       try {
         request.open("GET", "about:test1", false);
@@ -627,4 +632,3 @@ function install(aData, aReason) {
 
 function uninstall(aData, aReason) {
 }
-

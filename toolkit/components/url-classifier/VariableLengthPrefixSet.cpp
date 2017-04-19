@@ -37,7 +37,7 @@ VariableLengthPrefixSet::VariableLengthPrefixSet()
   mFixedPrefixSet = new nsUrlClassifierPrefixSet();
 }
 
-NS_IMETHODIMP
+nsresult
 VariableLengthPrefixSet::Init(const nsACString& aName)
 {
   mMemoryReportPath =
@@ -56,7 +56,7 @@ VariableLengthPrefixSet::~VariableLengthPrefixSet()
   UnregisterWeakMemoryReporter(this);
 }
 
-NS_IMETHODIMP
+nsresult
 VariableLengthPrefixSet::SetPrefixes(const PrefixStringMap& aPrefixMap)
 {
   MutexAutoLock lock(mLock);
@@ -152,10 +152,16 @@ VariableLengthPrefixSet::GetPrefixes(PrefixStringMap& aPrefixMap)
   return NS_OK;
 }
 
+nsresult
+VariableLengthPrefixSet::GetFixedLengthPrefixes(FallibleTArray<uint32_t>& aPrefixes)
+{
+  return mFixedPrefixSet->GetPrefixesNative(aPrefixes);
+}
+
 // It should never be the case that more than one hash prefixes match a given
 // full hash. However, if that happens, this method returns any one of them.
 // It does not guarantee which one of those will be returned.
-NS_IMETHODIMP
+nsresult
 VariableLengthPrefixSet::Matches(const nsACString& aFullHash, uint32_t* aLength)
 {
   MutexAutoLock lock(mLock);
@@ -182,6 +188,7 @@ VariableLengthPrefixSet::Matches(const nsACString& aFullHash, uint32_t* aLength)
   for (auto iter = mVLPrefixSet.ConstIter(); !iter.Done(); iter.Next()) {
     if (BinarySearch(aFullHash, *iter.Data(), iter.Key())) {
       *aLength = iter.Key();
+      MOZ_ASSERT(*aLength > 4);
       return NS_OK;
     }
   }
@@ -189,7 +196,7 @@ VariableLengthPrefixSet::Matches(const nsACString& aFullHash, uint32_t* aLength)
   return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 VariableLengthPrefixSet::IsEmpty(bool* aEmpty)
 {
   MutexAutoLock lock(mLock);
@@ -202,7 +209,7 @@ VariableLengthPrefixSet::IsEmpty(bool* aEmpty)
   return NS_OK;
 }
 
-NS_IMETHODIMP
+nsresult
 VariableLengthPrefixSet::LoadFromFile(nsIFile* aFile)
 {
   MutexAutoLock lock(mLock);
@@ -241,7 +248,7 @@ VariableLengthPrefixSet::LoadFromFile(nsIFile* aFile)
   return NS_OK;;
 }
 
-NS_IMETHODIMP
+nsresult
 VariableLengthPrefixSet::StoreToFile(nsIFile* aFile)
 {
   NS_ENSURE_ARG_POINTER(aFile);

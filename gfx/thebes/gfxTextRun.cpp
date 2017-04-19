@@ -10,6 +10,7 @@
 #include "gfxUserFontSet.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Sprintf.h"
 #include "nsGkAtoms.h"
 #include "nsILanguageAtomService.h"
@@ -26,10 +27,6 @@
 #include "gfx2DGlue.h"
 #include "mozilla/gfx/Logging.h"        // for gfxCriticalError
 #include "mozilla/UniquePtr.h"
-
-#if defined(MOZ_WIDGET_GTK)
-#include "gfxPlatformGtk.h" // xxx - for UseFcFontList
-#endif
 
 #ifdef XP_WIN
 #include "gfxWindowsPlatform.h"
@@ -615,11 +612,17 @@ gfxTextRun::Draw(Range aRange, gfxPoint aPt, const DrawParams& aParams) const
         HasNonOpaqueNonTransparentColor(aParams.context, currentColor) &&
         HasSyntheticBoldOrColor(this, aRange)) {
         needToRestore = true;
-        // measure text, use the bounding box
+        // Measure text; use the bounding box to determine the area we need
+        // to buffer.
         gfxTextRun::Metrics metrics = MeasureText(
             aRange, gfxFont::LOOSE_INK_EXTENTS,
             aParams.context->GetDrawTarget(), aParams.provider);
-        metrics.mBoundingBox.MoveBy(aPt);
+        if (IsRightToLeft()) {
+            metrics.mBoundingBox.MoveBy(gfxPoint(aPt.x - metrics.mAdvanceWidth,
+                                                 aPt.y));
+        } else {
+            metrics.mBoundingBox.MoveBy(aPt);
+        }
         syntheticBoldBuffer.PushSolidColor(metrics.mBoundingBox, currentColor,
                                            GetAppUnitsPerDevUnit());
     }
@@ -834,6 +837,73 @@ gfxTextRun::MeasureText(Range aRange,
 
 #define MEASUREMENT_BUFFER_SIZE 100
 
+void
+gfxTextRun::ClassifyAutoHyphenations(uint32_t aStart, Range aRange,
+                                     nsTArray<HyphenType>& aHyphenBuffer,
+                                     HyphenationState* aWordState)
+{
+  NS_PRECONDITION(aRange.end - aStart <= aHyphenBuffer.Length() &&
+                  aRange.start >= aStart, "Range out of bounds");
+  MOZ_ASSERT(aWordState->mostRecentBoundary >= aStart,
+             "Unexpected aMostRecentWordBoundary!!");
+
+  uint32_t start = std::min<uint32_t>(aRange.start, aWordState->mostRecentBoundary);
+
+  for (uint32_t i = start; i < aRange.end; ++i) {
+    if (aHyphenBuffer[i - aStart] == HyphenType::Explicit &&
+        !aWordState->hasExplicitHyphen) {
+      aWordState->hasExplicitHyphen = true;
+    }
+    if (!aWordState->hasManualHyphen &&
+        (aHyphenBuffer[i - aStart] == HyphenType::Soft ||
+         aHyphenBuffer[i - aStart] == HyphenType::Explicit)) {
+      aWordState->hasManualHyphen = true;
+      // This is the first manual hyphen in the current word. We can only
+      // know if the current word has a manual hyphen until now. So, we need
+      // to run a sub loop to update the auto hyphens between the start of
+      // the current word and this manual hyphen.
+      if (aWordState->hasAutoHyphen) {
+        for (uint32_t j = aWordState->mostRecentBoundary; j < i; j++) {
+          if (aHyphenBuffer[j - aStart] == HyphenType::AutoWithoutManualInSameWord) {
+            aHyphenBuffer[j - aStart] = HyphenType::AutoWithManualInSameWord;
+          }
+        }
+      }
+    }
+    if (aHyphenBuffer[i - aStart] == HyphenType::AutoWithoutManualInSameWord) {
+      if (!aWordState->hasAutoHyphen) {
+        aWordState->hasAutoHyphen = true;
+      }
+      if (aWordState->hasManualHyphen) {
+        aHyphenBuffer[i - aStart] = HyphenType::AutoWithManualInSameWord;
+      }
+    }
+
+    // If we're at the word boundary, clear/reset couple states.
+    if (mCharacterGlyphs[i].CharIsSpace() ||
+        mCharacterGlyphs[i].CharIsTab() ||
+        mCharacterGlyphs[i].CharIsNewline() ||
+        // Since we will not have a boundary in the end of the string, let's
+        // call the end of the string a special case for word boundary.
+        i == GetLength() - 1) {
+      // We can only get to know whether we should raise/clear an explicit
+      // manual hyphen until we get to the end of a word, because this depends
+      // on whether there exists at least one auto hyphen in the same word.
+      if (!aWordState->hasAutoHyphen && aWordState->hasExplicitHyphen) {
+        for (uint32_t j = aWordState->mostRecentBoundary; j <= i; j++) {
+          if (aHyphenBuffer[j - aStart] == HyphenType::Explicit) {
+            aHyphenBuffer[j - aStart] = HyphenType::None;
+          }
+        }
+      }
+      aWordState->mostRecentBoundary = i;
+      aWordState->hasManualHyphen = false;
+      aWordState->hasAutoHyphen = false;
+      aWordState->hasExplicitHyphen = false;
+    }
+  }
+}
+
 uint32_t
 gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
                                 bool aLineBreakBefore, gfxFloat aWidth,
@@ -860,13 +930,23 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
     if (haveSpacing) {
         GetAdjustedSpacing(this, bufferRange, aProvider, spacingBuffer);
     }
-    bool hyphenBuffer[MEASUREMENT_BUFFER_SIZE];
+    AutoTArray<HyphenType, 4096> hyphenBuffer;
+    HyphenationState wordState;
+    wordState.mostRecentBoundary = aStart;
     bool haveHyphenation = aProvider &&
         (aProvider->GetHyphensOption() == StyleHyphens::Auto ||
          (aProvider->GetHyphensOption() == StyleHyphens::Manual &&
           (mFlags & gfxTextRunFactory::TEXT_ENABLE_HYPHEN_BREAKS) != 0));
     if (haveHyphenation) {
-        aProvider->GetHyphenationBreaks(bufferRange, hyphenBuffer);
+        if (hyphenBuffer.AppendElements(bufferRange.Length(), fallible)) {
+            aProvider->GetHyphenationBreaks(bufferRange, hyphenBuffer.Elements());
+            if (aProvider->GetHyphensOption() == StyleHyphens::Auto) {
+                ClassifyAutoHyphenations(aStart, bufferRange, hyphenBuffer,
+                                         &wordState);
+            }
+        } else {
+            haveHyphenation = false;
+        }
     }
 
     gfxFloat width = 0;
@@ -878,25 +958,62 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
     int32_t lastBreak = -1;
     int32_t lastBreakTrimmableChars = -1;
     gfxFloat lastBreakTrimmableAdvance = -1;
+    // Cache the last candidate break
+    int32_t lastCandidateBreak = -1;
+    int32_t lastCandidateBreakTrimmableChars = -1;
+    gfxFloat lastCandidateBreakTrimmableAdvance = -1;
+    bool lastCandidateBreakUsedHyphenation = false;
+    gfxBreakPriority lastCandidateBreakPriority = gfxBreakPriority::eNoBreak;
     bool aborted = false;
     uint32_t end = aStart + aMaxLength;
     bool lastBreakUsedHyphenation = false;
-
     Range ligatureRange(aStart, end);
     ShrinkToLigatureBoundaries(&ligatureRange);
 
-    uint32_t i;
-    for (i = aStart; i < end; ++i) {
+    // We may need to move `i` backwards in the following loop, and re-scan
+    // part of the textrun; we'll use `rescanLimit` so we can tell when that
+    // is happening: if `i < rescanLimit` then we're rescanning.
+    uint32_t rescanLimit = aStart;
+    for (uint32_t i = aStart; i < end; ++i) {
         if (i >= bufferRange.end) {
             // Fetch more spacing and hyphenation data
+            uint32_t oldHyphenBufferLength = hyphenBuffer.Length();
             bufferRange.start = i;
             bufferRange.end = std::min(aStart + aMaxLength,
                                        i + MEASUREMENT_BUFFER_SIZE);
+            // For spacing, we always overwrite the old data with the newly
+            // fetched one. However, for hyphenation, hyphenation data sometimes
+            // depends on the context in every word (if "hyphens: auto" is set).
+            // To ensure we get enough information between neighboring buffers,
+            // we grow the hyphenBuffer instead of overwrite it.
+            // NOTE that this means bufferRange does not correspond to the
+            // entire hyphenBuffer, but only to the most recently added portion.
+            // Therefore, we need to add the old length to hyphenBuffer.Elements()
+            // when getting more data.
             if (haveSpacing) {
                 GetAdjustedSpacing(this, bufferRange, aProvider, spacingBuffer);
             }
             if (haveHyphenation) {
-                aProvider->GetHyphenationBreaks(bufferRange, hyphenBuffer);
+                if (hyphenBuffer.AppendElements(bufferRange.Length(), fallible)) {
+                    aProvider->GetHyphenationBreaks(
+                        bufferRange, hyphenBuffer.Elements() + oldHyphenBufferLength);
+                    if (aProvider->GetHyphensOption() == StyleHyphens::Auto) {
+                        uint32_t prevMostRecentWordBoundary = wordState.mostRecentBoundary;
+                        ClassifyAutoHyphenations(aStart, bufferRange, hyphenBuffer,
+                                                 &wordState);
+                        // If the buffer boundary is in the middle of a word,
+                        // we need to go back to the start of the current word.
+                        // So, we can correct the wrong candidates that we set
+                        // in the previous runs of the loop.
+                        if (prevMostRecentWordBoundary < oldHyphenBufferLength) {
+                            rescanLimit = i;
+                            i = prevMostRecentWordBoundary - 1;
+                            continue;
+                        }
+                    }
+                } else {
+                    haveHyphenation = false;
+                }
             }
         }
 
@@ -907,8 +1024,10 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
         if (aSuppressBreak != eSuppressAllBreaks &&
             (aSuppressBreak != eSuppressInitialBreak || i > aStart)) {
             bool atNaturalBreak = mCharacterGlyphs[i].CanBreakBefore() == 1;
-            bool atHyphenationBreak = !atNaturalBreak &&
-                haveHyphenation && hyphenBuffer[i - bufferRange.start];
+            bool atHyphenationBreak = !atNaturalBreak && haveHyphenation &&
+                hyphenBuffer[i - aStart] != HyphenType::None;
+            bool atAutoHyphenWithManualHyphenInSameWord = atHyphenationBreak &&
+                hyphenBuffer[i - aStart] == HyphenType::AutoWithManualInSameWord;
             bool atBreak = atNaturalBreak || atHyphenationBreak;
             bool wordWrapping =
                 aCanWordWrap && mCharacterGlyphs[i].IsClusterStart() &&
@@ -920,7 +1039,8 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
                     hyphenatedAdvance += aProvider->GetHyphenWidth();
                 }
 
-                if (lastBreak < 0 || width + hyphenatedAdvance - trimmableAdvance <= aWidth) {
+                if (lastBreak < 0 ||
+                    width + hyphenatedAdvance - trimmableAdvance <= aWidth) {
                     // We can break here.
                     lastBreak = i;
                     lastBreakTrimmableChars = trimmableChars;
@@ -937,7 +1057,34 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
                     aborted = true;
                     break;
                 }
+                // There are various kinds of break opportunities:
+                // 1. word wrap break,
+                // 2. natural break,
+                // 3. manual hyphenation break,
+                // 4. auto hyphenation break without any manual hyphenation
+                //    in the same word,
+                // 5. auto hyphenation break with another manual hyphenation
+                //    in the same word.
+                // Allow all of them except the last one to be a candidate.
+                // So, we can ensure that we don't use an automatic
+                // hyphenation opportunity within a word that contains another
+                // manual hyphenation, unless it is the only choice.
+                if (wordWrapping ||
+                    !atAutoHyphenWithManualHyphenInSameWord) {
+                    lastCandidateBreak = lastBreak;
+                    lastCandidateBreakTrimmableChars = lastBreakTrimmableChars;
+                    lastCandidateBreakTrimmableAdvance = lastBreakTrimmableAdvance;
+                    lastCandidateBreakUsedHyphenation = lastBreakUsedHyphenation;
+                    lastCandidateBreakPriority = *aBreakPriority;
+                }
             }
+        }
+
+        // If we're re-scanning part of a word (to re-process potential
+        // hyphenation types) then we don't want to accumulate widths again
+        // for the characters that were already added to `advance`.
+        if (i < rescanLimit) {
+            continue;
         }
 
         gfxFloat charAdvance;
@@ -978,6 +1125,13 @@ gfxTextRun::BreakAndMeasureText(uint32_t aStart, uint32_t aMaxLength,
     if (width - trimmableAdvance <= aWidth) {
         charsFit = aMaxLength;
     } else if (lastBreak >= 0) {
+        if (lastCandidateBreak >= 0 && lastCandidateBreak != lastBreak) {
+            lastBreak = lastCandidateBreak;
+            lastBreakTrimmableChars = lastCandidateBreakTrimmableChars;
+            lastBreakTrimmableAdvance = lastCandidateBreakTrimmableAdvance;
+            lastBreakUsedHyphenation = lastCandidateBreakUsedHyphenation;
+            *aBreakPriority = lastCandidateBreakPriority;
+        }
         charsFit = lastBreak - aStart;
         trimmableChars = lastBreakTrimmableChars;
         trimmableAdvance = lastBreakTrimmableAdvance;
@@ -1371,6 +1525,8 @@ gfxTextRun::SetSpaceGlyph(gfxFont* aFont, DrawTarget* aDrawTarget,
                      aOrientation;
     bool vertical =
         (GetFlags() & gfxTextRunFactory::TEXT_ORIENT_VERTICAL_UPRIGHT) != 0;
+    gfxFontShaper::RoundingFlags roundingFlags =
+        aFont->GetRoundOffsetsToPixels(aDrawTarget);
     gfxShapedWord* sw = aFont->GetShapedWord(aDrawTarget,
                                              &space, 1,
                                              gfxShapedWord::HashMix(0, ' '),
@@ -1378,6 +1534,7 @@ gfxTextRun::SetSpaceGlyph(gfxFont* aFont, DrawTarget* aDrawTarget,
                                              vertical,
                                              mAppUnitsPerDevUnit,
                                              flags,
+                                             roundingFlags,
                                              nullptr);
     if (sw) {
         AddGlyphRun(aFont, gfxTextRange::kFontGroup, aCharIndex, false,
@@ -1557,7 +1714,6 @@ gfxFontGroup::gfxFontGroup(const FontFamilyList& aFontFamilyList,
     , mPageLang(gfxPlatformFontList::GetFontPrefLangFor(aStyle->language))
     , mLastPrefFirstFont(false)
     , mSkipDrawing(false)
-    , mSkipUpdateUserFonts(false)
 {
     // We don't use SetUserFontSet() here, as we want to unconditionally call
     // BuildFontList() rather than only do UpdateUserFonts() if it changed.
@@ -1567,21 +1723,13 @@ gfxFontGroup::gfxFontGroup(const FontFamilyList& aFontFamilyList,
 
 gfxFontGroup::~gfxFontGroup()
 {
+    // Should not be dropped by stylo
+    MOZ_ASSERT(NS_IsMainThread());
 }
 
 void
 gfxFontGroup::BuildFontList()
 {
-    bool enumerateFonts = true;
-
-#if defined(MOZ_WIDGET_GTK)
-    // xxx - eliminate this once gfxPangoFontGroup is no longer needed
-    enumerateFonts = gfxPlatformGtk::UseFcFontList();
-#endif
-    if (!enumerateFonts) {
-        return;
-    }
-
     // initialize fonts in the font family list
     AutoTArray<gfxFontFamily*,10> fonts;
     gfxPlatformFontList *pfl = gfxPlatformFontList::PlatformFontList();
@@ -2029,7 +2177,7 @@ gfxFontGroup::MakeHyphenTextRun(DrawTarget* aDrawTarget,
 }
 
 gfxFloat
-gfxFontGroup::GetHyphenWidth(gfxTextRun::PropertyProvider *aProvider)
+gfxFontGroup::GetHyphenWidth(const gfxTextRun::PropertyProvider* aProvider)
 {
     if (mHyphenWidth < 0) {
         RefPtr<DrawTarget> dt(aProvider->GetDrawTarget());
@@ -2168,7 +2316,7 @@ gfxFontGroup::InitTextRun(DrawTarget* aDrawTarget,
                 nsAutoCString str((const char*)aString, aLength);
                 MOZ_LOG(log, LogLevel::Warning,\
                        ("(%s) fontgroup: [%s] default: %s lang: %s script: %d "
-                        "len %d weight: %d width: %d style: %s size: %6.2f %d-byte "
+                        "len %d weight: %d width: %d style: %s size: %6.2f %" PRIuSIZE "-byte "
                         "TEXTRUN [%s] ENDTEXTRUN\n",
                         (mStyle.systemFont ? "textrunui" : "textrun"),
                         NS_ConvertUTF16toUTF8(families).get(),
@@ -2176,7 +2324,7 @@ gfxFontGroup::InitTextRun(DrawTarget* aDrawTarget,
                          "serif" :
                          (mFamilyList.GetDefaultFontType() == eFamily_sans_serif ?
                           "sans-serif" : "none")),
-                        lang.get(), Script::LATIN, aLength,
+                        lang.get(), static_cast<int>(Script::LATIN), aLength,
                         uint32_t(mStyle.weight), uint32_t(mStyle.stretch),
                         (mStyle.style & NS_FONT_STYLE_ITALIC ? "italic" :
                         (mStyle.style & NS_FONT_STYLE_OBLIQUE ? "oblique" :
@@ -2217,14 +2365,14 @@ gfxFontGroup::InitTextRun(DrawTarget* aDrawTarget,
                     MOZ_LOG(log, LogLevel::Warning,\
                            ("(%s) fontgroup: [%s] default: %s lang: %s script: %d "
                             "len %d weight: %d width: %d style: %s size: %6.2f "
-                            "%d-byte TEXTRUN [%s] ENDTEXTRUN\n",
+                            "%" PRIuSIZE "-byte TEXTRUN [%s] ENDTEXTRUN\n",
                             (mStyle.systemFont ? "textrunui" : "textrun"),
                             NS_ConvertUTF16toUTF8(families).get(),
                             (mFamilyList.GetDefaultFontType() == eFamily_serif ?
                              "serif" :
                              (mFamilyList.GetDefaultFontType() == eFamily_sans_serif ?
                               "sans-serif" : "none")),
-                            lang.get(), runScript, runLen,
+                            lang.get(), static_cast<int>(runScript), runLen,
                             uint32_t(mStyle.weight), uint32_t(mStyle.stretch),
                             (mStyle.style & NS_FONT_STYLE_ITALIC ? "italic" :
                             (mStyle.style & NS_FONT_STYLE_OBLIQUE ? "oblique" :
@@ -2296,7 +2444,7 @@ gfxFontGroup::InitScriptRun(DrawTarget* aDrawTarget,
                  "don't call InitScriptRun with aborted shaping state");
 
     // confirm the load state of userfonts in the list
-    if (!mSkipUpdateUserFonts && mUserFontSet &&
+    if (mUserFontSet &&
         mCurrGeneration != mUserFontSet->GetGeneration()) {
         UpdateUserFonts();
     }
@@ -2995,7 +3143,7 @@ void gfxFontGroup::ComputeRanges(nsTArray<gfxTextRange>& aRanges,
                  "serif" :
                  (mFamilyList.GetDefaultFontType() == eFamily_sans_serif ?
                   "sans-serif" : "none")),
-                lang.get(), aRunScript,
+                lang.get(), static_cast<int>(aRunScript),
                 fontMatches.get()));
     }
 #endif
@@ -3034,8 +3182,6 @@ gfxFontGroup::GetRebuildGeneration()
     return mUserFontSet->GetRebuildGeneration();
 }
 
-// note: gfxPangoFontGroup overrides UpdateUserFonts, such that
-//       BuildFontList is never used
 void
 gfxFontGroup::UpdateUserFonts()
 {

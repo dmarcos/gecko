@@ -13,11 +13,17 @@ const URL = EXAMPLE_URL.replace("http:", "https:");
 const TEST_URL = URL + "service-workers/status-codes.html";
 
 add_task(function* () {
-  let { tab, monitor } = yield initNetMonitor(TEST_URL, null, true);
+  let { tab, monitor } = yield initNetMonitor(TEST_URL, true);
   info("Starting test... ");
 
-  let { NetMonitorView } = monitor.panelWin;
-  let { RequestsMenu } = NetMonitorView;
+  let { document, gStore, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  let {
+    getDisplayedRequests,
+    getSortedRequests,
+  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
+
+  gStore.dispatch(Actions.batchEnable(false));
 
   const REQUEST_DATA = [
     {
@@ -48,11 +54,17 @@ add_task(function* () {
 
   let index = 0;
   for (let request of REQUEST_DATA) {
-    let item = RequestsMenu.getItemAtIndex(index);
+    let item = getSortedRequests(gStore.getState()).get(index);
 
     info(`Verifying request #${index}`);
-    yield verifyRequestItemTarget(RequestsMenu, item,
-      request.method, request.uri, request.details);
+    yield verifyRequestItemTarget(
+      document,
+      getDisplayedRequests(gStore.getState()),
+      item,
+      request.method,
+      request.uri,
+      request.details
+    );
 
     let { stacktrace } = item.cause;
     let stackLen = stacktrace ? stacktrace.length : 0;

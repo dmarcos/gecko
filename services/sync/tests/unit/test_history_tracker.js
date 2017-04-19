@@ -45,7 +45,7 @@ async function promiseVisit(expectedType, expectedURI) {
       onPageChanged() {},
       onDeleteVisits() {},
     };
-    PlacesUtils.history.addObserver(observer, false);
+    PlacesUtils.history.addObserver(observer);
   });
 }
 
@@ -74,22 +74,21 @@ function run_test() {
 
 async function verifyTrackerEmpty() {
   let changes = engine.pullNewChanges();
-  equal(changes.count(), 0);
+  do_check_empty(changes);
   equal(tracker.score, 0);
 }
 
 async function verifyTrackedCount(expected) {
   let changes = engine.pullNewChanges();
-  equal(changes.count(), expected);
+  do_check_attribute_count(changes, expected);
 }
 
 async function verifyTrackedItems(tracked) {
   let changes = engine.pullNewChanges();
-  let trackedIDs = new Set(changes.ids());
+  let trackedIDs = new Set(Object.keys(changes));
   for (let guid of tracked) {
-    ok(changes.has(guid), `${guid} should be tracked`);
-    ok(changes.getModifiedTimestamp(guid) > 0,
-      `${guid} should have a modified time`);
+    ok(guid in changes, `${guid} should be tracked`);
+    ok(changes[guid] > 0, `${guid} should have a modified time`);
     trackedIDs.delete(guid);
   }
   equal(trackedIDs.size, 0, `Unhandled tracked IDs: ${
@@ -198,7 +197,7 @@ add_task(async function test_track_delete() {
   await startTracking();
   let visitRemovedPromise = promiseVisit("removed", uri);
   let scorePromise = promiseOneObserver("weave:engine:score:updated");
-  PlacesUtils.history.removePage(uri);
+  await PlacesUtils.history.remove(uri);
   await Promise.all([scorePromise, visitRemovedPromise]);
 
   await verifyTrackedItems([guid]);
@@ -223,8 +222,8 @@ add_task(async function test_dont_track_expiration() {
   Services.obs.addObserver(function onExpiration(aSubject, aTopic, aData) {
     Services.obs.removeObserver(onExpiration, aTopic);
     // Remove the remaining page to update its score.
-    PlacesUtils.history.removePage(uriToRemove);
-  }, PlacesUtils.TOPIC_EXPIRATION_FINISHED, false);
+    PlacesUtils.history.remove(uriToRemove);
+  }, PlacesUtils.TOPIC_EXPIRATION_FINISHED);
 
   // Force expiration of 1 entry.
   Services.prefs.setIntPref("places.history.expiration.max_pages", 0);

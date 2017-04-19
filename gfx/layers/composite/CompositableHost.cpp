@@ -11,8 +11,10 @@
 #include "gfxUtils.h"
 #include "ImageHost.h"                  // for ImageHostBuffered, etc
 #include "TiledContentHost.h"           // for TiledContentHost
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
 #include "mozilla/layers/TextureHost.h"  // for TextureHost, etc
+#include "mozilla/layers/WebRenderImageHost.h"
 #include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsDebug.h"                    // for NS_WARNING
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
@@ -30,7 +32,6 @@ class Compositor;
 CompositableHost::CompositableHost(const TextureInfo& aTextureInfo)
   : mTextureInfo(aTextureInfo)
   , mCompositorID(0)
-  , mCompositor(nullptr)
   , mLayer(nullptr)
   , mFlashCounter(0)
   , mAttached(false)
@@ -47,9 +48,9 @@ CompositableHost::~CompositableHost()
 void
 CompositableHost::UseTextureHost(const nsTArray<TimedTexture>& aTextures)
 {
-  if (GetCompositor()) {
+  if (mTextureSourceProvider) {
     for (auto& texture : aTextures) {
-      texture.mTexture->SetCompositor(GetCompositor());
+      texture.mTexture->SetTextureSourceProvider(mTextureSourceProvider);
     }
   }
 }
@@ -59,9 +60,9 @@ CompositableHost::UseComponentAlphaTextures(TextureHost* aTextureOnBlack,
                                             TextureHost* aTextureOnWhite)
 {
   MOZ_ASSERT(aTextureOnBlack && aTextureOnWhite);
-  if (GetCompositor()) {
-    aTextureOnBlack->SetCompositor(GetCompositor());
-    aTextureOnWhite->SetCompositor(GetCompositor());
+  if (mTextureSourceProvider) {
+    aTextureOnBlack->SetTextureSourceProvider(mTextureSourceProvider);
+    aTextureOnWhite->SetTextureSourceProvider(mTextureSourceProvider);
   }
 }
 
@@ -70,10 +71,10 @@ CompositableHost::RemoveTextureHost(TextureHost* aTexture)
 {}
 
 void
-CompositableHost::SetCompositor(Compositor* aCompositor)
+CompositableHost::SetTextureSourceProvider(TextureSourceProvider* aProvider)
 {
-  MOZ_ASSERT(aCompositor);
-  mCompositor = aCompositor;
+  MOZ_ASSERT(aProvider);
+  mTextureSourceProvider = aProvider;
 }
 
 bool
@@ -128,12 +129,21 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
     result = new TiledContentHost(aTextureInfo);
     break;
   case CompositableType::IMAGE:
-    result = new ImageHost(aTextureInfo);
+    if (gfxVars::UseWebRender()) {
+      result = new WebRenderImageHost(aTextureInfo);
+    } else {
+      result = new ImageHost(aTextureInfo);
+    }
     break;
   case CompositableType::CONTENT_SINGLE:
-    result = new ContentHostSingleBuffered(aTextureInfo);
+    if (gfxVars::UseWebRender()) {
+      result = new WebRenderImageHost(aTextureInfo);
+    } else {
+      result = new ContentHostSingleBuffered(aTextureInfo);
+    }
     break;
   case CompositableType::CONTENT_DOUBLE:
+    MOZ_ASSERT(!gfxVars::UseWebRender());
     result = new ContentHostDoubleBuffered(aTextureInfo);
     break;
   default:
@@ -153,6 +163,21 @@ CompositableHost::DumpTextureHost(std::stringstream& aStream, TextureHost* aText
     return;
   }
   aStream << gfxUtils::GetAsDataURI(dSurf).get();
+}
+
+HostLayerManager*
+CompositableHost::GetLayerManager() const
+{
+  if (!mLayer || !mLayer->Manager()) {
+    return nullptr;
+  }
+  return mLayer->Manager()->AsHostLayerManager();
+}
+
+TextureSourceProvider*
+CompositableHost::GetTextureSourceProvider() const
+{
+  return mTextureSourceProvider;
 }
 
 } // namespace layers

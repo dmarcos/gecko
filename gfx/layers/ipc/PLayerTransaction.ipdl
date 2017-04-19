@@ -50,15 +50,16 @@ sync protocol PLayerTransaction {
   manager PCompositorBridge;
 
 parent:
+  // Creates a set of mappings between TextureReadLocks and an associated
+  // ReadLockHandle that can be used in Update, and persist until the
+  // next Update call.
+  async InitReadLocks(ReadLockInit[] locks);
+
   // The isFirstPaint flag can be used to indicate that this is the first update
   // for a particular document.
-  sync Update(TransactionInfo txn) returns (EditReply[] reply);
+  async Update(TransactionInfo txn);
 
   async PaintTime(uint64_t id, TimeDuration paintTime);
-
-  // We don't need to send a sync transaction if
-  // no transaction operate require a swap.
-  async UpdateNoSwap(TransactionInfo txn);
 
   async SetLayerObserverEpoch(uint64_t layerObserverEpoch);
 
@@ -80,7 +81,7 @@ parent:
   // Returns the value of the opacity applied to the layer by animation.
   // |hasAnimationOpacity| is true if the layer has an opacity value
   // specified by animation. If it's false, |opacity| value is indefinite.
-  sync GetAnimationOpacity(LayerHandle layer) returns (float opacity,
+  sync GetAnimationOpacity(uint64_t aCompositorAnimationsId) returns (float opacity,
                                                   bool hasAnimationOpacity);
 
   // Returns the value of the transform applied to the layer by animation after
@@ -88,7 +89,7 @@ parent:
   // of the corresponding frame and transform origin and after converting to CSS
   // pixels. If the layer is not transformed by animation, the return value will
   // be void_t.
-  sync GetAnimationTransform(LayerHandle layer) returns (MaybeTransform transform);
+  sync GetAnimationTransform(uint64_t aCompositorAnimationId) returns (MaybeTransform transform);
 
   // The next time the layer tree is composited, add this async scroll offset in
   // CSS pixels for the given ViewID.
@@ -120,6 +121,8 @@ parent:
   // Tell the compositor to notify APZ that a layer has been confirmed for an
   // input event.
   async SetConfirmedTargetAPZC(uint64_t aInputBlockId, ScrollableLayerGuid[] aTargets);
+
+  async RecordPaintTimes(PaintTiming timing);
 
   async Shutdown();
 child:

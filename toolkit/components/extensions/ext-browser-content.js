@@ -1,12 +1,10 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
@@ -22,29 +20,39 @@ XPCOMUtils.defineLazyGetter(this, "colorUtils", () => {
   return require("devtools/shared/css/color").colorUtils;
 });
 
+Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 const {
+  getWinUtils,
   stylesheetMap,
 } = ExtensionUtils;
 
-/* globals addMessageListener, content, docShell, sendAsyncMessage */
+/* globals addMessageListener, addEventListener, content, docShell, removeEventListener, sendAsyncMessage */
 
 // Minimum time between two resizes.
 const RESIZE_TIMEOUT = 100;
 
 const BrowserListener = {
-  init({allowScriptsToClose, fixedWidth, maxHeight, maxWidth, stylesheets}) {
+  init({allowScriptsToClose, blockParser, fixedWidth, maxHeight, maxWidth, stylesheets, isInline}) {
     this.fixedWidth = fixedWidth;
     this.stylesheets = stylesheets || [];
 
+    this.isInline = isInline;
     this.maxWidth = maxWidth;
     this.maxHeight = maxHeight;
 
     this.oldBackground = null;
 
     if (allowScriptsToClose) {
-      content.QueryInterface(Ci.nsIInterfaceRequestor)
-             .getInterface(Ci.nsIDOMWindowUtils)
-             .allowScriptsToClose();
+      getWinUtils(content).allowScriptsToClose();
+    }
+
+    // Force external links to open in tabs.
+    docShell.isAppTab = true;
+
+    if (blockParser) {
+      this.blockingPromise = new Promise(resolve => {
+        this.unblockParser = resolve;
+      });
     }
 
     addEventListener("DOMWindowCreated", this, true);
@@ -52,6 +60,7 @@ const BrowserListener = {
     addEventListener("DOMContentLoaded", this, true);
     addEventListener("DOMWindowClose", this, true);
     addEventListener("MozScrolledAreaChanged", this, true);
+    addEventListener("DOMDocElementInserted", this, true);
   },
 
   destroy() {
@@ -60,24 +69,39 @@ const BrowserListener = {
     removeEventListener("DOMContentLoaded", this, true);
     removeEventListener("DOMWindowClose", this, true);
     removeEventListener("MozScrolledAreaChanged", this, true);
+    removeEventListener("DOMDocElementInserted", this, true);
   },
 
   receiveMessage({name, data}) {
     if (name === "Extension:InitBrowser") {
       this.init(data);
+    } else if (name === "Extension:UnblockParser") {
+      if (this.unblockParser) {
+        this.unblockParser();
+        this.blockingPromise = null;
+      }
+    }
+  },
+
+  loadStylesheets() {
+    let winUtils = getWinUtils(content);
+
+    for (let url of this.stylesheets) {
+      winUtils.addSheet(stylesheetMap.get(url), winUtils.AGENT_SHEET);
     }
   },
 
   handleEvent(event) {
     switch (event.type) {
+      case "DOMDocElementInserted":
+        if (this.blockingPromise) {
+          event.target.blockParsing(this.blockingPromise);
+        }
+        break;
+
       case "DOMWindowCreated":
         if (event.target === content.document) {
-          let winUtils = content.QueryInterface(Ci.nsIInterfaceRequestor)
-                                .getInterface(Ci.nsIDOMWindowUtils);
-
-          for (let url of this.stylesheets) {
-            winUtils.addSheet(stylesheetMap.get(url), winUtils.AGENT_SHEET);
-          }
+          this.loadStylesheets();
         }
         break;
 
@@ -101,6 +125,12 @@ const BrowserListener = {
           // For about:addons inline <browser>s, we currently receive a load
           // event on the <browser> element, but no load or DOMContentLoaded
           // events from the content window.
+
+          // Inline browsers don't receive the "DOMWindowCreated" event, so this
+          // is a workaround to load the stylesheets.
+          if (this.isInline) {
+            this.loadStylesheets();
+          }
           sendAsyncMessage("Extension:BrowserContentLoaded", {url: content.location.href});
         } else if (event.target !== content.document) {
           break;
@@ -215,3 +245,4 @@ const BrowserListener = {
 };
 
 addMessageListener("Extension:InitBrowser", BrowserListener);
+addMessageListener("Extension:UnblockParser", BrowserListener);

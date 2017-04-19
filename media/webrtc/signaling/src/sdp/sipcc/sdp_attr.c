@@ -458,7 +458,7 @@ static void sdp_attr_fmtp_invalid_value(sdp_t *sdp, const char *param_name,
  */
 static sdp_result_e sdp_verify_attr_fmtp_telephone_event(char *fmtpVal)
 {
-  size_t len = PL_strlen(fmtpVal);
+  size_t len = fmtpVal ? strlen(fmtpVal) : 0;
 
   // make sure the basics are good:
   // - at least 1 character
@@ -482,7 +482,7 @@ static sdp_result_e sdp_verify_attr_fmtp_telephone_event(char *fmtpVal)
   char *temp = PL_strtok_r(dtmf_tones, ",", &strtok_state);
 
   while (temp != NULL) {
-    len = PL_strlen(temp);
+    len = strlen(temp);
     if (len > 5) {
       // an example of a max size token is "11-15", so if the
       // token is longer than 5 it is bad
@@ -581,9 +581,9 @@ sdp_result_e sdp_get_fmtp_tok_val(sdp_t *sdp_p,
 
   if (errno
       || (*tok == strtoul_end)
-      || (illegal_value != -1UL && value == illegal_value)
-      || (min_limit != -1UL && value < min_limit)
-      || (max_limit != -1UL && value > max_limit)) {
+      || (illegal_value != ULONG_MAX && value == illegal_value)
+      || (min_limit != ULONG_MAX && value < min_limit)
+      || (max_limit != ULONG_MAX && value > max_limit)) {
     sdp_attr_fmtp_invalid_value(sdp_p, fmtp_name, *tok);
     return SDP_INVALID_PARAMETER;
   }
@@ -591,7 +591,6 @@ sdp_result_e sdp_get_fmtp_tok_val(sdp_t *sdp_p,
 
   return SDP_SUCCESS;
 }
-
 
 sdp_result_e sdp_parse_attr_fmtp (sdp_t *sdp_p, sdp_attr_t *attr_p,
                                   const char *ptr)

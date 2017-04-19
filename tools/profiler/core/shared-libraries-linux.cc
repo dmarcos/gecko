@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,11 +16,59 @@
 #include <fstream>
 #include "platform.h"
 #include "shared-libraries.h"
+#include "mozilla/Sprintf.h"
+#include "mozilla/Unused.h"
+#include "nsDebug.h"
+#include "nsNativeCharsetUtils.h"
 
 #include "common/linux/file_id.h"
 #include <algorithm>
 
-#define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
+
+// There are three different configuration cases:
+//
+// (1) GP_OS_linux
+//       Use dl_iterate_phdr for almost everything and /proc/self/{exe,maps}
+//       to identify the main executable name.
+//
+// (2) GP_OS_android non-GONK
+//       If dl_iterate_phdr doesn't exist, give up immediately.  Otherwise use
+//       dl_iterate_phdr for almost all info and /proc/self/maps to get the
+//       mapping for /dev/ashmem/dalvik-jit-code-cache.
+//
+// (3) GP_OS_android GONK
+//       Use /proc/self/maps for everything.
+
+#undef CONFIG_CASE_1
+#undef CONFIG_CASE_2
+#undef CONFIG_CASE_3
+
+#if defined(GP_OS_linux)
+# define CONFIG_CASE_1 1
+# include <link.h> // dl_phdr_info
+# include <features.h>
+# include <dlfcn.h>
+# include <sys/types.h>
+
+#elif defined(GP_OS_android) && !defined(MOZ_WIDGET_GONK)
+# define CONFIG_CASE_2 1
+# include "ElfLoader.h" // dl_phdr_info
+# include <features.h>
+# include <dlfcn.h>
+# include <sys/types.h>
+extern "C" MOZ_EXPORT __attribute__((weak))
+int dl_iterate_phdr(
+          int (*callback)(struct dl_phdr_info *info, size_t size, void *data),
+          void *data);
+
+#elif defined(GP_OS_android) && defined(MOZ_WIDGET_GONK)
+# define CONFIG_CASE_3 1
+  // No config-specific includes.
+
+#else
+# error "Unexpected configuration"
+#endif
+
 
 // Get the breakpad Id for the binary file pointed by bin_name
 static std::string getId(const char *bin_name)
@@ -37,26 +87,9 @@ static std::string getId(const char *bin_name)
   return "";
 }
 
-#if !defined(MOZ_WIDGET_GONK)
-// TODO fix me with proper include
-#include "nsDebug.h"
-#ifdef ANDROID
-#include "ElfLoader.h" // dl_phdr_info
-#else
-#include <link.h> // dl_phdr_info
-#endif
-#include <features.h>
-#include <dlfcn.h>
-#include <sys/types.h>
 
-#ifdef ANDROID
-extern "C" MOZ_EXPORT __attribute__((weak))
-int dl_iterate_phdr(
-          int (*callback) (struct dl_phdr_info *info,
-                           size_t size, void *data),
-          void *data);
-#endif
-
+// Config cases (1) and (2) use dl_iterate_phdr.
+#if defined(CONFIG_CASE_1) || defined(CONFIG_CASE_2)
 static int
 dl_iterate_callback(struct dl_phdr_info *dl_info, size_t size, void *data)
 {
@@ -79,21 +112,56 @@ dl_iterate_callback(struct dl_phdr_info *dl_info, size_t size, void *data)
     if (end > libEnd)
       libEnd = end;
   }
-  const char *name = dl_info->dlpi_name;
-  SharedLibrary shlib(libStart, libEnd, 0, getId(name), name);
+  const char *path = dl_info->dlpi_name;
+
+  nsAutoString pathStr;
+  mozilla::Unused <<
+    NS_WARN_IF(NS_FAILED(NS_CopyNativeToUnicode(nsDependentCString(path),
+                                                pathStr)));
+
+  nsAutoString nameStr = pathStr;
+  int32_t pos = nameStr.RFindChar('/');
+  if (pos != kNotFound) {
+    nameStr.Cut(0, pos + 1);
+  }
+
+  SharedLibrary shlib(libStart, libEnd, 0, getId(path),
+                      nameStr, pathStr, nameStr, pathStr,
+                      "", "");
   info.AddSharedLibrary(shlib);
 
   return 0;
 }
+#endif // config cases (1) and (2)
 
-#endif // !MOZ_WIDGET_GONK
 
 SharedLibraryInfo SharedLibraryInfo::GetInfoForSelf()
 {
   SharedLibraryInfo info;
 
-#if !defined(MOZ_WIDGET_GONK)
-#ifdef ANDROID
+#if defined(CONFIG_CASE_1)
+  // We need to find the name of the executable (exeName, exeNameLen) and the
+  // address of its executable section (exeExeAddr) in the running image.
+  char exeName[PATH_MAX];
+  memset(exeName, 0, sizeof(exeName));
+
+  ssize_t exeNameLen = readlink("/proc/self/exe", exeName, sizeof(exeName) - 1);
+  if (exeNameLen == -1) {
+    // readlink failed for whatever reason.  Note this, but keep going.
+    exeName[0] = '\0';
+    exeNameLen = 0;
+    LOG("SharedLibraryInfo::GetInfoForSelf(): readlink failed");
+  } else {
+    // Assert no buffer overflow.
+    MOZ_RELEASE_ASSERT(exeNameLen >= 0 &&
+                       exeNameLen < static_cast<ssize_t>(sizeof(exeName)));
+  }
+
+  unsigned long exeExeAddr = 0;
+#endif
+
+#if defined(CONFIG_CASE_2)
+  // If dl_iterate_phdr doesn't exist, we give up immediately.
   if (!dl_iterate_phdr) {
     // On ARM Android, dl_iterate_phdr is provided by the custom linker.
     // So if libxul was loaded by the system linker (e.g. as part of
@@ -101,59 +169,109 @@ SharedLibraryInfo SharedLibraryInfo::GetInfoForSelf()
     // not call it.
     return info;
   }
-#endif // ANDROID
+#endif
 
-  dl_iterate_phdr(dl_iterate_callback, &info);
-#endif // !MOZ_WIDGET_GONK
-
-#if defined(ANDROID) || defined(MOZ_WIDGET_GONK)
+  // Read info from /proc/self/maps.  We do this for all config cases, but only
+  // in case (3) are we building the module list from that information.  For
+  // cases (1) and (2) we're just collecting some auxiliary information.
   pid_t pid = getpid();
   char path[PATH_MAX];
-  snprintf(path, PATH_MAX, "/proc/%d/maps", pid);
+  SprintfLiteral(path, "/proc/%d/maps", pid);
   std::ifstream maps(path);
   std::string line;
-  int count = 0;
   while (std::getline(maps, line)) {
     int ret;
-    //XXX: needs input sanitizing
     unsigned long start;
     unsigned long end;
-    char perm[6] = "";
+    char perm[6 + 1] = "";
     unsigned long offset;
-    char name[PATH_MAX] = "";
+    char modulePath[PATH_MAX + 1] = "";
     ret = sscanf(line.c_str(),
                  "%lx-%lx %6s %lx %*s %*x %" PATH_MAX_STRING(PATH_MAX) "s\n",
-                 &start, &end, perm, &offset, name);
+                 &start, &end, perm, &offset, modulePath);
     if (!strchr(perm, 'x')) {
       // Ignore non executable entries
       continue;
     }
     if (ret != 5 && ret != 4) {
-      LOG("Get maps line failed");
+      LOG("SharedLibraryInfo::GetInfoForSelf(): "
+          "reading /proc/self/maps failed");
       continue;
     }
-#if defined(ANDROID) && !defined(MOZ_WIDGET_GONK)
-    // Use proc/pid/maps to get the dalvik-jit section since it has
-    // no associated phdrs
-    if (strcmp(name, "/dev/ashmem/dalvik-jit-code-cache") != 0)
+
+#if defined(CONFIG_CASE_1)
+    // Try to establish the main executable's load address.
+    if (exeNameLen > 0 && strcmp(modulePath, exeName) == 0) {
+      exeExeAddr = start;
+    }
+    continue;
+    // NOTREACHED
+#elif defined(CONFIG_CASE_2)
+    // Use /proc/pid/maps to get the dalvik-jit section since it has no
+    // associated phdrs.
+    if (0 != strcmp(modulePath, "/dev/ashmem/dalvik-jit-code-cache")) {
       continue;
-#else
+    }
+    // Otherwise proceed to the tail of the loop, so as to record the entry.
+#elif defined(CONFIG_CASE_3)
     if (strcmp(perm, "r-xp") != 0) {
       // Ignore entries that are writable and/or shared.
       // At least one graphics driver uses short-lived "rwxs" mappings
       // (see bug 926734 comment 5), so just checking for 'x' isn't enough.
       continue;
     }
+    // Record all other entries.
 #endif
-    SharedLibrary shlib(start, end, offset, getId(name), name);
+
+#if !defined(CONFIG_CASE_1)
+    // This section has to be conditionalised so as to avoid compiler warnings
+    // about dead code in case (1).
+    nsAutoString pathStr;
+    mozilla::Unused <<
+      NS_WARN_IF(NS_FAILED(NS_CopyNativeToUnicode(
+                             nsDependentCString(modulePath), pathStr)));
+
+    nsAutoString nameStr = pathStr;
+    int32_t pos = nameStr.RFindChar('/');
+    if (pos != kNotFound) {
+      nameStr.Cut(0, pos + 1);
+    }
+
+    SharedLibrary shlib(start, end, offset, getId(path),
+                        nameStr, pathStr, nameStr, pathStr, "", "");
     info.AddSharedLibrary(shlib);
-    if (count > 10000) {
-      LOG("Get maps failed");
+    if (info.GetSize() > 10000) {
+      LOG("SharedLibraryInfo::GetInfoForSelf(): "
+          "implausibly large number of mappings acquired");
       break;
     }
-    count++;
+#endif
   }
-#endif // ANDROID || MOZ_WIDGET_GONK
+
+#if defined(CONFIG_CASE_1) || defined(CONFIG_CASE_2)
+  // For config cases (1) and (2), we collect the bulk of the library info using
+  // dl_iterate_phdr.
+  dl_iterate_phdr(dl_iterate_callback, &info);
+#endif
+
+#if defined(CONFIG_CASE_1)
+  // Make another pass over the information we just harvested from
+  // dl_iterate_phdr.  If we see a nameless object mapped at what we earlier
+  // established to be the main executable's load address, attach the
+  // executable's name to that entry.
+  for (size_t i = 0; i < info.GetSize(); i++) {
+    SharedLibrary& lib = info.GetMutableEntry(i);
+    if (lib.GetStart() == exeExeAddr && lib.GetNativeDebugPath() == "") {
+      nsAutoString exeNameStr;
+      mozilla::Unused <<
+        NS_WARN_IF(NS_FAILED(NS_CopyNativeToUnicode(
+                               nsDependentCString(exeName), exeNameStr)));
+      lib.SetNativeDebugPath(exeNameStr);
+      // We only expect to see one such entry.
+      break;
+    }
+  }
+#endif
 
   return info;
 }

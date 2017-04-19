@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* global ADDON_ENABLE:false, ADDON_DISABLE:false, APP_SHUTDOWN: false */
+
 const {classes: Cc, interfaces: Ci, utils: Cu, manager: Cm} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -144,10 +146,7 @@ function CreatePocketWidget(reason) {
     if (provider) {
       let pref = "social.backup.getpocket-com";
       if (!Services.prefs.prefHasUserValue(pref)) {
-        let str = Cc["@mozilla.org/supports-string;1"].
-                  createInstance(Ci.nsISupportsString);
-        str.data = JSON.stringify(provider.manifest);
-        Services.prefs.setComplexValue(pref, Ci.nsISupportsString, str);
+        Services.prefs.setStringPref(pref, JSON.stringify(provider.manifest));
         SocialService.uninstallProvider(origin, () => {});
       }
     }
@@ -159,7 +158,7 @@ function CreatePocketWidget(reason) {
 // When the context menu is opened check if we need to build and enable pocket UI.
 var PocketContextMenu = {
   init() {
-    Services.obs.addObserver(this, "on-build-contextmenu", false);
+    Services.obs.addObserver(this, "on-build-contextmenu");
   },
   shutdown() {
     Services.obs.removeObserver(this, "on-build-contextmenu");
@@ -488,7 +487,7 @@ function startup(data, reason) {
       Services.prefs.clearUserPref("browser.pocket.enabled");
     }
     // watch pref change and enable/disable if necessary
-    Services.prefs.addObserver("extensions.pocket.enabled", prefObserver, false);
+    Services.prefs.addObserver("extensions.pocket.enabled", prefObserver);
     if (!Services.prefs.getBoolPref("extensions.pocket.enabled"))
       return;
     PocketOverlay.startup(reason);

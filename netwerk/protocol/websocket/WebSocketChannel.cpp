@@ -152,7 +152,7 @@ public:
     // but multiply by 1.5 instead of 2 to be more gradual.
     mNextDelay = static_cast<uint32_t>(
       std::min<double>(kWSReconnectMaxDelay, mNextDelay * 1.5));
-    LOG(("WebSocket: FailedAgain: host=%s, port=%d: incremented delay to %lu",
+    LOG(("WebSocket: FailedAgain: host=%s, port=%d: incremented delay to %" PRIu32,
          mAddress.get(), mPort, mNextDelay));
   }
 
@@ -405,8 +405,8 @@ public:
   // w/o ever successfully creating a connection)
   static void OnStopSession(WebSocketChannel *aChannel, nsresult aReason)
   {
-    LOG(("Websocket: OnStopSession: [this=%p, reason=0x%08x]", aChannel,
-         aReason));
+    LOG(("Websocket: OnStopSession: [this=%p, reason=0x%08" PRIx32 "]", aChannel,
+         static_cast<uint32_t>(aReason)));
 
     StaticMutexAutoLock lock(sLock);
     if (!sManager) {
@@ -605,7 +605,7 @@ public:
       }
       if (NS_FAILED(rv)) {
         LOG(("OnMessageAvailable or OnBinaryMessageAvailable "
-             "failed with 0x%08x", rv));
+             "failed with 0x%08" PRIx32, static_cast<uint32_t>(rv)));
       }
     }
 
@@ -646,7 +646,7 @@ public:
       nsresult rv = mListenerMT->mListener->OnStop(mListenerMT->mContext, mReason);
       if (NS_FAILED(rv)) {
         LOG(("WebSocketChannel::CallOnStop "
-             "OnStop failed (%08x)\n", rv));
+             "OnStop failed (%08" PRIx32 ")\n", static_cast<uint32_t>(rv)));
       }
       mChannel->mListenerMT = nullptr;
     }
@@ -690,7 +690,7 @@ public:
                                               mReason);
       if (NS_FAILED(rv)) {
         LOG(("WebSocketChannel::CallOnServerClose "
-             "OnServerClose failed (%08x)\n", rv));
+             "OnServerClose failed (%08" PRIx32 ")\n", static_cast<uint32_t>(rv)));
       }
     }
     return NS_OK;
@@ -727,7 +727,8 @@ public:
     if (mListenerMT) {
       nsresult rv = mListenerMT->mListener->OnAcknowledge(mListenerMT->mContext, mSize);
       if (NS_FAILED(rv)) {
-        LOG(("WebSocketChannel::CallAcknowledge: Acknowledge failed (%08x)\n", rv));
+        LOG(("WebSocketChannel::CallAcknowledge: Acknowledge failed (%08" PRIx32 ")\n",
+             static_cast<uint32_t>(rv)));
       }
     }
     return NS_OK;
@@ -1089,7 +1090,7 @@ public:
     rv = aCompressor->Deflate(BeginReading(), mLength, *temp);
     if (NS_FAILED(rv)) {
       LOG(("WebSocketChannel::OutboundMessage: Deflating payload failed "
-           "[rv=0x%08x]\n", rv));
+           "[rv=0x%08" PRIx32 "]\n", static_cast<uint32_t>(rv)));
       return false;
     }
 
@@ -1271,7 +1272,8 @@ WebSocketChannel::Observe(nsISupports *subject,
         } else {
           nsresult rv = OnNetworkChanged();
           if (NS_FAILED(rv)) {
-            LOG(("WebSocket: OnNetworkChanged failed (%08x)", rv));
+            LOG(("WebSocket: OnNetworkChanged failed (%08" PRIx32 ")",
+                 static_cast<uint32_t>(rv)));
           }
         }
       }
@@ -1549,6 +1551,14 @@ WebSocketChannel::ProcessInput(uint8_t *buffer, uint32_t count)
         break;
 
       payloadLength64 = mFramePtr[2] << 8 | mFramePtr[3];
+
+      if(payloadLength64 < 126){
+        // Section 5.2 says that the minimal number of bytes MUST
+        // be used to encode the length in all cases
+        LOG(("WebSocketChannel:: non-minimal-encoded payload length"));
+        return NS_ERROR_ILLEGAL_VALUE;
+      }
+
     } else {
       // 64 bit length
       framingLength += 8;
@@ -1564,12 +1574,20 @@ WebSocketChannel::ProcessInput(uint8_t *buffer, uint32_t count)
 
       // copy this in case it is unaligned
       payloadLength64 = NetworkEndian::readInt64(mFramePtr + 2);
+
+      if(payloadLength64 <= 0xffff){
+        // Section 5.2 says that the minimal number of bytes MUST
+        // be used to encode the length in all cases
+        LOG(("WebSocketChannel:: non-minimal-encoded payload length"));
+        return NS_ERROR_ILLEGAL_VALUE;
+      }
+
     }
 
     payload = mFramePtr + framingLength;
     avail -= framingLength;
 
-    LOG(("WebSocketChannel::ProcessInput: payload %lld avail %lu\n",
+    LOG(("WebSocketChannel::ProcessInput: payload %" PRId64 " avail %" PRIu32 "\n",
          payloadLength64, avail));
 
     CheckedInt<int64_t> payloadLengthChecked(payloadLength64);
@@ -1644,7 +1662,7 @@ WebSocketChannel::ProcessInput(uint8_t *buffer, uint32_t count)
         return NS_ERROR_ILLEGAL_VALUE;
       }
 
-      LOG(("WebSocketChannel:: Accumulating Fragment %ld\n", payloadLength));
+      LOG(("WebSocketChannel:: Accumulating Fragment %" PRIu32 "\n", payloadLength));
 
       if (opcode == nsIWebSocketFrame::OPCODE_CONTINUATION) {
 
@@ -2191,7 +2209,7 @@ WebSocketChannel::PrimeNewOutgoingMessage()
                                                           &buffer);
       if (NS_FAILED(rv)) {
         LOG(("WebSocketChannel::PrimeNewOutgoingMessage(): "
-             "GenerateRandomBytes failure %x\n", rv));
+             "GenerateRandomBytes failure %" PRIx32 "\n", static_cast<uint32_t>(rv)));
         StopSession(rv);
         return;
       }
@@ -2342,7 +2360,8 @@ WebSocketChannel::CleanupConnection()
 void
 WebSocketChannel::StopSession(nsresult reason)
 {
-  LOG(("WebSocketChannel::StopSession() %p [%x]\n", this, reason));
+  LOG(("WebSocketChannel::StopSession() %p [%" PRIx32 "]\n",
+       this, static_cast<uint32_t>(reason)));
 
   // normally this should be called on socket thread, but it is ok to call it
   // from OnStartRequest before the socket thread machine has gotten underway
@@ -2447,8 +2466,8 @@ WebSocketChannel::StopSession(nsresult reason)
 void
 WebSocketChannel::AbortSession(nsresult reason)
 {
-  LOG(("WebSocketChannel::AbortSession() %p [reason %x] stopped = %d\n",
-       this, reason, !!mStopped));
+  LOG(("WebSocketChannel::AbortSession() %p [reason %" PRIx32 "] stopped = %d\n",
+       this, static_cast<uint32_t>(reason), !!mStopped));
 
   // normally this should be called on socket thread, but it is ok to call it
   // from the main thread before StartWebsocketData() has completed
@@ -2811,22 +2830,29 @@ WebSocketChannel::SetupRequest()
   rv = mChannel->HTTPUpgrade(NS_LITERAL_CSTRING("websocket"), this);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mHttpChannel->SetRequestHeader(
+  rv = mHttpChannel->SetRequestHeader(
     NS_LITERAL_CSTRING("Sec-WebSocket-Version"),
     NS_LITERAL_CSTRING(SEC_WEBSOCKET_VERSION), false);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
 
-  if (!mOrigin.IsEmpty())
-    mHttpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Origin"), mOrigin,
-                                   false);
+  if (!mOrigin.IsEmpty()) {
+    rv = mHttpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Origin"), mOrigin,
+                                        false);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+  }
 
-  if (!mProtocol.IsEmpty())
-    mHttpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Sec-WebSocket-Protocol"),
-                                   mProtocol, true);
+  if (!mProtocol.IsEmpty()) {
+    rv = mHttpChannel->SetRequestHeader(
+      NS_LITERAL_CSTRING("Sec-WebSocket-Protocol"), mProtocol, true);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+  }
 
-  if (mAllowPMCE)
-    mHttpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Sec-WebSocket-Extensions"),
-                                   NS_LITERAL_CSTRING("permessage-deflate"),
-                                   false);
+  if (mAllowPMCE) {
+    rv = mHttpChannel->SetRequestHeader(
+      NS_LITERAL_CSTRING("Sec-WebSocket-Extensions"),
+      NS_LITERAL_CSTRING("permessage-deflate"), false);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+  }
 
   uint8_t      *secKey;
   nsAutoCString secKeyString;
@@ -2839,8 +2865,9 @@ WebSocketChannel::SetupRequest()
     return NS_ERROR_OUT_OF_MEMORY;
   secKeyString.Assign(b64);
   PR_Free(b64);
-  mHttpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Sec-WebSocket-Key"),
-                                 secKeyString, false);
+  rv = mHttpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Sec-WebSocket-Key"),
+                                      secKeyString, false);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
   LOG(("WebSocketChannel::SetupRequest: client key %s\n", secKeyString.get()));
 
   // prepare the value we expect to see in
@@ -2871,7 +2898,9 @@ WebSocketChannel::DoAdmissionDNS()
   nsCOMPtr<nsIThread> mainThread;
   NS_GetMainThread(getter_AddRefs(mainThread));
   MOZ_ASSERT(!mCancelable);
-  return dns->AsyncResolve(hostName, 0, this, mainThread, getter_AddRefs(mCancelable));
+  return dns->AsyncResolveNative(hostName, 0, this,
+                                 mainThread, mLoadInfo->GetOriginAttributes(),
+                                 getter_AddRefs(mCancelable));
 }
 
 nsresult
@@ -2927,7 +2956,7 @@ WebSocketChannel::StartWebsocketData()
   rv = mSocketIn->AsyncWait(this, 0, 0, mSocketThread);
   if (NS_FAILED(rv)) {
     LOG(("WebSocketChannel::StartWebsocketData mSocketIn->AsyncWait() failed "
-         "with error 0x%08x", rv));
+         "with error 0x%08" PRIx32, static_cast<uint32_t>(rv)));
     return mSocketThread->Dispatch(
       NewRunnableMethod<nsresult>(this,
                                   &WebSocketChannel::AbortSession,
@@ -2941,7 +2970,7 @@ WebSocketChannel::StartWebsocketData()
       NS_DISPATCH_NORMAL);
     if (NS_FAILED(rv)) {
       LOG(("WebSocketChannel::StartWebsocketData Could not start pinging, "
-           "rv=0x%08x", rv));
+           "rv=0x%08" PRIx32, static_cast<uint32_t>(rv)));
       return rv;
     }
   }
@@ -2953,7 +2982,8 @@ WebSocketChannel::StartWebsocketData()
     rv = mListenerMT->mListener->OnStart(mListenerMT->mContext);
     if (NS_FAILED(rv)) {
       LOG(("WebSocketChannel::StartWebsocketData "
-           "mListenerMT->mListener->OnStart() failed with error 0x%08x", rv));
+           "mListenerMT->mListener->OnStart() failed with error 0x%08" PRIx32,
+           static_cast<uint32_t>(rv)));
     }
   }
 
@@ -3019,8 +3049,8 @@ WebSocketChannel::OnLookupComplete(nsICancelable *aRequest,
                                    nsIDNSRecord *aRecord,
                                    nsresult aStatus)
 {
-  LOG(("WebSocketChannel::OnLookupComplete() %p [%p %p %x]\n",
-       this, aRequest, aRecord, aStatus));
+  LOG(("WebSocketChannel::OnLookupComplete() %p [%p %p %" PRIx32 "]\n",
+       this, aRequest, aRecord, static_cast<uint32_t>(aStatus)));
 
   MOZ_ASSERT(NS_IsMainThread(), "not main thread");
 
@@ -3888,8 +3918,8 @@ WebSocketChannel::OnStopRequest(nsIRequest *aRequest,
                                 nsISupports *aContext,
                                 nsresult aStatusCode)
 {
-  LOG(("WebSocketChannel::OnStopRequest() %p [%p %p %x]\n",
-       this, aRequest, mHttpChannel.get(), aStatusCode));
+  LOG(("WebSocketChannel::OnStopRequest() %p [%p %p %" PRIx32 "]\n",
+       this, aRequest, mHttpChannel.get(), static_cast<uint32_t>(aStatusCode)));
   MOZ_ASSERT(NS_IsMainThread(), "not main thread");
 
   ReportConnectionTelemetry();
@@ -3923,7 +3953,8 @@ WebSocketChannel::OnInputStreamReady(nsIAsyncInputStream *aStream)
 
   do {
     rv = mSocketIn->Read((char *)buffer, 2048, &count);
-    LOG(("WebSocketChannel::OnInputStreamReady: read %u rv %x\n", count, rv));
+    LOG(("WebSocketChannel::OnInputStreamReady: read %u rv %" PRIx32 "\n",
+         count, static_cast<uint32_t>(rv)));
 
     if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
       mSocketIn->AsyncWait(this, 0, 0, mSocketThread);
@@ -3992,8 +4023,8 @@ WebSocketChannel::OnOutputStreamReady(nsIAsyncOutputStream *aStream)
       amtSent = 0;
     } else {
       rv = mSocketOut->Write(sndBuf, toSend, &amtSent);
-      LOG(("WebSocketChannel::OnOutputStreamReady: write %u rv %x\n",
-           amtSent, rv));
+      LOG(("WebSocketChannel::OnOutputStreamReady: write %u rv %" PRIx32 "\n",
+           amtSent, static_cast<uint32_t>(rv)));
 
       if (rv == NS_BASE_STREAM_WOULD_BLOCK) {
         mSocketOut->AsyncWait(this, 0, 0, mSocketThread);
@@ -4045,7 +4076,7 @@ WebSocketChannel::OnDataAvailable(nsIRequest *aRequest,
                                     uint64_t aOffset,
                                     uint32_t aCount)
 {
-  LOG(("WebSocketChannel::OnDataAvailable() %p [%p %p %p %llu %u]\n",
+  LOG(("WebSocketChannel::OnDataAvailable() %p [%p %p %p %" PRIu64 " %u]\n",
          this, aRequest, mHttpChannel.get(), aInputStream, aOffset, aCount));
 
   // This is the HTTP OnDataAvailable Method, which means this is http data in

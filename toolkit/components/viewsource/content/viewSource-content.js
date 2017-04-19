@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* eslint-env mozilla/frame-script */
+
 var { utils: Cu, interfaces: Ci, classes: Cc } = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
@@ -330,6 +332,8 @@ var ViewSourceContent = {
                     .createInstance(Ci.nsISHEntry);
     shEntry.setURI(BrowserUtils.makeURI(viewSrcURL, null, null));
     shEntry.setTitle(viewSrcURL);
+    let systemPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
+    shEntry.triggeringPrincipal = systemPrincipal;
     shEntry.loadType = Ci.nsIDocShellLoadInfo.loadHistory;
     shEntry.cacheKey = shEntrySource.cacheKey;
     docShell.QueryInterface(Ci.nsIWebNavigation)
@@ -454,7 +458,7 @@ var ViewSourceContent = {
     };
 
     subject.wrappedJSObject = subject;
-    Services.obs.notifyObservers(subject, "content-contextmenu", null);
+    Services.obs.notifyObservers(subject, "content-contextmenu");
 
     let node = event.target;
 

@@ -57,12 +57,14 @@ var gEditItemOverlay = {
       }
     }
     let focusedElement = aInitInfo.focusedElement;
+    let onPanelReady = aInitInfo.onPanelReady;
 
     return this._paneInfo = { itemId, itemGuid, isItem,
                               isURI, uri, title,
                               isBookmark, isFolderShortcut, isParentReadOnly,
                               bulkTagging, uris,
-                              visibleRows, postData, isTag, focusedElement };
+                              visibleRows, postData, isTag, focusedElement,
+                              onPanelReady };
   },
 
   get initialized() {
@@ -207,7 +209,8 @@ var gEditItemOverlay = {
 
     let { itemId, isItem, isURI,
           isBookmark, bulkTagging, uris,
-          visibleRows, focusedElement } = this._setPaneInfo(aInfo);
+          visibleRows, focusedElement,
+          onPanelReady } = this._setPaneInfo(aInfo);
 
     let showOrCollapse =
       (rowId, isAppropriateForInput, nameInHiddenRows = null) => {
@@ -274,27 +277,39 @@ var gEditItemOverlay = {
 
     // Observe changes.
     if (!this._observersAdded) {
-      PlacesUtils.bookmarks.addObserver(this, false);
+      PlacesUtils.bookmarks.addObserver(this);
       window.addEventListener("unload", this);
       this._observersAdded = true;
     }
 
-    // The focusedElement possible values are:
-    //  * preferred: focus the field that the user touched first the last
-    //    time the pane was shown (either namePicker or tagsField)
-    //  * first: focus the first non collapsed textbox
-    // Note: since all controls are collapsed by default, we don't get the
-    // default XUL dialog behavior, that selects the first control, so we set
-    // the focus explicitly.
-    let elt;
-    if (focusedElement === "preferred") {
-      elt = this._element(gPrefService.getCharPref("browser.bookmarks.editDialog.firstEditField"));
-    } else if (focusedElement === "first") {
-      elt = document.querySelector("textbox:not([collapsed=true])");
-    }
-    if (elt) {
-      elt.focus();
-      elt.select();
+    let focusElement = () => {
+      // The focusedElement possible values are:
+      //  * preferred: focus the field that the user touched first the last
+      //    time the pane was shown (either namePicker or tagsField)
+      //  * first: focus the first non collapsed textbox
+      // Note: since all controls are collapsed by default, we don't get the
+      // default XUL dialog behavior, that selects the first control, so we set
+      // the focus explicitly.
+      // Note: If focusedElement === "preferred", this file expects gPrefService
+      // to be defined in the global scope.
+      let elt;
+      if (focusedElement === "preferred") {
+        /* eslint-disable no-undef */
+        elt = this._element(gPrefService.getCharPref("browser.bookmarks.editDialog.firstEditField"));
+        /* eslint-enable no-undef */
+      } else if (focusedElement === "first") {
+        elt = document.querySelector("textbox:not([collapsed=true])");
+      }
+      if (elt) {
+        elt.focus();
+        elt.select();
+      }
+    };
+
+    if (onPanelReady) {
+      onPanelReady(focusElement);
+    } else {
+      focusElement();
     }
   },
 
@@ -328,10 +343,23 @@ var gEditItemOverlay = {
     if (aElement.value != aValue) {
       aElement.value = aValue;
 
-      // Clear the undo stack
-      let editor = aElement.editor;
-      if (editor)
-        editor.transactionManager.clear();
+      // Clear the editor's undo stack
+      let transactionManager;
+      try {
+        transactionManager = aElement.editor.transactionManager;
+      } catch (e) {
+        // When retrieving the transaction manager, editor may be null resulting
+        // in a TypeError. Additionally, the transaction manager may not
+        // exist yet, which causes access to it to throw NS_ERROR_FAILURE.
+        // In either event, the transaction manager doesn't exist it, so we
+        // don't need to worry about clearing it.
+        if (!(e instanceof TypeError) && e.result != Cr.NS_ERROR_FAILURE) {
+          throw e;
+        }
+      }
+      if (transactionManager) {
+        transactionManager.clear();
+      }
     }
   },
 
@@ -667,7 +695,7 @@ var gEditItemOverlay = {
     if (!this.initialized || !this._paneInfo.isBookmark)
       return;
 
-    let annotation = { name : PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO };
+    let annotation = { name: PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO };
     if (this._loadInSidebarCheckbox.checked)
       annotation.value = true;
 
@@ -789,7 +817,7 @@ var gEditItemOverlay = {
 
       // Auto-show the bookmarks toolbar when adding / moving an item there.
       if (containerId == PlacesUtils.toolbarFolderId) {
-        Services.obs.notifyObservers(null, "autoshow-bookmarks-toolbar", null);
+        Services.obs.notifyObservers(null, "autoshow-bookmarks-toolbar");
       }
     }
 
@@ -899,7 +927,7 @@ var gEditItemOverlay = {
 
     let tagsInField = this._getTagsArrayFromTagsInputField();
     let allTags = PlacesUtils.tagging.allTags;
-    for (tag of allTags) {
+    for (let tag of allTags) {
       let elt = document.createElement("listitem");
       elt.setAttribute("type", "checkbox");
       elt.setAttribute("label", tag);
@@ -1064,7 +1092,7 @@ var gEditItemOverlay = {
       // menulist has been changed, we need to update the label of its
       // representing element.
       let menupopup = this._folderMenuList.menupopup;
-      for (menuitem of menupopup.childNodes) {
+      for (let menuitem of menupopup.childNodes) {
         if ("folderId" in menuitem && menuitem.folderId == aItemId) {
           menuitem.label = aNewTitle;
           break;
@@ -1117,8 +1145,8 @@ var gEditItemOverlay = {
   onItemMoved(aItemId, aOldParent, aOldIndex,
               aNewParent, aNewIndex, aItemType) {
     if (!this._paneInfo.isItem ||
-        !this._paneInfo.visibleRows.has("folderPicker") ||
-        this._paneInfo.itemId != aItemOd ||
+        !this._paneInfo.visibleRows.has("folderRow") ||
+        this._paneInfo.itemId != aItemId ||
         aNewParent == this._getFolderIdFromMenuList()) {
       return;
     }

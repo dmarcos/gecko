@@ -74,20 +74,24 @@ public:
     //        the dispatch target were notifications should be sent.
     // @param callbacks
     //        the notification callbacks to be given to PSM.
+    // @param topLevelOuterContentWindowId
+    //        indicate the top level outer content window in which
+    //        this transaction is being loaded.
     // @param responseBody
     //        the input stream that will contain the response data.  async
     //        wait on this input stream for data.  on first notification,
     //        headers should be available (check transaction status).
     //
-    nsresult Init(uint32_t               caps,
-                  nsHttpConnectionInfo  *connInfo,
-                  nsHttpRequestHead     *reqHeaders,
-                  nsIInputStream        *reqBody,
-                  bool                   reqBodyIncludesHeaders,
-                  nsIEventTarget        *consumerTarget,
-                  nsIInterfaceRequestor *callbacks,
-                  nsITransportEventSink *eventsink,
-                  nsIAsyncInputStream  **responseBody);
+    MOZ_MUST_USE nsresult Init(uint32_t               caps,
+                               nsHttpConnectionInfo  *connInfo,
+                               nsHttpRequestHead     *reqHeaders,
+                               nsIInputStream        *reqBody,
+                               bool                   reqBodyIncludesHeaders,
+                               nsIEventTarget        *consumerTarget,
+                               nsIInterfaceRequestor *callbacks,
+                               nsITransportEventSink *eventsink,
+                               uint64_t               topLevelOuterContentWindowId,
+                               nsIAsyncInputStream  **responseBody);
 
     // attributes
     nsHttpResponseHead    *ResponseHead()   { return mHaveAllHeaders ? mResponseHead : nullptr; }
@@ -119,20 +123,19 @@ public:
     void    SetPriority(int32_t priority) { mPriority = priority; }
     int32_t    Priority()                 { return mPriority; }
 
-    enum Classifier Classification() { return mClassification; }
-
     void PrintDiagnostics(nsCString &log);
 
     // Sets mPendingTime to the current time stamp or to a null time stamp (if now is false)
     void SetPendingTime(bool now = true) { mPendingTime = now ? TimeStamp::Now() : TimeStamp(); }
     const TimeStamp GetPendingTime() { return mPendingTime; }
-    bool UsesPipelining() const { return mCaps & NS_HTTP_ALLOW_PIPELINING; }
 
     // overload of nsAHttpTransaction::RequestContext()
     nsIRequestContext *RequestContext() override { return mRequestContext.get(); }
     void SetRequestContext(nsIRequestContext *aRequestContext);
     void DispatchedAsBlocking();
     void RemoveDispatchedAsBlocking();
+
+    void DisableSpdy() override;
 
     nsHttpTransaction *QueryHttpTransaction() override { return this; }
 
@@ -167,38 +170,47 @@ public:
 
     int64_t GetTransferSize() { return mTransferSize; }
 
-    bool Do0RTT() override;
-    nsresult Finish0RTT(bool aRestart) override;
+    MOZ_MUST_USE bool Do0RTT() override;
+    MOZ_MUST_USE nsresult Finish0RTT(bool aRestart, bool aAlpnChanged /* ignored */) override;
+
+    // After Finish0RTT early data may have failed but the caller did not request
+    // restart - this indicates that state for dev tools
+    void Refused0RTT();
+
+    uint64_t TopLevelOuterContentWindowId() override
+    {
+        return mTopLevelOuterContentWindowId;
+    }
 private:
     friend class DeleteHttpTransaction;
     virtual ~nsHttpTransaction();
 
-    nsresult Restart();
-    nsresult RestartInProgress();
+    MOZ_MUST_USE nsresult Restart();
     char    *LocateHttpStart(char *buf, uint32_t len,
                              bool aAllowPartialMatch);
-    nsresult ParseLine(nsACString &line);
-    nsresult ParseLineSegment(char *seg, uint32_t len);
-    nsresult ParseHead(char *, uint32_t count, uint32_t *countRead);
-    nsresult HandleContentStart();
-    nsresult HandleContent(char *, uint32_t count, uint32_t *contentRead, uint32_t *contentRemaining);
-    nsresult ProcessData(char *, uint32_t, uint32_t *);
+    MOZ_MUST_USE nsresult ParseLine(nsACString &line);
+    MOZ_MUST_USE nsresult ParseLineSegment(char *seg, uint32_t len);
+    MOZ_MUST_USE nsresult ParseHead(char *, uint32_t count,
+                                    uint32_t *countRead);
+    MOZ_MUST_USE nsresult HandleContentStart();
+    MOZ_MUST_USE nsresult HandleContent(char *, uint32_t count,
+                                        uint32_t *contentRead,
+                                        uint32_t *contentRemaining);
+    MOZ_MUST_USE nsresult ProcessData(char *, uint32_t, uint32_t *);
     void     DeleteSelfOnConsumerThread();
     void     ReleaseBlockingTransaction();
 
-    Classifier Classify();
-    void       CancelPipeline(uint32_t reason);
-
-    static nsresult ReadRequestSegment(nsIInputStream *, void *, const char *,
-                                       uint32_t, uint32_t, uint32_t *);
-    static nsresult WritePipeSegment(nsIOutputStream *, void *, char *,
-                                     uint32_t, uint32_t, uint32_t *);
+    static MOZ_MUST_USE nsresult ReadRequestSegment(nsIInputStream *, void *,
+                                                    const char *, uint32_t,
+                                                    uint32_t, uint32_t *);
+    static MOZ_MUST_USE nsresult WritePipeSegment(nsIOutputStream *, void *,
+                                                  char *, uint32_t, uint32_t,
+                                                  uint32_t *);
 
     bool TimingEnabled() const { return mCaps & NS_HTTP_TIMING_ENABLED; }
 
     bool ResponseTimeoutEnabled() const final;
 
-    void DisableSpdy() override;
     void ReuseConnectionOnRestartOK(bool reuseOk) override { mReuseOnRestart = reuseOk; }
 
     // Called right after we parsed the response head.  Checks for connection based
@@ -257,7 +269,7 @@ private:
 
     int64_t                         mContentLength;   // equals -1 if unknown
     int64_t                         mContentRead;     // count of consumed content bytes
-    int64_t                         mTransferSize; // count of received bytes
+    Atomic<int64_t, ReleaseAcquire> mTransferSize; // count of received bytes
 
     // After a 304/204 or other "no-content" style response we will skip over
     // up to MAX_INVALID_RESPONSE_BODY_SZ bytes when looking for the next
@@ -279,9 +291,6 @@ private:
 
     uint16_t                        mRestartCount;        // the number of times this transaction has been restarted
     uint32_t                        mCaps;
-    enum Classifier                 mClassification;
-    int32_t                         mPipelinePosition;
-    int64_t                         mMaxPipelineObjectSize;
 
     nsHttpVersion                   mHttpVersion;
     uint16_t                        mHttpResponseCode;
@@ -297,6 +306,9 @@ private:
     // conservative side, e.g. by going ahead with a 2nd DNS refresh.
     Atomic<uint32_t>                mCapsToClear;
     Atomic<bool, ReleaseAcquire>    mResponseIsComplete;
+
+    // If true, this transaction was asked to stop receiving the response.
+    bool                            mThrottleResponse;
 
     // state flags, all logically boolean, but not packed together into a
     // bitfield so as to avoid bitfield-induced races.  See bug 560579.
@@ -338,67 +350,7 @@ private:
     // The time when the transaction was submitted to the Connection Manager
     TimeStamp                       mPendingTime;
 
-    class RestartVerifier
-    {
-
-        // When a idemptotent transaction has received part of its response body
-        // and incurs an error it can be restarted. To do this we mark the place
-        // where we stopped feeding the body to the consumer and start the
-        // network call over again. If everything we track (headers, length, etc..)
-        // matches up to the place where we left off then the consumer starts being
-        // fed data again with the new information. This can be done N times up
-        // to the normal restart (i.e. with no response info) limit.
-
-    public:
-        RestartVerifier()
-            : mContentLength(-1)
-            , mAlreadyProcessed(0)
-            , mToReadBeforeRestart(0)
-            , mSetup(false)
-        {}
-        ~RestartVerifier() {}
-
-        void Set(int64_t contentLength, nsHttpResponseHead *head);
-        bool Verify(int64_t contentLength, nsHttpResponseHead *head);
-        bool IsDiscardingContent() { return mToReadBeforeRestart != 0; }
-        bool IsSetup() { return mSetup; }
-        int64_t AlreadyProcessed() { return mAlreadyProcessed; }
-        void SetAlreadyProcessed(int64_t val) {
-            mAlreadyProcessed = val;
-            mToReadBeforeRestart = val;
-        }
-        int64_t ToReadBeforeRestart() { return mToReadBeforeRestart; }
-        void HaveReadBeforeRestart(uint32_t amt)
-        {
-            MOZ_ASSERT(amt <= mToReadBeforeRestart,
-                       "too large of a HaveReadBeforeRestart deduction");
-            mToReadBeforeRestart -= amt;
-        }
-
-    private:
-        // This is the data from the first complete response header
-        // used to make sure that all subsequent response headers match
-
-        int64_t                         mContentLength;
-        nsCString                       mETag;
-        nsCString                       mLastModified;
-        nsCString                       mContentRange;
-        nsCString                       mContentEncoding;
-        nsCString                       mTransferEncoding;
-
-        // This is the amount of data that has been passed to the channel
-        // from previous iterations of the transaction and must therefore
-        // be skipped in the new one.
-        int64_t                         mAlreadyProcessed;
-
-        // The amount of data that must be discarded in the current iteration
-        // (where iteration > 0) to reach the mAlreadyProcessed high water
-        // mark.
-        int64_t                         mToReadBeforeRestart;
-
-        // true when ::Set has been called with a response header
-        bool                            mSetup;
-    } mRestartInProgressVerifier;
+    uint64_t                        mTopLevelOuterContentWindowId;
 
 // For Rate Pacing via an EventTokenBucket
 public:
@@ -419,6 +371,10 @@ public:
     // transaction is believed to be HTTP/1 (and thus subject to rate pacing)
     // but later can be dispatched via spdy (not subject to rate pacing).
     void CancelPacing(nsresult reason);
+
+    // Forwards to the connection's ThrottleResponse.  If there is no connection
+    // at the time, we set a flag to do it on connection assignment.
+    void ThrottleResponse(bool aThrottle);
 
 private:
     bool mSubmittedRatePacing;
@@ -458,6 +414,14 @@ private:
     NetAddr                         mPeerAddr;
 
     bool                            m0RTTInProgress;
+    enum
+    {
+        EARLY_NONE,
+        EARLY_SENT,
+        EARLY_ACCEPTED
+    } mEarlyDataDisposition;
+
+    nsresult                        mTransportStatus;
 };
 
 } // namespace net

@@ -94,7 +94,7 @@ public:
   virtual EventStates IntrinsicState() const override;
   virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
 
-  virtual void NodeInfoChanged() override;
+  virtual void NodeInfoChanged(nsIDocument* aOldDoc) override;
 
   nsresult CopyInnerTo(Element* aDest);
 
@@ -344,11 +344,14 @@ protected:
   void UpdateFormOwner();
 
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 nsAttrValueOrString* aValue,
+                                 const nsAttrValueOrString* aValue,
                                  bool aNotify) override;
 
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                                 const nsAttrValue* aValue, bool aNotify) override;
+
+  // Override for nsImageLoadingContent.
+  nsIContent* AsContent() override { return this; }
 
   // This is a weak reference that this element and the HTMLFormElement
   // cooperate in maintaining.
@@ -361,7 +364,7 @@ private:
   bool SourceElementMatches(nsIContent* aSourceNode);
 
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
-                                    nsRuleData* aData);
+                                    GenericSpecifiedValues* aGenericData);
 
   bool mInDocResponsiveContent;
   RefPtr<ImageLoadTask> mPendingImageLoadTask;

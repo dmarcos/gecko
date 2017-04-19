@@ -32,7 +32,10 @@ add_task(function* test_implicit_id() {
   equal(addon, null, "Add-on is not installed");
 
   let xpifile = do_get_file(IMPLICIT_ID_XPI);
-  yield promiseInstallAllFiles([xpifile]);
+  yield Promise.all([
+    promiseInstallAllFiles([xpifile]),
+    promiseWebExtensionStartup(),
+  ]);
 
   addon = yield promiseAddonByID(IMPLICIT_ID_ID);
   notEqual(addon, null, "Add-on is installed");
@@ -52,7 +55,10 @@ add_task(function* test_implicit_id_temp() {
   equal(addon, null, "Add-on is not installed");
 
   let xpifile = do_get_file(IMPLICIT_ID_XPI);
-  yield AddonManager.installTemporaryAddon(xpifile);
+  yield Promise.all([
+    AddonManager.installTemporaryAddon(xpifile),
+    promiseWebExtensionStartup(),
+  ]);
 
   addon = yield promiseAddonByID(IMPLICIT_ID_ID);
   notEqual(addon, null, "Add-on is installed");
@@ -79,8 +85,15 @@ add_task(function* test_unsigned_no_id_temp_install() {
 
   const addonDir = yield promiseWriteWebManifestForExtension(manifest, gTmpD,
                                                 "the-addon-sub-dir");
-  const addon = yield AddonManager.installTemporaryAddon(addonDir);
+  const testDate = new Date();
+  const [addon] = yield Promise.all([
+    AddonManager.installTemporaryAddon(addonDir),
+    promiseWebExtensionStartup(),
+  ]);
+
   ok(addon.id, "ID should have been auto-generated");
+  ok(Math.abs(addon.installDate - testDate) < 10000, "addon has an expected installDate");
+  ok(Math.abs(addon.updateDate - testDate) < 10000, "addon has an expected updateDate");
 
   // The sourceURI of a temporary installed addon should be equal to the
   // file url of the installed source dir.
@@ -89,12 +102,15 @@ add_task(function* test_unsigned_no_id_temp_install() {
         "SourceURI of the add-on has the expected value");
 
   // Install the same directory again, as if re-installing or reloading.
-  const secondAddon = yield AddonManager.installTemporaryAddon(addonDir);
+  const [secondAddon] = yield Promise.all([
+    AddonManager.installTemporaryAddon(addonDir),
+    promiseWebExtensionStartup(),
+  ]);
   // The IDs should be the same.
   equal(secondAddon.id, addon.id, "Reinstalled add-on has the expected ID");
 
   secondAddon.uninstall();
-  Services.obs.notifyObservers(addonDir, "flush-cache-entry", null);
+  Services.obs.notifyObservers(addonDir, "flush-cache-entry");
   addonDir.remove(true);
   AddonTestUtils.useRealCertChecks = false;
 });
@@ -477,7 +493,7 @@ add_task(function* test_strict_min_max() {
 });
 
 // Check permissions prompt
-add_task(function* test_permissions() {
+add_task(function* test_permissions_prompt() {
   const manifest = {
     name: "permissions test",
     description: "permissions test",
@@ -504,7 +520,7 @@ add_task(function* test_permissions() {
   notEqual(perminfo.addon, null, "Permission info includes the new addon");
   let perms = perminfo.addon.userPermissions;
   deepEqual(perms.permissions, ["tabs", "storage"], "API permissions are correct");
-  deepEqual(perms.hosts, ["https://*.example.com/*", "<all_urls>"], "Host permissions are correct");
+  deepEqual(perms.origins, ["https://*.example.com/*", "<all_urls>"], "Host permissions are correct");
   deepEqual(perms.apis, ["test"], "Experiments permissions are correct");
 
   let addon = yield promiseAddonByID(perminfo.addon.id);
@@ -515,7 +531,7 @@ add_task(function* test_permissions() {
 });
 
 // Check permissions prompt cancellation
-add_task(function* test_permissions() {
+add_task(function* test_permissions_prompt_cancel() {
   const manifest = {
     name: "permissions test",
     description: "permissions test",

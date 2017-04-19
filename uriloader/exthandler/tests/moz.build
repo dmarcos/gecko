@@ -15,9 +15,18 @@ BROWSER_CHROME_MANIFESTS += ['mochitest/browser.ini']
 if not CONFIG['MOZ_JSDOWNLOADS']:
     XPCSHELL_TESTS_MANIFESTS += ['unit_ipc/xpcshell.ini']
 
+TESTING_JS_MODULES += [
+    'HandlerServiceTestUtils.jsm',
+]
+
 GeckoSimplePrograms([
     'WriteArgument',
 ], linkage=None)
+
+if CONFIG['COMPILE_ENVIRONMENT']:
+    TEST_HARNESS_FILES.xpcshell.uriloader.exthandler.tests.unit += [
+        '!WriteArgument%s' % CONFIG['BIN_SUFFIX']
+    ]
 
 USE_LIBS += [
     'nspr',

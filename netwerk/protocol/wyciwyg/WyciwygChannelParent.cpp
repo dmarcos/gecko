@@ -15,6 +15,7 @@
 #include "SerializedLoadContext.h"
 #include "nsIContentPolicy.h"
 #include "mozilla/ipc/BackgroundUtils.h"
+#include "mozilla/dom/ContentParent.h"
 
 using namespace mozilla::ipc;
 
@@ -39,7 +40,9 @@ WyciwygChannelParent::ActorDestroy(ActorDestroyReason why)
   mIPCClosed = true;
 
   // We need to force the cycle to break here
-  mChannel->SetNotificationCallbacks(nullptr);
+  if (mChannel) {
+    mChannel->SetNotificationCallbacks(nullptr);
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -127,7 +130,9 @@ WyciwygChannelParent::RecvInit(const URIParams&          aURI,
   }
 
   nsCOMPtr<nsILoadInfo> loadInfo = chan->GetLoadInfo();
-  rv = loadInfo->SetPrincipalToInherit(principalToInherit);
+  if (loadInfo) {
+    rv = loadInfo->SetPrincipalToInherit(principalToInherit);
+  }
   if (NS_FAILED(rv)) {
     if (!SendCancelEarly(rv)) {
       return IPC_FAIL_NO_REASON(this);
@@ -251,7 +256,7 @@ WyciwygChannelParent::RecvAsyncOpen(const URIParams& aOriginal,
 }
 
 mozilla::ipc::IPCResult
-WyciwygChannelParent::RecvWriteToCacheEntry(const nsString& data)
+WyciwygChannelParent::RecvWriteToCacheEntry(const nsDependentSubstring& data)
 {
   if (!mReceivedAppData) {
     printf_stderr("WyciwygChannelParent::RecvWriteToCacheEntry: FATAL ERROR: didn't receive app data\n");
@@ -318,6 +323,12 @@ WyciwygChannelParent::OnStartRequest(nsIRequest *aRequest, nsISupports *aContext
   nsCOMPtr<nsIWyciwygChannel> chan = do_QueryInterface(aRequest, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // Send down any permissions which are relevant to this URL if we are
+  // performing a document load.
+  PContentParent* pcp = Manager()->Manager();
+  rv = static_cast<ContentParent*>(pcp)->TransmitPermissionsFor(chan);
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
   nsresult status;
   chan->GetStatus(&status);
 
@@ -354,8 +365,8 @@ WyciwygChannelParent::OnStopRequest(nsIRequest *aRequest,
                                     nsISupports *aContext,
                                     nsresult aStatusCode)
 {
-  LOG(("WyciwygChannelParent::OnStopRequest: [this=%p status=%ul]\n",
-       this, aStatusCode));
+  LOG(("WyciwygChannelParent::OnStopRequest: [this=%p status=%" PRIu32 "]\n",
+       this, static_cast<uint32_t>(aStatusCode)));
 
   if (mIPCClosed || !SendOnStopRequest(aStatusCode)) {
     return NS_ERROR_UNEXPECTED;

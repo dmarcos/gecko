@@ -10,7 +10,7 @@ for (let [key, val] of Object.entries({
 WEAVE_VERSION:                         "@weave_version@",
 
 // Sync Server API version that the client supports.
-SYNC_API_VERSION:                      "1.1",
+SYNC_API_VERSION:                      "1.5",
 
 // Version of the data format this client supports. The data format describes
 // how records are packaged; this is separate from the Server API version and
@@ -77,6 +77,10 @@ APPS_STORE_BATCH_SIZE:                 50,      // same as MOBILE_BATCH_SIZE
 // Default batch size for download batching
 // (how many records are fetched at a time from the server when batching is used).
 DEFAULT_DOWNLOAD_BATCH_SIZE:           1000,
+
+
+// Default maximum size for a record payload
+DEFAULT_MAX_RECORD_PAYLOAD_BYTES:      262144,  // 256KB
 
 // score thresholds for early syncs
 SINGLE_USER_THRESHOLD:                 1000,

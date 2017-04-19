@@ -45,7 +45,7 @@ function triggerSave(aWindow, aCallback) {
     fileName = fp.defaultString;
     info("fileName: " + fileName);
     destFile.append(fileName);
-    MockFilePicker.returnFiles = [destFile];
+    MockFilePicker.setFiles([destFile]);
     MockFilePicker.filterIndex = 1; // kSaveAsType_URL
     info("done showCallback");
   };
@@ -140,7 +140,7 @@ function test() {
         executeSoon(aCallback);
         info("whenDelayedStartupFinished found our window");
       }
-    }, "browser-delayed-startup-finished", false);
+    }, "browser-delayed-startup-finished");
   }
 
   mockTransferRegisterer.register();

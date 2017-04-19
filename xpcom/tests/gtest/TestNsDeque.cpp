@@ -7,21 +7,26 @@
 #include "gtest/gtest.h"
 #include "nsDeque.h"
 #include "nsCRT.h"
+#include "mozilla/TypeTraits.h"
 #include <stdio.h>
+#include <functional>
+
+using mozilla::IsSame;
+using mozilla::DeclVal;
 
 /**************************************************************
   Now define the token deallocator class...
  **************************************************************/
 namespace TestNsDeque {
-  
-  class _Dealloc: public nsDequeFunctor 
+
+  class _Dealloc: public nsDequeFunctor
   {
     virtual void* operator()(void* aObject) {
       return 0;
     }
   };
 
-  static bool VerifyContents(const nsDeque& aDeque, const int* aContents, size_t aLength) 
+  static bool VerifyContents(const nsDeque& aDeque, const int* aContents, size_t aLength)
   {
     for (size_t i=0; i<aLength; ++i) {
       if (*(int*)aDeque.ObjectAt(i) != aContents[i]) {
@@ -33,9 +38,9 @@ namespace TestNsDeque {
 
   class Deallocator: public nsDequeFunctor
   {
-    virtual void* operator()(void* aObject) 
+    virtual void* operator()(void* aObject)
     {
-      if (aObject) 
+      if (aObject)
       {
         // Set value to -1, to use in test function.
         *((int*)aObject) = -1;
@@ -47,9 +52,9 @@ namespace TestNsDeque {
 
   class ForEachAdder: public nsDequeFunctor
   {
-    virtual void* operator()(void* aObject) 
+    virtual void* operator()(void* aObject)
     {
-      if (aObject) 
+      if (aObject)
       {
         sum += *(int*)aObject;
       }
@@ -59,10 +64,10 @@ namespace TestNsDeque {
 
     private:
      int sum = 0;
-    
+
     public:
      int GetSum() { return sum; }
-    
+
   };
 }
 
@@ -75,7 +80,7 @@ TEST(NsDeque, OriginalTest)
   size_t i=0;
   int temp;
   nsDeque theDeque(new _Dealloc); //construct a simple one...
- 
+
   // ints = [0...199]
   for (i=0;i<size;i++) { //initialize'em
     ints[i]=static_cast<int>(i);
@@ -312,7 +317,7 @@ TEST(NsDeque,TestEraseShouldCallDeallocator)
 
   // Now check it again.
   CheckIfQueueEmpty(d);
-  
+
   for (size_t i=0; i < NumTestValues; i++)
   {
     EXPECT_EQ(-1, *(testArray[i])) << "Erase should call deallocator: " << *(testArray[i]);
@@ -339,4 +344,115 @@ TEST(NsDeque, TestForEach)
   EXPECT_EQ(sum, adder.GetSum()) << "For each should iterate over values";
 
   d.Erase();
+}
+
+TEST(NsDeque, TestConstRangeFor)
+{
+  nsDeque d(new Deallocator());
+
+  const size_t NumTestValues = 3;
+  for (size_t i = 0; i < NumTestValues; ++i)
+  {
+    d.Push(new int(i + 1));
+  }
+
+  static_assert(IsSame<nsDeque::ConstDequeIterator,
+                       decltype(DeclVal<const nsDeque&>().begin())>::value,
+                "(const nsDeque).begin() should return ConstDequeIterator");
+  static_assert(IsSame<nsDeque::ConstDequeIterator,
+                       decltype(DeclVal<const nsDeque&>().end())>::value,
+                "(const nsDeque).end() should return ConstDequeIterator");
+
+  int sum = 0;
+  for (void* ob : const_cast<const nsDeque&>(d)) {
+    sum += *static_cast<int*>(ob);
+  }
+  EXPECT_EQ(1+2+3, sum)
+    << "Const-range-for should iterate over values";
+}
+
+TEST(NsDeque, TestRangeFor)
+{
+  const size_t NumTestValues = 3;
+  struct Test
+  {
+    size_t runAfterLoopCount;
+    std::function<void(nsDeque&)> function;
+    int expectedSum;
+    const char* description;
+  };
+  // Note: All tests start with a deque containing 3 pointers to ints 1, 2, 3.
+  Test tests[] = {
+    { 0, [](nsDeque& d){}, 1+2+3, "no changes" },
+
+    { 1, [](nsDeque& d) { d.Pop(); }, 1+2, "Pop after 1st loop" },
+    { 2, [](nsDeque& d) { d.Pop(); }, 1+2, "Pop after 2nd loop" },
+    { 3, [](nsDeque& d) { d.Pop(); }, 1+2+3, "Pop after 3rd loop" },
+
+    { 1, [](nsDeque& d) { d.PopFront(); }, 1+3, "PopFront after 1st loop" },
+    { 2, [](nsDeque& d) { d.PopFront(); }, 1+2, "PopFront after 2nd loop" },
+    { 3, [](nsDeque& d) { d.PopFront(); }, 1+2+3, "PopFront after 3rd loop" },
+
+    { 1, [](nsDeque& d) { d.Push(new int(4)); },
+      1+2+3+4, "Push after 1st loop" },
+    { 2, [](nsDeque& d) { d.Push(new int(4)); },
+      1+2+3+4, "Push after 2nd loop" },
+    { 3, [](nsDeque& d) { d.Push(new int(4)); },
+      1+2+3+4, "Push after 3rd loop" },
+    { 4, [](nsDeque& d) { d.Push(new int(4)); },
+      1+2+3, "Push after would-be-4th loop" },
+
+    { 1, [](nsDeque& d) { d.PushFront(new int(4)); },
+      1+1+2+3, "PushFront after 1st loop" },
+    { 2, [](nsDeque& d) { d.PushFront(new int(4)); },
+      1+2+2+3, "PushFront after 2nd loop" },
+    { 3, [](nsDeque& d) { d.PushFront(new int(4)); },
+      1+2+3+3, "PushFront after 3rd loop" },
+    { 4, [](nsDeque& d) { d.PushFront(new int(4)); },
+      1+2+3, "PushFront after would-be-4th loop" },
+
+    { 1, [](nsDeque& d) { d.Erase(); }, 1, "Erase after 1st loop" },
+    { 2, [](nsDeque& d) { d.Erase(); }, 1+2, "Erase after 2nd loop" },
+    { 3, [](nsDeque& d) { d.Erase(); }, 1+2+3, "Erase after 3rd loop" },
+
+    { 1, [](nsDeque& d) { d.Erase(); d.Push(new int(4)); },
+      1, "Erase after 1st loop, Push 4" },
+    { 1, [](nsDeque& d) { d.Erase(); d.Push(new int(4)); d.Push(new int(5)); },
+      1+5, "Erase after 1st loop, Push 4,5" },
+    { 2, [](nsDeque& d) { d.Erase(); d.Push(new int(4)); },
+      1+2, "Erase after 2nd loop, Push 4" },
+    { 2, [](nsDeque& d) { d.Erase(); d.Push(new int(4)); d.Push(new int(5)); },
+      1+2, "Erase after 2nd loop, Push 4,5" },
+    { 2, [](nsDeque& d) { d.Erase(); d.Push(new int(4)); d.Push(new int(5)); d.Push(new int(6)); },
+      1+2+6, "Erase after 2nd loop, Push 4,5,6" }
+  };
+
+  for (const Test& test : tests) {
+    nsDeque d(new Deallocator());
+
+    for (size_t i = 0; i < NumTestValues; ++i)
+    {
+      d.Push(new int(i + 1));
+    }
+
+    static_assert(IsSame<nsDeque::ConstIterator,
+                        decltype(d.begin())>::value,
+                  "(non-const nsDeque).begin() should return ConstIterator");
+    static_assert(IsSame<nsDeque::ConstIterator,
+                        decltype(d.end())>::value,
+                  "(non-const nsDeque).end() should return ConstIterator");
+
+    int sum = 0;
+    size_t loopCount = 0;
+    for (void* ob : d) {
+      sum += *static_cast<int*>(ob);
+      if (++loopCount == test.runAfterLoopCount) {
+        test.function(d);
+      }
+    }
+    EXPECT_EQ(test.expectedSum, sum)
+      << "Range-for should iterate over values in test '"
+      << test.description
+      << "'";
+  }
 }

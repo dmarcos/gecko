@@ -52,7 +52,6 @@
 #include "nsIDOMElement.h"
 #include "nsIDocumentLoaderFactory.h"
 #include "nsIObserverService.h"
-#include "prprf.h"
 
 #include "nsIScreenManager.h"
 #include "nsIScreen.h"
@@ -72,6 +71,8 @@
 #include "mozilla/MouseEvents.h"
 
 #include "nsPIWindowRoot.h"
+
+#include "gfxPlatform.h"
 
 #ifdef XP_MACOSX
 #include "nsINativeMenuService.h"
@@ -149,9 +150,16 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
   DesktopIntRect deskRect(initialX, initialY, aInitialWidth, aInitialHeight);
 
   // Create top level window
-  mWindow = do_CreateInstance(kWindowCID, &rv);
-  if (NS_OK != rv) {
-    return rv;
+  if (gfxPlatform::IsHeadless()) {
+    mWindow = nsIWidget::CreateHeadlessWidget();
+    if (!mWindow) {
+      return NS_ERROR_FAILURE;
+    }
+  } else {
+    mWindow = do_CreateInstance(kWindowCID, &rv);
+    if (NS_OK != rv) {
+      return rv;
+    }
   }
 
   /* This next bit is troublesome. We carry two different versions of a pointer

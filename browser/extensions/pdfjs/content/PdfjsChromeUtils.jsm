@@ -52,6 +52,7 @@ var DEFAULT_PREFERENCES =
   "enhanceTextSelection": false,
   "renderer": "canvas",
   "renderInteractiveForms": false,
+  "enablePrintAutoRotate": false,
   "disablePageLabels": false
 }
 
@@ -90,7 +91,7 @@ var PdfjsChromeUtils = {
       this._mmg.addMessageListener("PDFJS:Parent:updateControlState", this);
 
       // observer to handle shutdown
-      Services.obs.addObserver(this, "quit-application", false);
+      Services.obs.addObserver(this, "quit-application");
     }
   },
 
@@ -289,10 +290,7 @@ var PdfjsChromeUtils = {
 
   _setStringPref(aPrefName, aPrefValue) {
     this._ensurePreferenceAllowed(aPrefName);
-    let str = Cc["@mozilla.org/supports-string;1"]
-                .createInstance(Ci.nsISupportsString);
-    str.data = aPrefValue;
-    Services.prefs.setComplexValue(aPrefName, Ci.nsISupportsString, str);
+    Services.prefs.setStringPref(aPrefName, aPrefValue);
   },
 
   /*

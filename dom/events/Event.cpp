@@ -37,10 +37,6 @@
 namespace mozilla {
 namespace dom {
 
-namespace workers {
-extern bool IsCurrentThreadRunningChromeWorker();
-} // namespace workers
-
 static char *sPopupAllowedEvents;
 
 static bool sReturnHighResTimeStamp = false;
@@ -249,37 +245,18 @@ Event::WrapObjectInternal(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 NS_IMETHODIMP
 Event::GetType(nsAString& aType)
 {
-  if (!mIsMainThreadEvent || !mEvent->mSpecifiedEventTypeString.IsEmpty()) {
+  if (!mIsMainThreadEvent) {
     aType = mEvent->mSpecifiedEventTypeString;
     return NS_OK;
   }
-  const char* name = GetEventName(mEvent->mMessage);
-
-  if (name) {
-    CopyASCIItoUTF16(name, aType);
-    return NS_OK;
-  } else if (mEvent->mMessage == eUnidentifiedEvent &&
-             mEvent->mSpecifiedEventType) {
-    // Remove "on"
-    aType = Substring(nsDependentAtomString(mEvent->mSpecifiedEventType), 2);
-    mEvent->mSpecifiedEventTypeString = aType;
-    return NS_OK;
-  }
-
-  aType.Truncate();
+  GetWidgetEventType(mEvent, aType);
   return NS_OK;
-}
-
-static EventTarget*
-GetDOMEventTarget(nsIDOMEventTarget* aTarget)
-{
-  return aTarget ? aTarget->GetTargetForDOMEvent() : nullptr;
 }
 
 EventTarget*
 Event::GetTarget() const
 {
-  return GetDOMEventTarget(mEvent->mTarget);
+  return mEvent->GetDOMEventTarget();
 }
 
 NS_IMETHODIMP
@@ -292,7 +269,7 @@ Event::GetTarget(nsIDOMEventTarget** aTarget)
 EventTarget*
 Event::GetCurrentTarget() const
 {
-  return GetDOMEventTarget(mEvent->mCurrentTarget);
+  return mEvent->GetCurrentDOMEventTarget();
 }
 
 NS_IMETHODIMP
@@ -339,11 +316,7 @@ Event::GetExplicitOriginalTarget(nsIDOMEventTarget** aRealEventTarget)
 EventTarget*
 Event::GetOriginalTarget() const
 {
-  if (mEvent->mOriginalTarget) {
-    return GetDOMEventTarget(mEvent->mOriginalTarget);
-  }
-
-  return GetTarget();
+  return mEvent->GetOriginalDOMEventTarget();
 }
 
 NS_IMETHODIMP
@@ -377,7 +350,7 @@ bool
 Event::Init(mozilla::dom::EventTarget* aGlobal)
 {
   if (!mIsMainThreadEvent) {
-    return nsContentUtils::ThreadsafeIsCallerChrome();
+    return workers::IsCurrentThreadRunningChromeWorker();
   }
   bool trusted = false;
   nsCOMPtr<nsPIDOMWindowInner> w = do_QueryInterface(aGlobal);
@@ -402,8 +375,17 @@ Event::Constructor(const GlobalObject& aGlobal,
                    ErrorResult& aRv)
 {
   nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.GetAsSupports());
-  RefPtr<Event> e = new Event(t, nullptr, nullptr);
-  bool trusted = e->Init(t);
+  return Constructor(t, aType, aParam);
+}
+
+// static
+already_AddRefed<Event>
+Event::Constructor(EventTarget* aEventTarget,
+                   const nsAString& aType,
+                   const EventInit& aParam)
+{
+  RefPtr<Event> e = new Event(aEventTarget, nullptr, nullptr);
+  bool trusted = e->Init(aEventTarget);
   e->InitEvent(aType, aParam.mBubbles, aParam.mCancelable);
   e->SetTrusted(trusted);
   e->SetComposed(aParam.mComposed);
@@ -862,6 +844,25 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
       }
     }
     break;
+  case ePointerEventClass:
+    if (aEvent->IsTrusted() &&
+        aEvent->AsPointerEvent()->button == WidgetMouseEvent::eLeftButton) {
+      switch(aEvent->mMessage) {
+      case ePointerUp:
+        if (PopupAllowedForEvent("pointerup")) {
+          abuse = openControlled;
+        }
+        break;
+      case ePointerDown:
+        if (PopupAllowedForEvent("pointerdown")) {
+          abuse = openControlled;
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    break;
   case eFormEventClass:
     // For these following events only allow popups if they're
     // triggered while handling user input. See
@@ -1207,7 +1208,7 @@ Event::Deserialize(const IPC::Message* aMsg, PickleIterator* aIter)
 }
 
 NS_IMETHODIMP_(void)
-Event::SetOwner(mozilla::dom::EventTarget* aOwner)
+Event::SetOwner(EventTarget* aOwner)
 {
   mOwner = nullptr;
 
@@ -1275,6 +1276,30 @@ Event::GetShadowRelatedTarget(nsIContent* aCurrentTarget,
   }
 
   return nullptr;
+}
+
+void
+Event::GetWidgetEventType(WidgetEvent* aEvent, nsAString& aType)
+{
+  if (!aEvent->mSpecifiedEventTypeString.IsEmpty()) {
+    aType = aEvent->mSpecifiedEventTypeString;
+    return;
+  }
+
+  const char* name = GetEventName(aEvent->mMessage);
+
+  if (name) {
+    CopyASCIItoUTF16(name, aType);
+    return;
+  } else if (aEvent->mMessage == eUnidentifiedEvent &&
+             aEvent->mSpecifiedEventType) {
+    // Remove "on"
+    aType = Substring(nsDependentAtomString(aEvent->mSpecifiedEventType), 2);
+    aEvent->mSpecifiedEventTypeString = aType;
+    return;
+  }
+
+  aType.Truncate();
 }
 
 NS_IMETHODIMP

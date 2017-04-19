@@ -325,6 +325,11 @@ void RtpHeaderParser::ParseOneByteExtensionHeader(
     // number of bytes - 1.
     const int id = (*ptr & 0xf0) >> 4;
     const int len = (*ptr & 0x0f);
+    if (ptr + len + 1 > ptrRTPDataExtensionEnd) {
+      LOG(LS_WARNING)
+          << "RTP extension header length out of bounds. Terminate parsing.";
+      return;
+    }
     ptr++;
 
     if (id == 15) {
@@ -336,7 +341,9 @@ void RtpHeaderParser::ParseOneByteExtensionHeader(
     RTPExtensionType type;
     if (ptrExtensionMap->GetType(id, &type) != 0) {
       // If we encounter an unknown extension, just skip over it.
-      LOG(LS_INFO) << "Failed to find extension id: " << id;
+      // Mozilla - we reuse the parse for demux, without registering extensions.
+      // Reduce log-spam by switching to VERBOSE
+      LOG(LS_VERBOSE) << "Failed to find extension id: " << id;
     } else {
       switch (type) {
         case kRtpExtensionTransmissionTimeOffset: {
@@ -428,10 +435,20 @@ void RtpHeaderParser::ParseOneByteExtensionHeader(
           //  |  ID   | L=?   |UTF-8 RID value......          |...
           //  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-          // TODO(jesup) - avoid allocating on each packet - high watermark the RID buffer?
-          char* ptrRID = new char[len+1];
-          memcpy(ptrRID, ptr, len);
-          ptrRID[len] = '\0';
+          // As per RFC 5285 section 4.2, len is the length of the header data
+          // - 1. E.G. a len of 0 indicates a header data length of 1
+          if ( &ptr[len + 1] > ptrRTPDataExtensionEnd ) {
+            LOG(LS_WARNING) << "Extension RtpStreamId data length " << (len + 1)
+              << " is longer than remaining input parse buffer "
+              << static_cast<size_t>(ptrRTPDataExtensionEnd - ptr);
+            return;
+          }
+
+          // TODO(jesup) - avoid allocating on each packet - high watermark the
+          // RID buffer?
+          char* ptrRID = new char[len + 2];
+          memcpy(ptrRID, ptr, len + 1);
+          ptrRID[len + 1] = '\0';
           header->extension.rid = ptrRID;
           header->extension.hasRID = true;
           break;

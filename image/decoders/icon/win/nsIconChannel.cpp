@@ -29,11 +29,6 @@
 #include "nsContentSecurityManager.h"
 #include "nsContentUtils.h"
 
-#ifdef _WIN32_WINNT
-#undef _WIN32_WINNT
-#endif
-#define _WIN32_WINNT 0x0600
-
 // we need windows.h to read out registry information...
 #include <windows.h>
 #include <shellapi.h>
@@ -245,12 +240,14 @@ nsIconChannel::AsyncOpen(nsIStreamListener* aListener,
   nsCOMPtr<nsIInputStream> inStream;
   nsresult rv = MakeInputStream(getter_AddRefs(inStream), true);
   if (NS_FAILED(rv)) {
+    mCallbacks = nullptr;
     return rv;
   }
 
   // Init our streampump
   rv = mPump->Init(inStream, int64_t(-1), int64_t(-1), 0, 0, false);
   if (NS_FAILED(rv)) {
+    mCallbacks = nullptr;
     return rv;
   }
 
@@ -262,7 +259,10 @@ nsIconChannel::AsyncOpen(nsIStreamListener* aListener,
     if (mLoadGroup) {
       mLoadGroup->AddRequest(this, nullptr);
     }
+  } else {
+    mCallbacks = nullptr;
   }
+
   return rv;
 }
 
@@ -271,7 +271,10 @@ nsIconChannel::AsyncOpen2(nsIStreamListener* aListener)
 {
   nsCOMPtr<nsIStreamListener> listener = aListener;
   nsresult rv = nsContentSecurityManager::doContentSecurityCheck(this, listener);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (NS_FAILED(rv)) {
+    mCallbacks = nullptr;
+    return rv;
+  }
   return AsyncOpen(listener, nullptr);
 }
 
@@ -416,41 +419,27 @@ nsIconChannel::GetStockHIcon(nsIMozIconURI* aIconURI,
 {
   nsresult rv = NS_OK;
 
-  // We can only do this on Vista or above
-  HMODULE hShellDLL = ::LoadLibraryW(L"shell32.dll");
-  decltype(SHGetStockIconInfo)* pSHGetStockIconInfo =
-    (decltype(SHGetStockIconInfo)*) ::GetProcAddress(hShellDLL,
-                                                    "SHGetStockIconInfo");
+  uint32_t desiredImageSize;
+  aIconURI->GetImageSize(&desiredImageSize);
+  nsAutoCString stockIcon;
+  aIconURI->GetStockIcon(stockIcon);
 
-  if (pSHGetStockIconInfo) {
-    uint32_t desiredImageSize;
-    aIconURI->GetImageSize(&desiredImageSize);
-    nsAutoCString stockIcon;
-    aIconURI->GetStockIcon(stockIcon);
-
-    SHSTOCKICONID stockIconID = GetStockIconIDForName(stockIcon);
-    if (stockIconID == SIID_INVALID) {
-      return NS_ERROR_NOT_AVAILABLE;
-    }
-
-    UINT infoFlags = SHGSI_ICON;
-    infoFlags |= GetSizeInfoFlag(desiredImageSize);
-
-    SHSTOCKICONINFO sii = {0};
-    sii.cbSize = sizeof(sii);
-    HRESULT hr = pSHGetStockIconInfo(stockIconID, infoFlags, &sii);
-
-    if (SUCCEEDED(hr)) {
-      *hIcon = sii.hIcon;
-    } else {
-      rv = NS_ERROR_FAILURE;
-    }
-  } else {
-    rv = NS_ERROR_NOT_AVAILABLE;
+  SHSTOCKICONID stockIconID = GetStockIconIDForName(stockIcon);
+  if (stockIconID == SIID_INVALID) {
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
-  if (hShellDLL) {
-    ::FreeLibrary(hShellDLL);
+  UINT infoFlags = SHGSI_ICON;
+  infoFlags |= GetSizeInfoFlag(desiredImageSize);
+
+  SHSTOCKICONINFO sii = {0};
+  sii.cbSize = sizeof(sii);
+  HRESULT hr = SHGetStockIconInfo(stockIconID, infoFlags, &sii);
+
+  if (SUCCEEDED(hr)) {
+    *hIcon = sii.hIcon;
+  } else {
+    rv = NS_ERROR_FAILURE;
   }
 
   return rv;

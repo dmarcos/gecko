@@ -31,21 +31,13 @@ public:
 
   explicit ViewportFrame(nsStyleContext* aContext)
     : nsContainerFrame(aContext)
+    , mView(nullptr)
   {}
   virtual ~ViewportFrame() { } // useful for debugging
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
-
-  virtual mozilla::WritingMode GetWritingMode() const override
-  {
-    nsIFrame* firstChild = mFrames.FirstChild();
-    if (firstChild) {
-      return firstChild->GetWritingMode();
-    }
-    return nsIFrame::GetWritingMode();
-  }
 
 #ifdef DEBUG
   virtual void AppendFrames(ChildListID     aListID,
@@ -92,9 +84,6 @@ public:
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-private:
-  virtual mozilla::layout::FrameChildListID GetAbsoluteListID() const override { return kFixedList; }
-
 protected:
   /**
    * Calculate how much room is available for fixed frames. That means
@@ -104,6 +93,14 @@ protected:
    * @return the current scroll position, or 0,0 if not scrollable
    */
   nsPoint AdjustReflowInputForScrollbars(ReflowInput* aReflowInput) const;
+
+  nsView* GetViewInternal() const override { return mView; }
+  void SetViewInternal(nsView* aView) override { mView = aView; }
+
+private:
+  virtual mozilla::layout::FrameChildListID GetAbsoluteListID() const override { return kFixedList; }
+
+  nsView* mView;
 };
 
 } // namespace mozilla

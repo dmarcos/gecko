@@ -510,9 +510,18 @@
  *   be used with types which are intended to be implicitly constructed into other
  *   other types before being assigned to variables.
  * MOZ_REQUIRED_BASE_METHOD: Applies to virtual class method declarations.
- *  Sometimes derived classes override methods that need to be called by their
- *  overridden counterparts. This marker indicates that the marked method must
- *  be called by the method that it overrides.
+ *   Sometimes derived classes override methods that need to be called by their
+ *   overridden counterparts. This marker indicates that the marked method must
+ *   be called by the method that it overrides.
+ * MOZ_MUST_RETURN_FROM_CALLER: Applies to function or method declarations.
+ *   Callers of the annotated function/method must return from that function
+ *   within the calling block using an explicit `return` statement.
+ *   Only calls to Constructors, references to local and member variables,
+ *   and calls to functions or methods marked as MOZ_MAY_CALL_AFTER_MUST_RETURN
+ *   may be made after the MUST_RETURN_FROM_CALLER call.
+ * MOZ_MAY_CALL_AFTER_MUST_RETURN: Applies to function or method declarations.
+ *   Calls to these methods may be made in functions after calls a
+ *   MOZ_MUST_RETURN_FROM_CALLER function or method.
  */
 #ifdef MOZ_CLANG_PLUGIN
 #  define MOZ_MUST_OVERRIDE __attribute__((annotate("moz_must_override")))
@@ -550,6 +559,10 @@
     __attribute__((annotate("moz_non_param")))
 #  define MOZ_REQUIRED_BASE_METHOD \
     __attribute__((annotate("moz_required_base_method")))
+#  define MOZ_MUST_RETURN_FROM_CALLER \
+    __attribute__((annotate("moz_must_return_from_caller")))
+#  define MOZ_MAY_CALL_AFTER_MUST_RETURN \
+    __attribute__((annotate("moz_may_call_after_must_return")))
 /*
  * It turns out that clang doesn't like void func() __attribute__ {} without a
  * warning, so use pragmas to disable the warning. This code won't work on GCC
@@ -586,6 +599,8 @@
 #  define MOZ_NON_PARAM /* nothing */
 #  define MOZ_NON_AUTOABLE /* nothing */
 #  define MOZ_REQUIRED_BASE_METHOD /* nothing */
+#  define MOZ_MUST_RETURN_FROM_CALLER /* nothing */
+#  define MOZ_MAY_CALL_AFTER_MUST_RETURN /* nothing */
 #endif /* MOZ_CLANG_PLUGIN */
 
 #define MOZ_RAII MOZ_NON_TEMPORARY_CLASS MOZ_STACK_CLASS
@@ -616,8 +631,16 @@
  * printf-likes, and in particular this should not be used for
  * PR_snprintf and friends, which are "printf-like" but which assign
  * different meanings to the various formats.
+ *
+ * MinGW requires special handling due to different format specifiers
+ * on different platforms. The macro __MINGW_PRINTF_FORMAT maps to
+ * either gnu_printf or ms_printf depending on where we are compiling
+ * to avoid warnings on format specifiers that are legal.
  */
-#ifdef __GNUC__
+#ifdef __MINGW32__
+#define MOZ_FORMAT_PRINTF(stringIndex, firstToCheck)  \
+    __attribute__ ((format (__MINGW_PRINTF_FORMAT, stringIndex, firstToCheck)))
+#elif __GNUC__
 #define MOZ_FORMAT_PRINTF(stringIndex, firstToCheck)  \
     __attribute__ ((format (printf, stringIndex, firstToCheck)))
 #else

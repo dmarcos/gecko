@@ -87,7 +87,7 @@ interface NavigatorContentUtils {
   //void unregisterContentHandler(DOMString mimeType, DOMString url);
 };
 
-[NoInterfaceObject, Exposed=(Window,Worker)]
+[SecureContext, NoInterfaceObject, Exposed=(Window,Worker)]
 interface NavigatorStorage {
   [Func="mozilla::dom::StorageManager::PrefEnabled"]
   readonly attribute StorageManager storage;
@@ -245,21 +245,6 @@ partial interface Navigator {
   readonly attribute boolean cpuHasSSE2;
 };
 
-partial interface Navigator {
-  [Throws, Pref="device.storage.enabled"]
-  readonly attribute DeviceStorageAreaListener deviceStorageAreaListener;
-};
-
-// nsIDOMNavigatorDeviceStorage
-partial interface Navigator {
-  [Throws, Pref="device.storage.enabled"]
-  DeviceStorage? getDeviceStorage(DOMString type);
-  [Throws, Pref="device.storage.enabled"]
-  sequence<DeviceStorage> getDeviceStorages(DOMString type);
-  [Throws, Pref="device.storage.enabled"]
-  DeviceStorage? getDeviceStorageByNameAndType(DOMString name, DOMString type);
-};
-
 // nsIDOMNavigatorDesktopNotification
 partial interface Navigator {
   [Throws, Pref="notification.feature.enabled", UnsafeInPrerendering]
@@ -289,6 +274,10 @@ partial interface Navigator {
   [Frozen, Cached, Pure, Pref="dom.vr.enabled"]
   readonly attribute sequence<VRDisplay> activeVRDisplays;
 };
+partial interface Navigator {
+  [Pref="dom.vr.test.enabled"]
+  VRServiceTest requestVRServiceTest();
+};
 
 #ifdef MOZ_TIME_MANAGER
 // nsIDOMMozNavigatorTime
@@ -315,7 +304,8 @@ partial interface Navigator {
 
   // Deprecated. Use mediaDevices.getUserMedia instead.
   [Deprecated="NavigatorGetUserMedia", Throws,
-   Func="Navigator::HasUserMediaSupport", UnsafeInPrerendering]
+   Func="Navigator::HasUserMediaSupport", UnsafeInPrerendering,
+   NeedsCallerType]
   void mozGetUserMedia(MediaStreamConstraints constraints,
                        NavigatorUserMediaSuccessCallback successCallback,
                        NavigatorUserMediaErrorCallback errorCallback);
@@ -363,7 +353,7 @@ partial interface Navigator {
 };
 
 partial interface Navigator {
-  [Pref="media.eme.apiVisible", NewObject]
+  [NewObject]
   Promise<MediaKeySystemAccess>
   requestMediaKeySystemAccess(DOMString keySystem,
                               sequence<MediaKeySystemConfiguration> supportedConfigurations);

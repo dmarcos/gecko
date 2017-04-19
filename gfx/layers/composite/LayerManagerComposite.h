@@ -7,6 +7,7 @@
 #define GFX_LayerManagerComposite_H
 
 #include <stdint.h>                     // for int32_t, uint32_t
+#include "CompositableHost.h"           // for CompositableHost, ImageCompositeNotificationInfo
 #include "GLDefs.h"                     // for GLenum
 #include "Layers.h"
 #include "Units.h"                      // for ParentLayerIntRect
@@ -49,9 +50,9 @@ namespace layers {
 
 class CanvasLayerComposite;
 class ColorLayerComposite;
-class CompositableHost;
 class Compositor;
 class ContainerLayerComposite;
+class Diagnostics;
 struct EffectChain;
 class ImageLayer;
 class ImageLayerComposite;
@@ -64,11 +65,6 @@ struct FPSState;
 class PaintCounter;
 
 static const int kVisualWarningDuration = 150; // ms
-
-struct ImageCompositeNotificationInfo {
-  base::ProcessId mImageBridgeProcessId;
-  ImageCompositeNotification mNotification;
-};
 
 // An implementation of LayerManager that acts as a pair with ClientLayerManager
 // and is mirrored across IPDL. This gets managed/updated by LayerTransactionParent.
@@ -109,8 +105,6 @@ public:
   {
     MOZ_CRASH("GFX: Shouldn't be called for composited layer manager");
   }
-  virtual TextureFactoryIdentifier GetTextureFactoryIdentifier() = 0;
-
 
   virtual void ForcePresent() = 0;
   virtual void AddInvalidRegion(const nsIntRegion& aRegion) = 0;
@@ -123,6 +117,7 @@ public:
   virtual void BeginTransactionWithDrawTarget(gfx::DrawTarget* aTarget,
                                               const gfx::IntRect& aRect) = 0;
   virtual Compositor* GetCompositor() const = 0;
+  virtual TextureSourceProvider* GetTextureSourceProvider() const = 0;
   virtual void EndTransaction(const TimeStamp& aTimeStamp,
                               EndTransactionFlags aFlags = END_DEFAULT) = 0;
   virtual void UpdateRenderBounds(const gfx::IntRect& aRect) {}
@@ -132,6 +127,10 @@ public:
   // attached to the old compositor, and make a best effort at ignoring
   // layer or texture updates against the old compositor.
   virtual void ChangeCompositor(Compositor* aNewCompositor) = 0;
+
+  virtual HostLayerManager* AsHostLayerManager() override {
+    return this;
+  }
 
   void ExtractImageCompositeNotifications(nsTArray<ImageCompositeNotificationInfo>* aNotifications)
   {
@@ -165,8 +164,34 @@ public:
   // overlay.
   void SetWindowOverlayChanged() { mWindowOverlayChanged = true; }
 
-
   void SetPaintTime(const TimeDuration& aPaintTime) { mLastPaintTime = aPaintTime; }
+
+  virtual bool AlwaysScheduleComposite() const {
+    return false;
+  }
+
+  void RecordPaintTimes(const PaintTiming& aTiming);
+  void RecordUpdateTime(float aValue);
+
+  TimeStamp GetCompositionTime() const {
+    return mCompositionTime;
+  }
+  void SetCompositionTime(TimeStamp aTimeStamp) {
+    mCompositionTime = aTimeStamp;
+    if (!mCompositionTime.IsNull() && !mCompositeUntilTime.IsNull() &&
+        mCompositionTime >= mCompositeUntilTime) {
+      mCompositeUntilTime = TimeStamp();
+    }
+  }
+  void CompositeUntil(TimeStamp aTimeStamp) {
+    if (mCompositeUntilTime.IsNull() ||
+        mCompositeUntilTime < aTimeStamp) {
+      mCompositeUntilTime = aTimeStamp;
+    }
+  }
+  TimeStamp GetCompositeUntilTime() const {
+    return mCompositeUntilTime;
+  }
 
 protected:
   bool mDebugOverlayWantsNextFrame;
@@ -175,10 +200,19 @@ protected:
   // true if the last frame was deemed 'too complicated' to be rendered.
   float mWarningLevel;
   mozilla::TimeStamp mWarnTime;
+  UniquePtr<Diagnostics> mDiagnostics;
 
   bool mWindowOverlayChanged;
   TimeDuration mLastPaintTime;
   TimeStamp mRenderStartTime;
+
+  // Render time for the current composition.
+  TimeStamp mCompositionTime;
+
+  // When nonnull, during rendering, some compositable indicated that it will
+  // change its rendering at this time. In order not to miss it, we composite
+  // on every vsync until this time occurs (this is the latest such time).
+  TimeStamp mCompositeUntilTime;
 };
 
 // A layer manager implementation that uses the Compositor API
@@ -255,6 +289,8 @@ public:
 
   virtual const char* Name() const override { return ""; }
 
+  bool AlwaysScheduleComposite() const override;
+
   /**
    * Post-processes layers before composition. This performs the following:
    *
@@ -327,8 +363,10 @@ public:
     return mVisibleRegions.Get(aGuid);
   }
 
-  Compositor* GetCompositor() const override
-  {
+  Compositor* GetCompositor() const override {
+    return mCompositor;
+  }
+  TextureSourceProvider* GetTextureSourceProvider() const override {
     return mCompositor;
   }
 
@@ -429,8 +467,6 @@ private:
   typedef nsClassHashtable<nsGenericHashKey<ScrollableLayerGuid>,
                            CSSIntRegion> VisibleRegions;
   VisibleRegions mVisibleRegions;
-
-  UniquePtr<FPSState> mFPS;
 
   bool mInTransaction;
   bool mIsCompositorReady;

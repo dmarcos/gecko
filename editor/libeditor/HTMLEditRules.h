@@ -101,7 +101,7 @@ public:
   nsresult GetIndentState(bool* aCanIndent, bool* aCanOutdent);
   nsresult GetAlignment(bool* aMixed, nsIHTMLEditor::EAlignment* aAlign);
   nsresult GetParagraphState(bool* aMixed, nsAString& outFormat);
-  nsresult MakeSureElemStartsOrEndsOnCR(nsIDOMNode* aNode);
+  nsresult MakeSureElemStartsOrEndsOnCR(nsINode& aNode);
 
   // nsIEditActionListener methods
 
@@ -257,6 +257,7 @@ protected:
   nsresult WillMakeBasicBlock(Selection& aSelection,
                               const nsAString& aBlockType,
                               bool* aCancel, bool* aHandled);
+  nsresult MakeBasicBlock(Selection& aSelection, nsIAtom& aBlockType);
   nsresult DidMakeBasicBlock(Selection* aSelection, RulesInfo* aInfo,
                              nsresult aResult);
   nsresult DidAbsolutePosition();
@@ -272,6 +273,7 @@ protected:
                        int32_t* aIndex, Lists aLists = Lists::yes,
                        Tables aTables = Tables::yes);
   Element* IsInListItem(nsINode* aNode);
+  nsIAtom& DefaultParagraphSeparator();
   nsresult ReturnInHeader(Selection& aSelection, Element& aHeader,
                           nsINode& aNode, int32_t aOffset);
   nsresult ReturnInParagraph(Selection* aSelection, nsIDOMNode* aHeader,
@@ -403,9 +405,9 @@ protected:
   nsresult InsertMozBRIfNeeded(nsINode& aNode);
   bool IsEmptyInline(nsINode& aNode);
   bool ListIsEmptyLine(nsTArray<OwningNonNull<nsINode>>& arrayOfNodes);
-  nsresult RemoveAlignment(nsIDOMNode* aNode, const nsAString& aAlignType,
+  nsresult RemoveAlignment(nsINode& aNode, const nsAString& aAlignType,
                            bool aChildrenOnly);
-  nsresult MakeSureElemStartsOrEndsOnCR(nsIDOMNode* aNode, bool aStarts);
+  nsresult MakeSureElemStartsOrEndsOnCR(nsINode& aNode, bool aStarts);
   enum class ContentsOnly { no, yes };
   nsresult AlignBlock(Element& aElement,
                       const nsAString& aAlignType, ContentsOnly aContentsOnly);

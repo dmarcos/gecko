@@ -22,8 +22,6 @@ from mach.decorators import (
 
 from mozbuild.base import MachCommandBase
 
-ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
-
 
 class ShowTaskGraphSubCommand(SubCommand):
     """A SubCommand with TaskGraph-specific arguments"""
@@ -107,6 +105,11 @@ class MachCommands(MachCommandBase):
                              description="Show the optimized taskgraph")
     def taskgraph_optimized(self, **options):
         return self.show_taskgraph('optimized_task_graph', options)
+
+    @ShowTaskGraphSubCommand('taskgraph', 'morphed',
+                             description="Show the morphed taskgraph")
+    def taskgraph_morphed(self, **options):
+        return self.show_taskgraph('morphed_task_graph', options)
 
     @SubCommand('taskgraph', 'decision',
                 description="Run the decision task")
@@ -298,6 +301,17 @@ class MachCommands(MachCommandBase):
         try:
             self.setup_logging()
             return taskgraph.action.add_talos(options['decision_task_id'], options['times'])
+        except Exception:
+            traceback.print_exc()
+            sys.exit(1)
+
+    @SubCommand('taskgraph', 'action-callback',
+                description='Run action callback used by action tasks')
+    def action_callback(self, **options):
+        import actions
+        try:
+            self.setup_logging()
+            return actions.trigger_action_callback()
         except Exception:
             traceback.print_exc()
             sys.exit(1)

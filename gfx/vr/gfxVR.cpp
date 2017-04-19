@@ -59,12 +59,16 @@ VRFieldOfView::ConstructProjectionMatrix(float zNear, float zFar,
 }
 
 void
-VRSystemManager::AddGamepad(const char* aID, dom::GamepadMappingType aMapping,
-                            dom::GamepadHand aHand, uint32_t aNumButtons, uint32_t aNumAxes)
+VRSystemManager::AddGamepad(const VRControllerInfo& controllerInfo)
 {
-  dom::GamepadAdded a(NS_ConvertUTF8toUTF16(nsDependentCString(aID)), mControllerCount,
-                     aMapping, aHand, dom::GamepadServiceType::VR, aNumButtons,
-                     aNumAxes);
+  dom::GamepadAdded a(NS_ConvertUTF8toUTF16(controllerInfo.GetControllerName()),
+                      mControllerCount,
+                      controllerInfo.GetMappingType(),
+                      controllerInfo.GetHand(),
+                      dom::GamepadServiceType::VR,
+                      controllerInfo.GetNumButtons(),
+                      controllerInfo.GetNumAxes(),
+                      controllerInfo.GetNumHaptics());
 
   VRManager* vm = VRManager::Get();
   MOZ_ASSERT(vm);
@@ -83,10 +87,10 @@ VRSystemManager::RemoveGamepad(uint32_t aIndex)
 
 void
 VRSystemManager::NewButtonEvent(uint32_t aIndex, uint32_t aButton,
-                                bool aPressed)
+                                bool aPressed, bool aTouched, double aValue)
 {
   dom::GamepadButtonInformation a(aIndex, dom::GamepadServiceType::VR,
-                                  aButton, aPressed, aPressed ? 1.0L : 0.0L);
+                                  aButton, aValue, aPressed, aTouched);
 
   VRManager* vm = VRManager::Get();
   MOZ_ASSERT(vm);

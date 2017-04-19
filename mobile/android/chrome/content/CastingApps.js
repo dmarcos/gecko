@@ -30,19 +30,21 @@ var mediaPlayerDevice = {
   types: ["video/mp4", "video/webm", "application/x-mpegurl"],
   extensions: ["mp4", "webm", "m3u", "m3u8"],
   init: function() {
-    Services.obs.addObserver(this, "MediaPlayer:Added", false);
-    Services.obs.addObserver(this, "MediaPlayer:Changed", false);
-    Services.obs.addObserver(this, "MediaPlayer:Removed", false);
+    GlobalEventDispatcher.registerListener(this, [
+      "MediaPlayer:Added",
+      "MediaPlayer:Changed",
+      "MediaPlayer:Removed",
+    ]);
   },
-  observe: function(subject, topic, data) {
-    if (topic === "MediaPlayer:Added") {
-      let service = this.toService(JSON.parse(data));
+  onEvent: function(event, data, callback) {
+    if (event === "MediaPlayer:Added") {
+      let service = this.toService(data);
       SimpleServiceDiscovery.addService(service);
-    } else if (topic === "MediaPlayer:Changed") {
-      let service = this.toService(JSON.parse(data));
+    } else if (event === "MediaPlayer:Changed") {
+      let service = this.toService(data);
       SimpleServiceDiscovery.updateService(service);
-    } else if (topic === "MediaPlayer:Removed") {
-      SimpleServiceDiscovery.removeService(data);
+    } else if (event === "MediaPlayer:Removed") {
+      SimpleServiceDiscovery.removeService(data.id);
     }
   },
   toService: function(display) {
@@ -54,15 +56,12 @@ var mediaPlayerDevice = {
       uuid: display.uuid,
       manufacturer: display.manufacturer,
       modelName: display.modelName,
-      mirror: display.mirror
     };
   }
 };
 
 var CastingApps = {
   _castMenuId: -1,
-  mirrorStartMenuId: -1,
-  mirrorStopMenuId: -1,
   _blocked: null,
   _bound: null,
   _interval: 120 * 1000, // 120 seconds
@@ -92,13 +91,12 @@ var CastingApps = {
       "Casting:Play",
       "Casting:Pause",
       "Casting:Stop",
-      "Casting:Mirror",
     ]);
 
-    Services.obs.addObserver(this, "ssdp-service-found", false);
-    Services.obs.addObserver(this, "ssdp-service-lost", false);
-    Services.obs.addObserver(this, "application-background", false);
-    Services.obs.addObserver(this, "application-foreground", false);
+    Services.obs.addObserver(this, "ssdp-service-found");
+    Services.obs.addObserver(this, "ssdp-service-lost");
+    Services.obs.addObserver(this, "application-background");
+    Services.obs.addObserver(this, "application-foreground");
 
     BrowserApp.deck.addEventListener("TabSelect", this, true);
     BrowserApp.deck.addEventListener("pageshow", this, true);
@@ -116,63 +114,13 @@ var CastingApps = {
   },
 
   serviceAdded: function(aService) {
-    if (this.isMirroringEnabled() && aService.mirror && this.mirrorStartMenuId == -1) {
-      this.mirrorStartMenuId = NativeWindow.menu.add({
-        name: Strings.browser.GetStringFromName("casting.mirrorTab"),
-        callback: function() {
-          let callbackFunc = function(aService) {
-            let app = SimpleServiceDiscovery.findAppForService(aService);
-            if (app) {
-              app.mirror(function() {}, window, BrowserApp.selectedTab.getViewport(), this._mirrorStarted.bind(this), window.BrowserApp.selectedBrowser.contentWindow);
-            }
-          }.bind(this);
-
-          this.prompt(callbackFunc, aService => aService.mirror);
-        }.bind(this),
-        parent: NativeWindow.menu.toolsMenuID
-      });
-
-      this.mirrorStopMenuId = NativeWindow.menu.add({
-        name: Strings.browser.GetStringFromName("casting.mirrorTabStop"),
-        callback: function() {
-          if (this.tabMirror) {
-            this.tabMirror.stop();
-            this.tabMirror = null;
-          } else if (this.stopMirrorCallback) {
-            this.stopMirrorCallback();
-            this.stopMirrorCallback = null;
-          }
-          NativeWindow.menu.update(this.mirrorStartMenuId, { visible: true });
-          NativeWindow.menu.update(this.mirrorStopMenuId, { visible: false });
-        }.bind(this),
-      });
-    }
-    if (this.mirrorStartMenuId != -1) {
-      NativeWindow.menu.update(this.mirrorStopMenuId, { visible: false });
-    }
   },
 
   serviceLost: function(aService) {
-    if (aService.mirror && this.mirrorStartMenuId != -1) {
-      let haveMirror = false;
-      SimpleServiceDiscovery.services.forEach(function(service) {
-        if (service.mirror) {
-          haveMirror = true;
-        }
-      });
-      if (!haveMirror) {
-        NativeWindow.menu.remove(this.mirrorStartMenuId);
-        this.mirrorStartMenuId = -1;
-      }
-    }
   },
 
   isCastingEnabled: function isCastingEnabled() {
     return Services.prefs.getBoolPref("browser.casting.enabled");
-  },
-
-  isMirroringEnabled: function isMirroringEnabled() {
-    return Services.prefs.getBoolPref("browser.mirroring.enabled");
   },
 
   onEvent: function (event, message, callback) {
@@ -190,14 +138,6 @@ var CastingApps = {
       case "Casting:Stop":
         if (this.session) {
           this.closeExternal();
-        }
-        break;
-      case "Casting:Mirror":
-        {
-          Cu.import("resource://gre/modules/TabMirror.jsm");
-          this.tabMirror = new TabMirror(message.id, window);
-          NativeWindow.menu.update(this.mirrorStartMenuId, { visible: false });
-          NativeWindow.menu.update(this.mirrorStopMenuId, { visible: true });
         }
         break;
     }

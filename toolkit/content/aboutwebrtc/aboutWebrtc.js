@@ -349,7 +349,7 @@ var AboutWebRTC = {
     heading.appendChild(elem);
 
     elem = document.createElement("button");
-    elem.textContent = "Clear History";
+    elem.textContent = getString("stats_clear");
     elem.className = "no-print";
     elem.onclick = this._onClearStats;
     heading.appendChild(elem);
@@ -379,7 +379,7 @@ var AboutWebRTC = {
     elem.textContent = getString("log_heading");
     heading.appendChild(elem);
     elem = document.createElement("button");
-    elem.textContent = "Clear Log";
+    elem.textContent = getString("log_clear");
     elem.className = "no-print";
     elem.onclick = this._onClearLog;
     heading.appendChild(elem);
@@ -612,8 +612,8 @@ RTPStats.prototype = {
 
       statsString += ` ${getString("lost_label")}: ${stats.packetsLost} ${getString("jitter_label")}: ${stats.jitter}`;
 
-      if (stats.mozRtt) {
-        statsString += ` RTT: ${stats.mozRtt} ms`;
+      if (stats.roundTripTime) {
+        statsString += ` RTT: ${stats.roundTripTime} ms`;
       }
     } else if (stats.packetsSent) {
       statsString += ` ${getString("sent_label")}: ${stats.packetsSent} ${getString("packets")}`;
@@ -758,7 +758,7 @@ ICEStats.prototype = {
 
     var type = c.candidateType;
 
-    if (c.type == "localcandidate" && c.candidateType == "relayed") {
+    if (c.type == "local-candidate" && c.candidateType == "relayed") {
       type = `${c.candidateType}-${c.mozLocalTransport}`;
     }
 

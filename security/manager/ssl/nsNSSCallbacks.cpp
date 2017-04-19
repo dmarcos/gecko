@@ -39,7 +39,7 @@ using namespace mozilla::psm;
 
 extern LazyLogModule gPIPNSSLog;
 
-static void AccumulateCipherSuite(Telemetry::ID probe,
+static void AccumulateCipherSuite(Telemetry::HistogramID probe,
                                   const SSLChannelInfo& channelInfo);
 
 namespace {
@@ -275,7 +275,6 @@ nsNSSHttpRequestSession::setPostDataFcn(const char* http_data,
 mozilla::pkix::Result
 nsNSSHttpRequestSession::trySendAndReceiveFcn(PRPollDesc** pPollDesc,
                                               uint16_t* http_response_code,
-                                              const char** http_response_content_type,
                                               const char** http_response_headers,
                                               const char** http_response_data,
                                               uint32_t* http_response_data_len)
@@ -328,7 +327,7 @@ nsNSSHttpRequestSession::trySendAndReceiveFcn(PRPollDesc** pPollDesc,
 
     rv =
       internal_send_receive_attempt(retryable_error, pPollDesc, http_response_code,
-                                    http_response_content_type, http_response_headers,
+                                    http_response_headers,
                                     http_response_data, http_response_data_len);
   }
   while (retryable_error &&
@@ -367,14 +366,12 @@ mozilla::pkix::Result
 nsNSSHttpRequestSession::internal_send_receive_attempt(bool &retryable_error,
                                                        PRPollDesc **pPollDesc,
                                                        uint16_t *http_response_code,
-                                                       const char **http_response_content_type,
                                                        const char **http_response_headers,
                                                        const char **http_response_data,
                                                        uint32_t *http_response_data_len)
 {
   if (pPollDesc) *pPollDesc = nullptr;
   if (http_response_code) *http_response_code = 0;
-  if (http_response_content_type) *http_response_content_type = 0;
   if (http_response_headers) *http_response_headers = 0;
   if (http_response_data) *http_response_data = 0;
 
@@ -531,12 +528,6 @@ nsNSSHttpRequestSession::internal_send_receive_attempt(bool &retryable_error,
     *http_response_data = (const char*)mListener->mResultData;
   }
 
-  if (mListener->mHttpRequestSucceeded && http_response_content_type) {
-    if (mListener->mHttpResponseContentType.Length()) {
-      *http_response_content_type = mListener->mHttpResponseContentType.get();
-    }
-  }
-
   return Success;
 }
 
@@ -625,7 +616,8 @@ nsHTTPListener::OnStreamComplete(nsIStreamLoader* aLoader,
   if (NS_FAILED(aStatus))
   {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-           ("nsHTTPListener::OnStreamComplete status failed %d", aStatus));
+           ("nsHTTPListener::OnStreamComplete status failed %" PRIu32,
+            static_cast<uint32_t>(aStatus)));
   }
 
   if (NS_SUCCEEDED(rv))
@@ -647,14 +639,11 @@ nsHTTPListener::OnStreamComplete(nsIStreamLoader* aLoader,
       mHttpResponseCode = 500;
     else
       mHttpResponseCode = rcode;
-
-    hchan->GetResponseHeader(NS_LITERAL_CSTRING("Content-Type"), 
-                                    mHttpResponseContentType);
   }
 
   if (mResponsibleForDoneSignal)
     send_done_signal();
-  
+
   return aStatus;
 }
 
@@ -981,7 +970,7 @@ CanFalseStartCallback(PRFileDesc* fd, void* client_data, PRBool *canFalseStart)
 }
 
 static void
-AccumulateNonECCKeySize(Telemetry::ID probe, uint32_t bits)
+AccumulateNonECCKeySize(Telemetry::HistogramID probe, uint32_t bits)
 {
   unsigned int value = bits <   512 ?  1 : bits ==   512 ?  2
                      : bits <   768 ?  3 : bits ==   768 ?  4
@@ -1004,7 +993,7 @@ AccumulateNonECCKeySize(Telemetry::ID probe, uint32_t bits)
 // named curves for a given size (e.g. secp256k1 vs. secp256r1). We punt on
 // that for now. See also NSS bug 323674.
 static void
-AccumulateECCCurve(Telemetry::ID probe, uint32_t bits)
+AccumulateECCCurve(Telemetry::HistogramID probe, uint32_t bits)
 {
   unsigned int value = bits == 256 ? 23 // P-256
                      : bits == 384 ? 24 // P-384
@@ -1014,7 +1003,7 @@ AccumulateECCCurve(Telemetry::ID probe, uint32_t bits)
 }
 
 static void
-AccumulateCipherSuite(Telemetry::ID probe, const SSLChannelInfo& channelInfo)
+AccumulateCipherSuite(Telemetry::HistogramID probe, const SSLChannelInfo& channelInfo)
 {
   uint32_t value;
   switch (channelInfo.cipherSuite) {
@@ -1078,9 +1067,10 @@ AccumulateCipherSuite(Telemetry::ID probe, const SSLChannelInfo& channelInfo)
 // possible (e.g. stapled OCSP responses, SCTs, the hostname, the first party
 // domain, etc.). Note that because we are on the socket thread, this must not
 // cause any network requests, hence the use of FLAG_LOCAL_ONLY.
+// Similarly, we need to determine the certificate's CT status.
 static void
-DetermineEVStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus, PRFileDesc* fd,
-                               nsNSSSocketInfo* infoObject)
+DetermineEVAndCTStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus,
+                                    PRFileDesc* fd, nsNSSSocketInfo* infoObject)
 {
   MOZ_ASSERT(sslStatus);
   MOZ_ASSERT(fd);
@@ -1126,6 +1116,7 @@ DetermineEVStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus, PRFileDesc* fd,
   }
 
   SECOidTag evOidPolicy;
+  CertificateTransparencyInfo certificateTransparencyInfo;
   UniqueCERTCertList unusedBuiltChain;
   const bool saveIntermediates = false;
   mozilla::pkix::Result rv = certVerifier->VerifySSLServerCert(
@@ -1139,10 +1130,16 @@ DetermineEVStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus, PRFileDesc* fd,
     saveIntermediates,
     flags,
     infoObject->GetOriginAttributes(),
-    &evOidPolicy);
+    &evOidPolicy,
+    nullptr, // OCSP stapling telemetry
+    nullptr, // key size telemetry
+    nullptr, // SHA-1 telemetry
+    nullptr, // pinning telemetry
+    &certificateTransparencyInfo);
 
   RefPtr<nsNSSCertificate> nssc(nsNSSCertificate::Create(cert.get()));
   if (rv == Success && evOidPolicy != SEC_OID_UNKNOWN) {
+    sslStatus->SetCertificateTransparencyInfo(certificateTransparencyInfo);
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
             ("HandshakeCallback using NEW cert %p (is EV)", nssc.get()));
     sslStatus->SetServerCert(nssc, EVStatus::EV);
@@ -1150,6 +1147,10 @@ DetermineEVStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus, PRFileDesc* fd,
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
             ("HandshakeCallback using NEW cert %p (is not EV)", nssc.get()));
     sslStatus->SetServerCert(nssc, EVStatus::NotEV);
+  }
+
+  if (rv == Success) {
+    sslStatus->SetCertificateTransparencyInfo(certificateTransparencyInfo);
   }
 }
 
@@ -1301,7 +1302,7 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
            ("HandshakeCallback KEEPING existing cert\n"));
   } else {
-    DetermineEVStatusAndSetNewCert(status, fd, infoObject);
+    DetermineEVAndCTStatusAndSetNewCert(status, fd, infoObject);
   }
 
   bool domainMismatch;
@@ -1325,11 +1326,7 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
   // console instead of to the error console. Also, the warning is not
   // localized.
   if (!siteSupportsSafeRenego) {
-    nsXPIDLCString hostName;
-    infoObject->GetHostName(getter_Copies(hostName));
-
-    nsAutoString msg;
-    msg.Append(NS_ConvertASCIItoUTF16(hostName));
+    NS_ConvertASCIItoUTF16 msg(infoObject->GetHostName());
     msg.AppendLiteral(" : server does not support RFC 5746, see CVE-2009-3555");
 
     nsContentUtils::LogSimpleConsoleError(msg, "SSL");

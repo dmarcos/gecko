@@ -35,7 +35,7 @@ and try again.
 """.strip()
 
 NODE_NOT_FOUND_MESSAGE = """
-nodejs v4.2.3 is either not installed or is installed to a non-standard path.
+nodejs v6.9.1 is either not installed or is installed to a non-standard path.
 Please install nodejs from https://nodejs.org and try again.
 
 Valid installation paths:
@@ -72,26 +72,38 @@ def eslint_setup():
 
     # npm sometimes fails to respect cwd when it is run using check_call so
     # we manually switch folders here instead.
-    os.chdir(module_path)
+    os.chdir(get_project_root())
 
     npm_path = get_node_or_npm_path("npm")
     if not npm_path:
         return 1
 
+    extra_parameters = [ "--loglevel=error" ]
+
     # Install ESLint and external plugins
     cmd = [npm_path, "install"]
+    cmd.extend(extra_parameters)
     print("Installing eslint for mach using \"%s\"..." % (" ".join(cmd)))
     if not call_process("eslint", cmd):
         return 1
 
-    # Install in-tree ESLint plugin
+    # Install in-tree ESLint plugin mozilla.
     cmd = [npm_path, "install",
            os.path.join(module_path, "eslint-plugin-mozilla")]
+    cmd.extend(extra_parameters)
     print("Installing eslint-plugin-mozilla using \"%s\"..." % (" ".join(cmd)))
     if not call_process("eslint-plugin-mozilla", cmd):
         return 1
 
-    eslint_path = os.path.join(module_path, "node_modules", ".bin", "eslint")
+    # Install in-tree ESLint plugin spidermonkey.
+    cmd = [npm_path, "install",
+           os.path.join(module_path, "eslint-plugin-spidermonkey-js")]
+    cmd.extend(extra_parameters)
+    print("Installing eslint-plugin-spidermonkey-js using \"%s\"..." % (" ".join(cmd)))
+    if not call_process("eslint-plugin-spidermonkey-js", cmd):
+        return 1
+
+    eslint_path = os.path.join(get_project_root(), "node_modules", ".bin", "eslint")
 
     print("\nESLint and approved plugins installed successfully!")
     print("\nNOTE: Your local eslint binary is at %s\n" % eslint_path)
@@ -116,22 +128,28 @@ def call_process(name, cmd, cwd=None):
 
 def expected_eslint_modules():
     # Read the expected version of ESLint and external modules
-    expected_modules_path = os.path.join(get_eslint_module_path(), "package.json")
+    expected_modules_path = os.path.join(get_project_root(), "package.json")
     with open(expected_modules_path, "r") as f:
         expected_modules = json.load(f)["dependencies"]
 
-    # Also read the in-tree ESLint plugin version
+    # Also read the in-tree ESLint plugin mozilla version
     mozilla_json_path = os.path.join(get_eslint_module_path(),
                                      "eslint-plugin-mozilla", "package.json")
     with open(mozilla_json_path, "r") as f:
         expected_modules["eslint-plugin-mozilla"] = json.load(f)["version"]
+
+    # Also read the in-tree ESLint plugin spidermonkey version
+    mozilla_json_path = os.path.join(get_eslint_module_path(),
+                                     "eslint-plugin-spidermonkey-js", "package.json")
+    with open(mozilla_json_path, "r") as f:
+        expected_modules["eslint-plugin-spidermonkey-js"] = json.load(f)["version"]
 
     return expected_modules
 
 
 def eslint_module_has_issues():
     has_issues = False
-    node_modules_path = os.path.join(get_eslint_module_path(), "node_modules")
+    node_modules_path = os.path.join(get_project_root(), "node_modules")
 
     for name, version_range in expected_eslint_modules().iteritems():
         path = os.path.join(node_modules_path, name, "package.json")
@@ -262,10 +280,10 @@ def lint(paths, binary=None, fix=None, setup=None, **lintargs):
     global project_root
     project_root = lintargs['root']
 
-    module_path = get_eslint_module_path()
+    module_path = get_project_root()
 
-    # eslint requires at least node 4.2.3
-    node_path = get_node_or_npm_path("node", LooseVersion("4.2.3"))
+    # eslint requires at least node 6.9.1
+    node_path = get_node_or_npm_path("node", LooseVersion("6.9.1"))
     if not node_path:
         return 1
 

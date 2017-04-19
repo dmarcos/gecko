@@ -26,8 +26,8 @@ add_task(function* () {
   var xPixel = 0; // Use the first pixel of the screen since it is maximized.
 
   let resultLocation = yield new Promise(resolve => {
-    messageManager.addMessageListener("Test:PopStateOccurred", function statePopped(message) {
-      messageManager.removeMessageListener("Test:PopStateOccurred", statePopped);
+    window.messageManager.addMessageListener("Test:PopStateOccurred", function statePopped(message) {
+      window.messageManager.removeMessageListener("Test:PopStateOccurred", statePopped);
       resolve(message.data.location);
     });
 

@@ -23,12 +23,12 @@ add_task(function*() {
   // We're going to click on the first link, so listen for another load event
   info("Clicking on link 1, 1 load should take place");
   let promise = waitForLoadsInBrowser(tab.linkedBrowser, 1);
-  EventUtils.sendMouseEvent({type:"click"}, links[0], browser_b.contentWindow);
+  EventUtils.sendMouseEvent({type: "click"}, links[0], browser_b.contentWindow);
   yield promise;
 
   info("Clicking on link 2, 1 load should take place");
   promise = waitForLoadsInBrowser(tab.linkedBrowser, 1);
-  EventUtils.sendMouseEvent({type:"click"}, links[1], browser_b.contentWindow);
+  EventUtils.sendMouseEvent({type: "click"}, links[1], browser_b.contentWindow);
   yield promise;
 
   info("Close then un-close page, 4 loads should take place");
@@ -68,12 +68,12 @@ add_task(function*() {
   // We're going to click on the first link, so listen for another load event
   info("iframe: Clicking on link 1, 1 load should take place");
   let promise = waitForLoadsInBrowser(tab.linkedBrowser, 1);
-  EventUtils.sendMouseEvent({type:"click"}, links[0], browser_b.contentWindow);
+  EventUtils.sendMouseEvent({type: "click"}, links[0], browser_b.contentWindow);
   yield promise;
 
   info("iframe: Clicking on link 2, 1 load should take place");
   promise = waitForLoadsInBrowser(tab.linkedBrowser, 1);
-  EventUtils.sendMouseEvent({type:"click"}, links[1], browser_b.contentWindow);
+  EventUtils.sendMouseEvent({type: "click"}, links[1], browser_b.contentWindow);
   yield promise;
 
   info("iframe: Close then un-close page, 5 loads should take place");
@@ -118,7 +118,7 @@ add_task(function*() {
   let doc = tab.linkedBrowser.contentDocument;
   let iframe = doc.createElement("iframe");
   iframe.id = "iframe";
-  iframe.src="browser_frame_history_index.html";
+  iframe.src = "browser_frame_history_index.html";
   doc.body.appendChild(iframe);
   yield waitForLoadsInBrowser(tab.linkedBrowser, 4);
 
@@ -131,18 +131,18 @@ add_task(function*() {
   // We're going to click on the first link, so listen for another load event
   info("dynamic: Clicking on link 1, 1 load should take place");
   let promise = waitForLoadsInBrowser(tab.linkedBrowser, 1);
-  EventUtils.sendMouseEvent({type:"click"}, links[0], browser_b.contentWindow);
+  EventUtils.sendMouseEvent({type: "click"}, links[0], browser_b.contentWindow);
   yield promise;
 
   info("dynamic: Clicking on link 2, 1 load should take place");
   promise = waitForLoadsInBrowser(tab.linkedBrowser, 1);
-  EventUtils.sendMouseEvent({type:"click"}, links[1], browser_b.contentWindow);
+  EventUtils.sendMouseEvent({type: "click"}, links[1], browser_b.contentWindow);
   yield promise;
 
   info("Check in the state that we have not stored this history");
   let state = ss.getBrowserState();
   info(JSON.stringify(JSON.parse(state), null, "\t"));
-  is(state.indexOf("c1.html"), -1, "History entry was not stored in the session state");;
+  is(state.indexOf("c1.html"), -1, "History entry was not stored in the session state");
   gBrowser.removeTab(tab);
 });
 

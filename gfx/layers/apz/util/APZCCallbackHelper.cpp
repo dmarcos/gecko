@@ -29,8 +29,12 @@
 #include "nsView.h"
 #include "Layers.h"
 
+// #define APZCCH_LOGGING 1
+#ifdef APZCCH_LOGGING
+#define APZCCH_LOG(...) printf_stderr("APZCCH: " __VA_ARGS__)
+#else
 #define APZCCH_LOG(...)
-// #define APZCCH_LOG(...) printf_stderr("APZCCH: " __VA_ARGS__)
+#endif
 
 namespace mozilla {
 namespace layers {
@@ -337,7 +341,22 @@ APZCCallbackHelper::InitializeRootDisplayport(nsIPresShell* aPresShell)
   uint32_t presShellId;
   FrameMetrics::ViewID viewId;
   if (APZCCallbackHelper::GetOrCreateScrollIdentifiers(content, &presShellId, &viewId)) {
-    // Note that the base rect that goes with these margins is set in
+    nsPresContext* pc = aPresShell->GetPresContext();
+    // This code is only correct for root content or toplevel documents.
+    MOZ_ASSERT(!pc || pc->IsRootContentDocument() || !pc->GetParentPresContext());
+    nsIFrame* frame = aPresShell->GetRootScrollFrame();
+    if (!frame) {
+      frame = aPresShell->GetRootFrame();
+    }
+    nsRect baseRect;
+    if (frame) {
+      baseRect =
+        nsRect(nsPoint(0, 0), nsLayoutUtils::CalculateCompositionSizeForFrame(frame));
+    } else if (pc) {
+      baseRect = nsRect(nsPoint(0, 0), pc->GetVisibleArea().Size());
+    }
+    nsLayoutUtils::SetDisplayPortBaseIfNotSet(content, baseRect);
+    // Note that we also set the base rect that goes with these margins in
     // nsRootBoxFrame::BuildDisplayList.
     nsLayoutUtils::SetDisplayPortMargins(content, aPresShell, ScreenMargin(), 0,
         nsLayoutUtils::RepaintMode::DoNotRepaint);
@@ -585,7 +604,7 @@ UpdateRootFrameForTouchTargetDocument(nsIFrame* aRootFrame)
   // Re-target so that the hit test is performed relative to the frame for the
   // Root Content Document instead of the Root Document which are different in
   // Android. See bug 1229752 comment 16 for an explanation of why this is necessary.
-  if (nsIDocument* doc = aRootFrame->PresContext()->PresShell()->GetTouchEventTargetDocument()) {
+  if (nsIDocument* doc = aRootFrame->PresContext()->PresShell()->GetPrimaryContentDocument()) {
     if (nsIPresShell* shell = doc->GetShell()) {
       if (nsIFrame* frame = shell->GetRootFrame()) {
         return frame;
@@ -609,8 +628,15 @@ PrepareForSetTargetAPZCNotification(nsIWidget* aWidget,
   ScrollableLayerGuid guid(aGuid.mLayersId, 0, FrameMetrics::NULL_SCROLL_ID);
   nsPoint point =
     nsLayoutUtils::GetEventCoordinatesRelativeTo(aWidget, aRefPoint, aRootFrame);
+  uint32_t flags = 0;
+#ifdef MOZ_WIDGET_ANDROID
+  // On Android, we need IGNORE_ROOT_SCROLL_FRAME for correct hit testing
+  // when zoomed out. On desktop, don't use it because it interferes with
+  // hit testing for some purposes such as scrollbar dragging.
+  flags = nsLayoutUtils::IGNORE_ROOT_SCROLL_FRAME;
+#endif
   nsIFrame* target =
-    nsLayoutUtils::GetFrameForPoint(aRootFrame, point, nsLayoutUtils::IGNORE_ROOT_SCROLL_FRAME);
+    nsLayoutUtils::GetFrameForPoint(aRootFrame, point, flags);
   nsIScrollableFrame* scrollAncestor = target
     ? nsLayoutUtils::GetAsyncScrollableAncestorFrame(target)
     : aRootFrame->PresContext()->PresShell()->GetRootScrollFrameAsScrollable();
@@ -620,6 +646,7 @@ PrepareForSetTargetAPZCNotification(nsIWidget* aWidget,
     ? GetDisplayportElementFor(scrollAncestor)
     : GetRootDocumentElementFor(aWidget);
 
+#ifdef APZCCH_LOGGING
   nsAutoString dpElementDesc;
   if (dpElement) {
     dpElement->Describe(dpElementDesc);
@@ -627,6 +654,7 @@ PrepareForSetTargetAPZCNotification(nsIWidget* aWidget,
   APZCCH_LOG("For event at %s found scrollable element %p (%s)\n",
       Stringify(aRefPoint).c_str(), dpElement.get(),
       NS_LossyConvertUTF16toASCII(dpElementDesc).get());
+#endif
 
   bool guidIsValid = APZCCallbackHelper::GetOrCreateScrollIdentifiers(
     dpElement, &(guid.mPresShellId), &(guid.mScrollId));
@@ -910,6 +938,15 @@ APZCCallbackHelper::IsScrollInProgress(nsIScrollableFrame* aFrame)
   return aFrame->IsProcessingAsyncScroll()
          || nsLayoutUtils::CanScrollOriginClobberApz(aFrame->LastScrollOrigin())
          || aFrame->LastSmoothScrollOrigin();
+}
+
+/* static */ void
+APZCCallbackHelper::NotifyAsyncScrollbarDragRejected(const FrameMetrics::ViewID& aScrollId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (nsIScrollableFrame* scrollFrame = nsLayoutUtils::FindScrollableFrameFor(aScrollId)) {
+    scrollFrame->AsyncScrollbarDragRejected();
+  }
 }
 
 /* static */ void

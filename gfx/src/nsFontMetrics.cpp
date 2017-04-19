@@ -81,29 +81,29 @@ private:
     RefPtr<gfxTextRun> mTextRun;
 };
 
-class StubPropertyProvider : public gfxTextRun::PropertyProvider {
+class StubPropertyProvider final : public gfxTextRun::PropertyProvider {
 public:
-    virtual void GetHyphenationBreaks(gfxTextRun::Range aRange,
-                                      bool* aBreakBefore) {
+    void GetHyphenationBreaks(gfxTextRun::Range aRange,
+                              gfxTextRun::HyphenType* aBreakBefore) const {
         NS_ERROR("This shouldn't be called because we never call BreakAndMeasureText");
     }
-    virtual mozilla::StyleHyphens GetHyphensOption() {
+    mozilla::StyleHyphens GetHyphensOption() const {
         NS_ERROR("This shouldn't be called because we never call BreakAndMeasureText");
         return mozilla::StyleHyphens::None;
     }
-    virtual gfxFloat GetHyphenWidth() {
+    gfxFloat GetHyphenWidth() const {
         NS_ERROR("This shouldn't be called because we never enable hyphens");
         return 0;
     }
-    virtual already_AddRefed<mozilla::gfx::DrawTarget> GetDrawTarget() {
+    already_AddRefed<mozilla::gfx::DrawTarget> GetDrawTarget() const {
         NS_ERROR("This shouldn't be called because we never enable hyphens");
         return nullptr;
     }
-    virtual uint32_t GetAppUnitsPerDevUnit() {
+    uint32_t GetAppUnitsPerDevUnit() const {
         NS_ERROR("This shouldn't be called because we never enable hyphens");
         return 60;
     }
-    virtual void GetSpacing(gfxTextRun::Range aRange, Spacing* aSpacing) {
+    void GetSpacing(gfxTextRun::Range aRange, Spacing* aSpacing) const {
         NS_ERROR("This shouldn't be called because we never enable spacing");
     }
 };
@@ -146,6 +146,8 @@ nsFontMetrics::nsFontMetrics(const nsFont& aFont, const Params& aParams,
 
 nsFontMetrics::~nsFontMetrics()
 {
+    // Should not be dropped by stylo
+    MOZ_ASSERT(NS_IsMainThread());
     if (mDeviceContext) {
         mDeviceContext->FontMetricsDeleted(this);
     }

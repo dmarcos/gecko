@@ -12,12 +12,9 @@ const Cu = Components.utils;
 const myScope = this;
 
 Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/debug.js", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/osfile.jsm", this);
 Cu.import("resource://gre/modules/Promise.jsm", this);
-Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
 Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://gre/modules/DeferredTask.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
@@ -84,6 +81,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySend",
                                   "resource://gre/modules/TelemetrySend.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryReportingPolicy",
                                   "resource://gre/modules/TelemetryReportingPolicy.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryModules",
+                                  "resource://gre/modules/TelemetryModules.jsm");
 
 /**
  * Setup Telemetry logging. This function also gets called when loggin related
@@ -197,11 +196,13 @@ this.TelemetryController = Object.freeze({
    * @param {Boolean} [aOptions.addEnvironment=false] true if the ping should contain the
    *                  environment data.
    * @param {Object}  [aOptions.overrideEnvironment=null] set to override the environment data.
+   * @param {Boolean} [aOptions.usePingSender=false] if true, send the ping using the PingSender.
    * @returns {Promise} Test-only - a promise that resolves with the ping id once the ping is stored or sent.
    */
   submitExternalPing(aType, aPayload, aOptions = {}) {
     aOptions.addClientId = aOptions.addClientId || false;
     aOptions.addEnvironment = aOptions.addEnvironment || false;
+    aOptions.usePingSender = aOptions.usePingSender || false;
 
     return Impl.submitExternalPing(aType, aPayload, aOptions);
   },
@@ -451,9 +452,10 @@ var Impl = {
    * @param {Boolean} [aOptions.addEnvironment=false] true if the ping should contain the
    *                  environment data.
    * @param {Object}  [aOptions.overrideEnvironment=null] set to override the environment data.
+   * @param {Boolean} [aOptions.usePingSender=false] if true, send the ping using the PingSender.
    * @returns {Promise} Test-only - a promise that is resolved with the ping id once the ping is stored or sent.
    */
-  _submitPingLogic: Task.async(function* (aType, aPayload, aOptions) {
+  async _submitPingLogic(aType, aPayload, aOptions) {
     // Make sure to have a clientId if we need one. This cover the case of submitting
     // a ping early during startup, before Telemetry is initialized, if no client id was
     // cached.
@@ -461,7 +463,7 @@ var Impl = {
       Telemetry.getHistogramById("TELEMETRY_PING_SUBMISSION_WAITING_CLIENTID").add();
       // We can safely call |getClientID| here and during initialization: we would still
       // spawn and return one single loading task.
-      this._clientID = yield ClientID.getClientID();
+      this._clientID = await ClientID.getClientID();
     }
 
     const pingData = this.assemblePing(aType, aPayload, aOptions);
@@ -473,10 +475,10 @@ var Impl = {
       .catch(e => this._log.error("submitExternalPing - Failed to archive ping " + pingData.id, e));
     let p = [ archivePromise ];
 
-    p.push(TelemetrySend.submitPing(pingData));
+    p.push(TelemetrySend.submitPing(pingData, {usePingSender: aOptions.usePingSender}));
 
     return Promise.all(p).then(() => pingData.id);
-  }),
+  },
 
   /**
    * Submit ping payloads to Telemetry.
@@ -489,6 +491,7 @@ var Impl = {
    * @param {Boolean} [aOptions.addEnvironment=false] true if the ping should contain the
    *                  environment data.
    * @param {Object}  [aOptions.overrideEnvironment=null] set to override the environment data.
+   * @param {Boolean} [aOptions.usePingSender=false] if true, send the ping using the PingSender.
    * @returns {Promise} Test-only - a promise that is resolved with the ping id once the ping is stored or sent.
    */
   submitExternalPing: function send(aType, aPayload, aOptions) {
@@ -587,22 +590,22 @@ var Impl = {
    *
    * @return {Promise} Promise that is resolved when the ping is submitted and archived.
    */
-  checkAbortedSessionPing: Task.async(function*() {
-    let ping = yield TelemetryStorage.loadAbortedSessionPing();
+  async checkAbortedSessionPing() {
+    let ping = await TelemetryStorage.loadAbortedSessionPing();
     this._log.trace("checkAbortedSessionPing - found aborted-session ping: " + !!ping);
     if (!ping) {
       return;
     }
 
     try {
-      yield TelemetryStorage.addPendingPing(ping);
-      yield TelemetryArchive.promiseArchivePing(ping);
+      await TelemetryStorage.addPendingPing(ping);
+      await TelemetryArchive.promiseArchivePing(ping);
     } catch (e) {
       this._log.error("checkAbortedSessionPing - Unable to add the pending ping", e);
     } finally {
-      yield TelemetryStorage.removeAbortedSessionPing();
+      await TelemetryStorage.removeAbortedSessionPing();
     }
-  }),
+  },
 
   /**
    * Save an aborted-session ping to disk without adding it to the pending pings.
@@ -701,6 +704,9 @@ var Impl = {
     // a few observers and initializing the session.
     TelemetrySession.earlyInit(this._testMode);
 
+    // Annotate crash reports so that we get pings for startup crashes
+    TelemetrySend.earlyInit();
+
     // For very short session durations, we may never load the client
     // id from disk.
     // We try to cache it in prefs to avoid this, even though this may
@@ -717,10 +723,10 @@ var Impl = {
         this._initialized = true;
         TelemetryEnvironment.delayedInit();
 
-        yield TelemetrySend.setup(this._testMode);
-
         // Load the ClientID.
         this._clientID = yield ClientID.getClientID();
+
+        yield TelemetrySend.setup(this._testMode);
 
         // Perform TelemetrySession delayed init.
         yield TelemetrySession.delayedInit();
@@ -733,6 +739,9 @@ var Impl = {
         // the profile directory. This is a temporary measure that we should drop
         // in the future.
         TelemetryStorage.removeFHRDatabase();
+
+        // Report the modules loaded in the Firefox process.
+        TelemetryModules.start();
 
         this._delayedInitTaskDeferred.resolve();
       } catch (e) {
@@ -767,7 +776,7 @@ var Impl = {
   },
 
   // Do proper shutdown waiting and cleanup.
-  _cleanupOnShutdown: Task.async(function*() {
+  async _cleanupOnShutdown() {
     if (!this._initialized) {
       return;
     }
@@ -782,25 +791,25 @@ var Impl = {
       TelemetryEnvironment.shutdown();
 
       // Stop any ping sending.
-      yield TelemetrySend.shutdown();
+      await TelemetrySend.shutdown();
 
-      yield TelemetrySession.shutdown();
+      await TelemetrySession.shutdown();
 
       // First wait for clients processing shutdown.
-      yield this._shutdownBarrier.wait();
+      await this._shutdownBarrier.wait();
 
       // ... and wait for any outstanding async ping activity.
-      yield this._connectionsBarrier.wait();
+      await this._connectionsBarrier.wait();
 
       // Perform final shutdown operations.
-      yield TelemetryStorage.shutdown();
+      await TelemetryStorage.shutdown();
     } finally {
       // Reset state.
       this._initialized = false;
       this._initStarted = false;
       this._shuttingDown = true;
     }
-  }),
+  },
 
   shutdown() {
     this._log.trace("shutdown");
@@ -939,11 +948,11 @@ var Impl = {
     return ping;
   },
 
-  reset: Task.async(function*() {
+  async reset() {
     this._clientID = null;
     this._detachObservers();
 
-    yield TelemetrySession.testReset();
+    let sessionReset = TelemetrySession.testReset();
 
     this._connectionsBarrier = new AsyncShutdown.Barrier(
       "TelemetryController: Waiting for pending ping activity"
@@ -956,10 +965,11 @@ var Impl = {
     // cached client id.
     let controllerSetup = this.setupTelemetry(true);
 
-    yield TelemetrySend.reset();
-    yield TelemetryStorage.reset();
-    yield TelemetryEnvironment.testReset();
+    await sessionReset;
+    await TelemetrySend.reset();
+    await TelemetryStorage.reset();
+    await TelemetryEnvironment.testReset();
 
-    yield controllerSetup;
-  }),
+    await controllerSetup;
+  },
 };

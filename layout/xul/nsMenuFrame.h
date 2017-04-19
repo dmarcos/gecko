@@ -18,6 +18,8 @@
 #include "nsGkAtoms.h"
 #include "nsMenuParent.h"
 #include "nsXULPopupManager.h"
+#include "nsINamed.h"
+#include "nsIReflowCallback.h"
 #include "nsITimer.h"
 #include "mozilla/Attributes.h"
 
@@ -54,13 +56,15 @@ class nsMenuFrame;
  * to it. The callback is delegated to the contained nsMenuFrame as long as
  * the contained nsMenuFrame has not been destroyed.
  */
-class nsMenuTimerMediator final : public nsITimerCallback
+class nsMenuTimerMediator final : public nsITimerCallback,
+                                  public nsINamed
 {
 public:
   explicit nsMenuTimerMediator(nsMenuFrame* aFrame);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   void ClearFrame();
 
@@ -72,6 +76,7 @@ private:
 };
 
 class nsMenuFrame final : public nsBoxFrame
+                        , public nsIReflowCallback
 {
 public:
   explicit nsMenuFrame(nsStyleContext* aContext);
@@ -211,6 +216,10 @@ public:
 
   static bool IsSizedToPopup(nsIContent* aContent, bool aRequireAlways);
 
+  // nsIReflowCallback
+  virtual bool ReflowFinished() override;
+  virtual void ReflowCallbackCanceled() override;
+
 protected:
   friend class nsMenuTimerMediator;
   friend class nsASyncMenuInitialization;
@@ -270,6 +279,7 @@ protected:
   bool mIsMenu; // Whether or not we can even have children or not.
   bool mChecked;              // are we checked?
   bool mIgnoreAccelTextChange; // temporarily set while determining the accelerator key
+  bool mReflowCallbackPosted;
   nsMenuType mType;
 
   // Reference to the mediator which wraps this frame.

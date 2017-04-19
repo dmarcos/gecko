@@ -120,8 +120,8 @@ const BackgroundPageThumbs = {
           Services.obs.removeObserver(observe, "page-thumbnail:error");
         }
       }
-      Services.obs.addObserver(observe, "page-thumbnail:create", false);
-      Services.obs.addObserver(observe, "page-thumbnail:error", false);
+      Services.obs.addObserver(observe, "page-thumbnail:create");
+      Services.obs.addObserver(observe, "page-thumbnail:error");
     });
     try {
       this.capture(url, options);
@@ -160,20 +160,32 @@ const BackgroundPageThumbs = {
 
     this._startedParentWinInit = true;
 
-    // Create an html:iframe, stick it in the parent document, and
-    // use it to host the browser.  about:blank will not have the system
-    // principal, so it can't host, but a document with a chrome URI will.
-    let hostWindow = Services.appShell.hiddenDOMWindow;
-    let iframe = hostWindow.document.createElementNS(HTML_NS, "iframe");
-    iframe.setAttribute("src", "chrome://global/content/mozilla.xhtml");
-    let onLoad = function onLoadFn() {
-      iframe.removeEventListener("load", onLoad, true);
-      this._parentWin = iframe.contentWindow;
-      this._processCaptureQueue();
-    }.bind(this);
-    iframe.addEventListener("load", onLoad, true);
-    hostWindow.document.documentElement.appendChild(iframe);
-    this._hostIframe = iframe;
+    // Create a windowless browser and load our hosting
+    // (privileged) document in it.
+    let wlBrowser = Services.appShell.createWindowlessBrowser(true);
+    wlBrowser.QueryInterface(Ci.nsIInterfaceRequestor);
+    let webProgress = wlBrowser.getInterface(Ci.nsIWebProgress);
+    this._listener = {
+      QueryInterface: XPCOMUtils.generateQI([
+        Ci.nsIWebProgressListener, Ci.nsIWebProgressListener2,
+        Ci.nsISupportsWeakReference]),
+    };
+    this._listener.onStateChange = (wbp, request, stateFlags, status) => {
+      if (!request) {
+        return;
+      }
+      if (stateFlags & Ci.nsIWebProgressListener.STATE_STOP &&
+          stateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK) {
+        webProgress.removeProgressListener(this._listener);
+        delete this._listener;
+        // Get the window reference via the document.
+        this._parentWin = wlBrowser.document.defaultView;
+        this._processCaptureQueue();
+      }
+    };
+    webProgress.addProgressListener(this._listener, Ci.nsIWebProgress.NOTIFY_STATE_ALL);
+    wlBrowser.loadURI("chrome://global/content/backgroundPageThumbs.xhtml", 0, null, null, null);
+    this._windowlessContainer = wlBrowser;
 
     return false;
   },
@@ -186,12 +198,13 @@ const BackgroundPageThumbs = {
     if (this._captureQueue)
       this._captureQueue.forEach(cap => cap.destroy());
     this._destroyBrowser();
-    if (this._hostIframe)
-      this._hostIframe.remove();
+    if (this._windowlessContainer)
+      this._windowlessContainer.close();
     delete this._captureQueue;
-    delete this._hostIframe;
+    delete this._windowlessContainer;
     delete this._startedParentWinInit;
     delete this._parentWin;
+    delete this._listener;
   },
 
   /**
@@ -251,9 +264,9 @@ const BackgroundPageThumbs = {
         // browser's message manager if it happens on the same stack as the
         // listener.  Trying to send a message to the manager in that case
         // throws NS_ERROR_NOT_INITIALIZED.
-        Services.tm.currentThread.dispatch(() => {
+        Services.tm.dispatchToMainThread(() => {
           curCapture._done(null, TEL_CAPTURE_DONE_CRASHED);
-        }, Ci.nsIEventTarget.DISPATCH_NORMAL);
+        });
       }
       // else: we must have been idle and not currently doing a capture (eg,
       // maybe a GC or similar crashed) - so there's no need to attempt a
@@ -323,8 +336,7 @@ Services.prefs.addObserver(ABOUT_NEWTAB_SEGREGATION_PREF,
     if (aTopic == "nsPref:changed" && aData == ABOUT_NEWTAB_SEGREGATION_PREF) {
       BackgroundPageThumbs.renewThumbnailBrowser();
     }
-  },
-  false);
+  });
 
 Object.defineProperty(this, "BackgroundPageThumbs", {
   value: BackgroundPageThumbs,
@@ -490,5 +502,5 @@ function tel(histogramID, value) {
 }
 
 function schedule(callback) {
-  Services.tm.mainThread.dispatch(callback, Ci.nsIThread.DISPATCH_NORMAL);
+  Services.tm.dispatchToMainThread(callback);
 }

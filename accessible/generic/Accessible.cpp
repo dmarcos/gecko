@@ -1830,7 +1830,7 @@ Accessible::DispatchClickEvent(nsIContent *aContent, uint32_t aActionIndex)
                                    nsIPresShell::ScrollAxis(),
                                    nsIPresShell::SCROLL_OVERFLOW_HIDDEN);
 
-  nsWeakFrame frame = aContent->GetPrimaryFrame();
+  AutoWeakFrame frame = aContent->GetPrimaryFrame();
   if (!frame)
     return;
 
@@ -2131,18 +2131,23 @@ Accessible::InsertChildAt(uint32_t aIndex, Accessible* aChild)
 bool
 Accessible::RemoveChild(Accessible* aChild)
 {
-  if (!aChild)
-    return false;
-
-  if (aChild->mParent != this || aChild->mIndexInParent == -1)
-    return false;
-
-  MOZ_ASSERT((mStateFlags & eKidsMutating) || aChild->IsDefunct() || aChild->IsDoc(),
-             "Illicit children change");
+  MOZ_DIAGNOSTIC_ASSERT(aChild, "No child was given");
+  MOZ_DIAGNOSTIC_ASSERT(aChild->mParent, "No parent");
+  MOZ_DIAGNOSTIC_ASSERT(aChild->mParent == this, "Wrong parent");
+  MOZ_DIAGNOSTIC_ASSERT(aChild->mIndexInParent != -1, "Unbound child was given");
+  MOZ_DIAGNOSTIC_ASSERT((mStateFlags & eKidsMutating) || aChild->IsDefunct() ||
+                        aChild->IsDoc() || IsApplication(),
+                        "Illicit children change");
 
   int32_t index = static_cast<uint32_t>(aChild->mIndexInParent);
-  MOZ_ASSERT(mChildren.SafeElementAt(index) == aChild,
-             "A wrong child index");
+  if (mChildren.SafeElementAt(index) != aChild) {
+    MOZ_ASSERT_UNREACHABLE("A wrong child index");
+    index = mChildren.IndexOf(aChild);
+    if (index == -1) {
+      MOZ_ASSERT_UNREACHABLE("No child was found");
+      return false;
+    }
+  }
 
   aChild->UnbindFromParent();
   mChildren.RemoveElementAt(index);
@@ -2157,12 +2162,13 @@ Accessible::RemoveChild(Accessible* aChild)
 void
 Accessible::MoveChild(uint32_t aNewIndex, Accessible* aChild)
 {
-  MOZ_ASSERT(aChild, "No child was given");
-  MOZ_ASSERT(aChild->mParent == this, "A child from different subtree was given");
-  MOZ_ASSERT(aChild->mIndexInParent != -1, "Unbound child was given");
-  MOZ_ASSERT(static_cast<uint32_t>(aChild->mIndexInParent) != aNewIndex,
+  MOZ_DIAGNOSTIC_ASSERT(aChild, "No child was given");
+  MOZ_DIAGNOSTIC_ASSERT(aChild->mParent == this, "A child from different subtree was given");
+  MOZ_DIAGNOSTIC_ASSERT(aChild->mIndexInParent != -1, "Unbound child was given");
+  MOZ_DIAGNOSTIC_ASSERT(aChild->mParent->GetChildAt(aChild->mIndexInParent) == aChild, "Wrong index in parent");
+  MOZ_DIAGNOSTIC_ASSERT(static_cast<uint32_t>(aChild->mIndexInParent) != aNewIndex,
              "No move, same index");
-  MOZ_ASSERT(aNewIndex <= mChildren.Length(), "Wrong new index was given");
+  MOZ_DIAGNOSTIC_ASSERT(aNewIndex <= mChildren.Length(), "Wrong new index was given");
 
   RefPtr<AccHideEvent> hideEvent = new AccHideEvent(aChild, false);
   if (mDoc->Controller()->QueueMutationEvent(hideEvent)) {

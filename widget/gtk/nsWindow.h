@@ -42,10 +42,10 @@
 #include "nsTArray.h"
 #include "Units.h"
 
-extern PRLogModuleInfo *gWidgetLog;
-extern PRLogModuleInfo *gWidgetFocusLog;
-extern PRLogModuleInfo *gWidgetDragLog;
-extern PRLogModuleInfo *gWidgetDrawLog;
+extern mozilla::LazyLogModule gWidgetLog;
+extern mozilla::LazyLogModule gWidgetFocusLog;
+extern mozilla::LazyLogModule gWidgetDragLog;
+extern mozilla::LazyLogModule gWidgetDrawLog;
 
 #define LOG(args) MOZ_LOG(gWidgetLog, mozilla::LogLevel::Debug, args)
 #define LOGFOCUS(args) MOZ_LOG(gWidgetFocusLog, mozilla::LogLevel::Debug, args)
@@ -62,7 +62,6 @@ extern PRLogModuleInfo *gWidgetDrawLog;
 #endif /* MOZ_LOGGING */
 
 class gfxPattern;
-class nsPluginNativeWindowGtk;
 
 namespace mozilla {
 class TimeStamp;
@@ -140,7 +139,6 @@ public:
                                  uint32_t aHotspotX, uint32_t aHotspotY) override;
     virtual void       Invalidate(const LayoutDeviceIntRect& aRect) override;
     virtual void*      GetNativeData(uint32_t aDataType) override;
-    void               SetNativeData(uint32_t aDataType, uintptr_t aVal) override;
     virtual nsresult   SetTitle(const nsAString& aTitle) override;
     virtual void       SetIcon(const nsAString& aIconSpec) override;
     virtual void       SetWindowClass(const nsAString& xulWinType) override;
@@ -158,6 +156,7 @@ public:
                                              uint16_t aDuration,
                                              nsISupports* aData,
                                              nsIRunnable* aCallback) override;
+    virtual already_AddRefed<nsIScreen> GetWidgetScreen() override;
     virtual nsresult   MakeFullScreen(bool aFullScreen,
                                       nsIScreen* aTargetScreen = nullptr) override;
     virtual void       HideWindowChrome(bool aShouldHide) override;
@@ -194,6 +193,19 @@ public:
     void               OnContainerFocusOutEvent(GdkEventFocus *aEvent);
     gboolean           OnKeyPressEvent(GdkEventKey *aEvent);
     gboolean           OnKeyReleaseEvent(GdkEventKey *aEvent);
+
+    /**
+     * MaybeDispatchContextMenuEvent() may dispatch eContextMenu event if
+     * the given key combination should cause opening context menu.
+     *
+     * @param aEvent            The native key event.
+     * @return                  true if this method dispatched eContextMenu
+     *                          event.  Otherwise, false.
+     *                          Be aware, when this returns true, the
+     *                          widget may have been destroyed.
+     */
+    bool               MaybeDispatchContextMenuEvent(const GdkEventKey* aEvent);
+
     void               OnScrollEvent(GdkEventScroll *aEvent);
     void               OnVisibilityNotifyEvent(GdkEventVisibility *aEvent);
     void               OnWindowStateEvent(GtkWidget *aWidget,
@@ -236,18 +248,6 @@ private:
     void               UpdateClientOffset();
 
 public:
-    enum PluginType {
-        PluginType_NONE = 0,   /* do not have any plugin */
-        PluginType_XEMBED,     /* the plugin support xembed */
-        PluginType_NONXEMBED   /* the plugin does not support xembed */
-    };
-
-    void               SetPluginType(PluginType aPluginType);
-#ifdef MOZ_X11
-    void               SetNonXEmbedPluginFocus(void);
-    void               LoseNonXEmbedPluginFocus(void);
-#endif /* MOZ_X11 */
-
     void               ThemeChanged(void);
     void               OnDPIChanged(void);
     void               OnCheckResize(void);
@@ -288,7 +288,6 @@ public:
     virtual void SetInputContext(const InputContext& aContext,
                                  const InputContextAction& aAction) override;
     virtual InputContext GetInputContext() override;
-    virtual nsIMEUpdatePreference GetIMEUpdatePreference() override;
     virtual TextEventDispatcherListener*
         GetNativeTextEventDispatcherListener() override;
     bool ExecuteNativeKeyBindingRemapped(
@@ -417,7 +416,6 @@ private:
     GtkWidget         *GetToplevelWidget();
     nsWindow          *GetContainerWindow();
     void               SetUrgencyHint(GtkWidget *top_window, bool state);
-    void              *SetupPluginPort(void);
     void               SetDefaultIcon(void);
     void               InitButtonEvent(mozilla::WidgetMouseEvent& aEvent,
                                        GdkEventButton* aGdkEvent);
@@ -444,7 +442,6 @@ private:
                         mIsFullyObscured : 1,
                         mRetryPointerGrab : 1;
     nsSizeMode          mSizeState;
-    PluginType          mPluginType;
 
     int32_t             mTransparencyBitmapWidth;
     int32_t             mTransparencyBitmapHeight;
@@ -516,12 +513,6 @@ private:
      */
     void                DispatchRestoreEventAccessible();
 #endif
-
-    // Updates the bounds of the socket widget we manage for remote plugins.
-    void ResizePluginSocketWidget();
-
-    // e10s specific - for managing the socket widget this window hosts.
-    nsPluginNativeWindowGtk* mPluginNativeWindow;
 
     // The cursor cache
     static GdkCursor   *gsGtkCursorCache[eCursorCount];

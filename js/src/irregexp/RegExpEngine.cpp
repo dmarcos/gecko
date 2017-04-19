@@ -68,9 +68,9 @@ static const int kMaxOneByteCharCode = 0xff;
 static const int kMaxUtf16CodeUnit = 0xffff;
 
 static char16_t
-MaximumCharacter(bool ascii)
+MaximumCharacter(bool latin1)
 {
-    return ascii ? kMaxOneByteCharCode : kMaxUtf16CodeUnit;
+    return latin1 ? kMaxOneByteCharCode : kMaxUtf16CodeUnit;
 }
 
 static void
@@ -198,7 +198,7 @@ static const size_t kEcma262UnCanonicalizeMaxWidth = 4;
 // that cannot occur in the source string if it is a one byte string.
 static int
 GetCaseIndependentLetters(char16_t character,
-                          bool ascii_subject,
+                          bool latin1_subject,
                           bool unicode,
                           const char16_t* choices,
                           size_t choices_length,
@@ -209,7 +209,7 @@ GetCaseIndependentLetters(char16_t character,
         char16_t c = choices[i];
 
         // Skip characters that can't appear in one byte strings.
-        if (!unicode && ascii_subject && c > kMaxOneByteCharCode)
+        if (!unicode && latin1_subject && c > kMaxOneByteCharCode)
             continue;
 
         // Watch for duplicates.
@@ -231,7 +231,7 @@ GetCaseIndependentLetters(char16_t character,
 
 static int
 GetCaseIndependentLetters(char16_t character,
-                          bool ascii_subject,
+                          bool latin1_subject,
                           bool unicode,
                           char16_t* letters)
 {
@@ -243,7 +243,7 @@ GetCaseIndependentLetters(char16_t character,
             unicode::ReverseFoldCase2(character),
             unicode::ReverseFoldCase3(character),
         };
-        return GetCaseIndependentLetters(character, ascii_subject, unicode,
+        return GetCaseIndependentLetters(character, latin1_subject, unicode,
                                          choices, ArrayLength(choices), letters);
     }
 
@@ -263,7 +263,7 @@ GetCaseIndependentLetters(char16_t character,
         if (character > kMaxAsciiCharCode) {
             // If Canonicalize(character) == character, all other characters
             // should be ignored.
-            return GetCaseIndependentLetters(character, ascii_subject, unicode,
+            return GetCaseIndependentLetters(character, latin1_subject, unicode,
                                              &character, 1, letters);
         }
 
@@ -282,17 +282,17 @@ GetCaseIndependentLetters(char16_t character,
         other2,
         other3
     };
-    return GetCaseIndependentLetters(character, ascii_subject, unicode,
+    return GetCaseIndependentLetters(character, latin1_subject, unicode,
                                      choices, ArrayLength(choices), letters);
 }
 
 void
-CharacterRange::AddCaseEquivalents(bool is_ascii, bool unicode, CharacterRangeVector* ranges)
+CharacterRange::AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeVector* ranges)
 {
     char16_t bottom = from();
     char16_t top = to();
 
-    if (is_ascii && !RangeContainsLatin1Equivalents(*this, unicode)) {
+    if (is_latin1 && !RangeContainsLatin1Equivalents(*this, unicode)) {
         if (bottom > kMaxOneByteCharCode)
             return;
         if (top > kMaxOneByteCharCode)
@@ -301,7 +301,7 @@ CharacterRange::AddCaseEquivalents(bool is_ascii, bool unicode, CharacterRangeVe
 
     for (char16_t c = bottom;; c++) {
         char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-        size_t length = GetCaseIndependentLetters(c, is_ascii, unicode, chars);
+        size_t length = GetCaseIndependentLetters(c, is_latin1, unicode, chars);
 
         for (size_t i = 0; i < length; i++) {
             char16_t other = chars[i];
@@ -581,7 +581,7 @@ SeqRegExpNode::FillInBMInfo(int offset,
 }
 
 RegExpNode*
-SeqRegExpNode::FilterASCII(int depth, bool ignore_case, bool unicode)
+SeqRegExpNode::FilterLATIN1(int depth, bool ignore_case, bool unicode)
 {
     if (info()->replacement_calculated)
         return replacement();
@@ -597,7 +597,7 @@ SeqRegExpNode::FilterASCII(int depth, bool ignore_case, bool unicode)
 RegExpNode*
 SeqRegExpNode::FilterSuccessor(int depth, bool ignore_case, bool unicode)
 {
-    RegExpNode* next = on_success_->FilterASCII(depth - 1, ignore_case, unicode);
+    RegExpNode* next = on_success_->FilterLATIN1(depth - 1, ignore_case, unicode);
     if (next == nullptr)
         return set_replacement(nullptr);
 
@@ -740,7 +740,7 @@ TextNode::GreedyLoopTextLength()
 }
 
 RegExpNode*
-TextNode::FilterASCII(int depth, bool ignore_case, bool unicode)
+TextNode::FilterLATIN1(int depth, bool ignore_case, bool unicode)
 {
     if (info()->replacement_calculated)
         return replacement();
@@ -823,7 +823,7 @@ TextNode::CalculateOffsets()
     }
 }
 
-void TextNode::MakeCaseIndependent(bool is_ascii, bool unicode)
+void TextNode::MakeCaseIndependent(bool is_latin1, bool unicode)
 {
     int element_count = elements().length();
     for (int i = 0; i < element_count; i++) {
@@ -839,7 +839,7 @@ void TextNode::MakeCaseIndependent(bool is_ascii, bool unicode)
             CharacterRangeVector& ranges = cc->ranges(alloc());
             int range_count = ranges.length();
             for (int j = 0; j < range_count; j++)
-                ranges[j].AddCaseEquivalents(is_ascii, unicode, &ranges);
+                ranges[j].AddCaseEquivalents(is_latin1, unicode, &ranges);
         }
     }
 }
@@ -988,7 +988,7 @@ ChoiceNode::FillInBMInfo(int offset,
 }
 
 RegExpNode*
-ChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
+ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode)
 {
     if (info()->replacement_calculated)
         return replacement();
@@ -1012,7 +1012,7 @@ ChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
     for (int i = 0; i < choice_count; i++) {
         GuardedAlternative alternative = alternatives()[i];
         RegExpNode* replacement =
-            alternative.node()->FilterASCII(depth - 1, ignore_case, unicode);
+            alternative.node()->FilterLATIN1(depth - 1, ignore_case, unicode);
         MOZ_ASSERT(replacement != this);  // No missing EMPTY_MATCH_CHECK.
         if (replacement != nullptr) {
             alternatives()[i].set_node(replacement);
@@ -1033,7 +1033,7 @@ ChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
     new_alternatives.reserve(surviving);
     for (int i = 0; i < choice_count; i++) {
         RegExpNode* replacement =
-            alternatives()[i].node()->FilterASCII(depth - 1, ignore_case, unicode);
+            alternatives()[i].node()->FilterLATIN1(depth - 1, ignore_case, unicode);
         if (replacement != nullptr) {
             alternatives()[i].set_node(replacement);
             new_alternatives.append(alternatives()[i]);
@@ -1088,7 +1088,7 @@ NegativeLookaheadChoiceNode::GetQuickCheckDetails(QuickCheckDetails* details,
 }
 
 RegExpNode*
-NegativeLookaheadChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
+NegativeLookaheadChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode)
 {
     if (info()->replacement_calculated)
         return replacement();
@@ -1102,14 +1102,14 @@ NegativeLookaheadChoiceNode::FilterASCII(int depth, bool ignore_case, bool unico
     // Alternative 0 is the negative lookahead, alternative 1 is what comes
     // afterwards.
     RegExpNode* node = alternatives()[1].node();
-    RegExpNode* replacement = node->FilterASCII(depth - 1, ignore_case, unicode);
+    RegExpNode* replacement = node->FilterLATIN1(depth - 1, ignore_case, unicode);
 
     if (replacement == nullptr)
         return set_replacement(nullptr);
     alternatives()[1].set_node(replacement);
 
     RegExpNode* neg_node = alternatives()[0].node();
-    RegExpNode* neg_replacement = neg_node->FilterASCII(depth - 1, ignore_case, unicode);
+    RegExpNode* neg_replacement = neg_node->FilterLATIN1(depth - 1, ignore_case, unicode);
 
     // If the negative lookahead is always going to fail then
     // we don't need to check it.
@@ -1190,7 +1190,7 @@ LoopChoiceNode::FillInBMInfo(int offset,
 }
 
 RegExpNode*
-LoopChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
+LoopChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode)
 {
     if (info()->replacement_calculated)
         return replacement();
@@ -1203,7 +1203,7 @@ LoopChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
         VisitMarker marker(info());
 
         RegExpNode* continue_replacement =
-            continue_node_->FilterASCII(depth - 1, ignore_case, unicode);
+            continue_node_->FilterLATIN1(depth - 1, ignore_case, unicode);
 
         // If we can't continue after the loop then there is no sense in doing the
         // loop.
@@ -1211,7 +1211,7 @@ LoopChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
             return set_replacement(nullptr);
     }
 
-    return ChoiceNode::FilterASCII(depth - 1, ignore_case, unicode);
+    return ChoiceNode::FilterLATIN1(depth - 1, ignore_case, unicode);
 }
 
 // -------------------------------------------------------------------
@@ -1220,7 +1220,10 @@ LoopChoiceNode::FilterASCII(int depth, bool ignore_case, bool unicode)
 void
 Analysis::EnsureAnalyzed(RegExpNode* that)
 {
-    JS_CHECK_RECURSION(cx, failASCII("Stack overflow"); return);
+    if (!CheckRecursionLimit(cx)) {
+        failASCII("Stack overflow");
+        return;
+    }
 
     if (that->info()->been_analyzed || that->info()->being_analyzed)
         return;
@@ -1240,7 +1243,7 @@ void
 Analysis::VisitText(TextNode* that)
 {
     if (ignore_case_)
-        that->MakeCaseIndependent(is_ascii_, unicode_);
+        that->MakeCaseIndependent(is_latin1_, unicode_);
     EnsureAnalyzed(that->on_success());
     if (!has_failed()) {
         that->CalculateOffsets();
@@ -1532,7 +1535,7 @@ class irregexp::RegExpCompiler
 {
   public:
     RegExpCompiler(JSContext* cx, LifoAlloc* alloc, int capture_count,
-                   bool ignore_case, bool is_ascii, bool match_only, bool unicode);
+                   bool ignore_case, bool is_latin1, bool match_only, bool unicode);
 
     int AllocateRegister() {
         if (next_register_ >= RegExpMacroAssembler::kMaxRegister) {
@@ -1568,7 +1571,7 @@ class irregexp::RegExpCompiler
     void SetRegExpTooBig() { reg_exp_too_big_ = true; }
 
     inline bool ignore_case() { return ignore_case_; }
-    inline bool ascii() { return ascii_; }
+    inline bool latin1() { return latin1_; }
     inline bool unicode() { return unicode_; }
     FrequencyCollator* frequency_collator() { return &frequency_collator_; }
 
@@ -1589,7 +1592,7 @@ class irregexp::RegExpCompiler
     int recursion_depth_;
     RegExpMacroAssembler* macro_assembler_;
     bool ignore_case_;
-    bool ascii_;
+    bool latin1_;
     bool match_only_;
     bool unicode_;
     bool reg_exp_too_big_;
@@ -1611,14 +1614,28 @@ class RecursionCheck
     RegExpCompiler* compiler_;
 };
 
+static inline bool
+IsLatin1Equivalent(char16_t c, RegExpCompiler* compiler)
+{
+    if (c <= kMaxOneByteCharCode)
+        return true;
+
+    if (!compiler->ignore_case())
+        return false;
+
+    char16_t converted = ConvertNonLatin1ToLatin1(c, compiler->unicode());
+
+    return converted != 0 && converted <= kMaxOneByteCharCode;
+}
+
 // Attempts to compile the regexp using an Irregexp code generator.  Returns
 // a fixed array or a null handle depending on whether it succeeded.
 RegExpCompiler::RegExpCompiler(JSContext* cx, LifoAlloc* alloc, int capture_count,
-                               bool ignore_case, bool ascii, bool match_only, bool unicode)
+                               bool ignore_case, bool latin1, bool match_only, bool unicode)
   : next_register_(2 * (capture_count + 1)),
     recursion_depth_(0),
     ignore_case_(ignore_case),
-    ascii_(ascii),
+    latin1_(latin1),
     match_only_(match_only),
     unicode_(unicode),
     reg_exp_too_big_(false),
@@ -1697,9 +1714,9 @@ IsNativeRegExpEnabled(JSContext* cx)
 }
 
 RegExpCode
-irregexp::CompilePattern(JSContext* cx, RegExpShared* shared, RegExpCompileData* data,
+irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompileData* data,
                          HandleLinearString sample, bool is_global, bool ignore_case,
-                         bool is_ascii, bool match_only, bool force_bytecode, bool sticky,
+                         bool is_latin1, bool match_only, bool force_bytecode, bool sticky,
                          bool unicode)
 {
     if ((data->capture_count + 1) * 2 - 1 > RegExpMacroAssembler::kMaxRegister) {
@@ -1708,7 +1725,7 @@ irregexp::CompilePattern(JSContext* cx, RegExpShared* shared, RegExpCompileData*
     }
 
     LifoAlloc& alloc = cx->tempLifoAlloc();
-    RegExpCompiler compiler(cx, &alloc, data->capture_count, ignore_case, is_ascii, match_only,
+    RegExpCompiler compiler(cx, &alloc, data->capture_count, ignore_case, is_latin1, match_only,
                             unicode);
 
     // Sample some characters from the middle of the string.
@@ -1754,19 +1771,19 @@ irregexp::CompilePattern(JSContext* cx, RegExpShared* shared, RegExpCompileData*
             node = loop_node;
         }
     }
-    if (is_ascii) {
-        node = node->FilterASCII(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
+    if (is_latin1) {
+        node = node->FilterLATIN1(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
         // Do it again to propagate the new nodes to places where they were not
         // put because they had not been calculated yet.
         if (node != nullptr) {
-            node = node->FilterASCII(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
+            node = node->FilterLATIN1(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
         }
     }
 
     if (node == nullptr)
         node = alloc.newInfallible<EndNode>(&alloc, EndNode::BACKTRACK);
 
-    Analysis analysis(cx, ignore_case, is_ascii, unicode);
+    Analysis analysis(cx, ignore_case, is_latin1, unicode);
     analysis.EnsureAnalyzed(node);
     if (analysis.has_failed()) {
         JS_ReportErrorASCII(cx, "%s", analysis.errorMessage());
@@ -1780,17 +1797,18 @@ irregexp::CompilePattern(JSContext* cx, RegExpShared* shared, RegExpCompileData*
     RegExpMacroAssembler* assembler;
     if (IsNativeRegExpEnabled(cx) &&
         !force_bytecode &&
-        jit::CanLikelyAllocateMoreExecutableMemory())
+        jit::CanLikelyAllocateMoreExecutableMemory() &&
+        shared->getSource()->length() < 32 * 1024)
     {
         NativeRegExpMacroAssembler::Mode mode =
-            is_ascii ? NativeRegExpMacroAssembler::ASCII
-                     : NativeRegExpMacroAssembler::CHAR16;
+            is_latin1 ? NativeRegExpMacroAssembler::LATIN1
+                      : NativeRegExpMacroAssembler::CHAR16;
 
         ctx.emplace(cx, (jit::TempAllocator*) nullptr);
-        native_assembler.emplace(&alloc, shared, cx->runtime(), mode, (data->capture_count + 1) * 2);
+        native_assembler.emplace(cx, &alloc, shared, mode, (data->capture_count + 1) * 2);
         assembler = native_assembler.ptr();
     } else {
-        interpreted_assembler.emplace(&alloc, shared, (data->capture_count + 1) * 2);
+        interpreted_assembler.emplace(cx, &alloc, shared, (data->capture_count + 1) * 2);
         assembler = interpreted_assembler.ptr();
     }
 
@@ -2253,7 +2271,10 @@ void
 BoyerMoorePositionInfo::SetInterval(const Interval& interval)
 {
     s_ = AddRange(s_, kSpaceRanges, kSpaceRangeCount, interval);
-    w_ = AddRange(w_, kWordRanges, kWordRangeCount, interval);
+    if (unicode_ignore_case_)
+        w_ = AddRange(w_, kIgnoreCaseWordRanges, kIgnoreCaseWordRangeCount, interval);
+    else
+        w_ = AddRange(w_, kWordRanges, kWordRangeCount, interval);
     d_ = AddRange(d_, kDigitRanges, kDigitRangeCount, interval);
     surrogate_ =
         AddRange(surrogate_, kSurrogateRanges, kSurrogateRangeCount, interval);
@@ -2290,11 +2311,12 @@ BoyerMoorePositionInfo::SetAll()
 BoyerMooreLookahead::BoyerMooreLookahead(LifoAlloc* alloc, size_t length, RegExpCompiler* compiler)
   : length_(length), compiler_(compiler), bitmaps_(*alloc)
 {
-    max_char_ = MaximumCharacter(compiler->ascii());
+    bool unicode_ignore_case = compiler->unicode() && compiler->ignore_case();
+    max_char_ = MaximumCharacter(compiler->latin1());
 
     bitmaps_.reserve(length);
     for (size_t i = 0; i < length; i++)
-        bitmaps_.append(alloc->newInfallible<BoyerMoorePositionInfo>(alloc));
+        bitmaps_.append(alloc->newInfallible<BoyerMoorePositionInfo>(alloc, unicode_ignore_case));
 }
 
 // Find the longest range of lookahead that has the fewest number of different
@@ -2355,7 +2377,7 @@ BoyerMooreLookahead::FindBestInterval(int max_number_of_chars, int old_biggest_p
         // is less than 50%.  This is because the multibyte mask-and-compare
         // skipping in quickcheck is more likely to do well on this case.
         bool in_quickcheck_range = ((i - remembered_from < 4) ||
-                                    (compiler_->ascii() ? remembered_from <= 4 : remembered_from <= 2));
+                                    (compiler_->latin1() ? remembered_from <= 4 : remembered_from <= 2));
         // Called 'probability' but it is only a rough estimate and can actually
         // be outside the 0-kSize range.
         int probability = (in_quickcheck_range ? kSize / 2 : kSize) - frequency;
@@ -2477,7 +2499,11 @@ BoyerMooreLookahead::EmitSkipInstructions(RegExpMacroAssembler* masm)
 bool
 BoyerMooreLookahead::CheckOverRecursed()
 {
-    JS_CHECK_RECURSION(compiler()->cx(), compiler()->SetRegExpTooBig(); return false);
+    if (!CheckRecursionLimit(compiler()->cx())) {
+        compiler()->SetRegExpTooBig();
+        return false;
+    }
+
     return true;
 }
 
@@ -2766,7 +2792,7 @@ Trace::AdvanceCurrentPositionInTrace(int by, RegExpCompiler* compiler)
     // Adjust the offsets of the quick check performed information.  This
     // information is used to find out what we already determined about the
     // characters by means of mask and compare.
-    quick_check_performed_.Advance(by, compiler->ascii());
+    quick_check_performed_.Advance(by);
     cp_offset_ += by;
     if (cp_offset_ > RegExpMacroAssembler::kMaxCPOffset) {
         compiler->SetRegExpTooBig();
@@ -2889,7 +2915,7 @@ EmitHat(RegExpCompiler* compiler, RegExpNode* on_success, Trace* trace)
 
     if (!assembler->CheckSpecialCharacterClass('n', new_trace.backtrack())) {
         // Newline means \n, \r, 0x2028 or 0x2029.
-        if (!compiler->ascii())
+        if (!compiler->latin1())
             assembler->CheckCharacterAfterAnd(0x2028, 0xfffe, &ok);
         assembler->CheckCharacter('\n', &ok);
         assembler->CheckNotCharacter('\r', new_trace.backtrack());
@@ -2960,13 +2986,20 @@ EmitNotInSurrogatePair(RegExpCompiler* compiler, RegExpNode* on_success, Trace* 
 // Check for [0-9A-Z_a-z].
 static void
 EmitWordCheck(RegExpMacroAssembler* assembler,
-              jit::Label* word, jit::Label* non_word, bool fall_through_on_word)
+              jit::Label* word, jit::Label* non_word, bool fall_through_on_word,
+              bool unicode_ignore_case)
 {
-    if (assembler->CheckSpecialCharacterClass(fall_through_on_word ? 'w' : 'W',
+    if (!unicode_ignore_case &&
+        assembler->CheckSpecialCharacterClass(fall_through_on_word ? 'w' : 'W',
                                               fall_through_on_word ? non_word : word))
     {
         // Optimized implementation available.
         return;
+    }
+
+    if (unicode_ignore_case) {
+        assembler->CheckCharacter(0x017F, word);
+        assembler->CheckCharacter(0x212A, word);
     }
 
     assembler->CheckCharacterGT('z', non_word);
@@ -3017,7 +3050,8 @@ AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler, Trace* trace)
             assembler->LoadCurrentCharacter(trace->cp_offset(), &before_non_word);
         }
         // Fall through on non-word.
-        EmitWordCheck(assembler, &before_word, &before_non_word, false);
+        EmitWordCheck(assembler, &before_word, &before_non_word, false,
+                      compiler->unicode() && compiler->ignore_case());
         // Next character is not a word character.
         assembler->Bind(&before_non_word);
         jit::Label ok;
@@ -3057,7 +3091,8 @@ AssertionNode::BacktrackIfPrevious(RegExpCompiler* compiler,
     // We already checked that we are not at the start of input so it must be
     // OK to load the previous character.
     assembler->LoadCurrentCharacter(new_trace.cp_offset() - 1, &dummy, false);
-    EmitWordCheck(assembler, word, non_word, backtrack_if_previous == kIsNonWord);
+    EmitWordCheck(assembler, word, non_word, backtrack_if_previous == kIsNonWord,
+                  compiler->unicode() && compiler->ignore_case());
 
     assembler->Bind(&fall_through);
     on_success()->Emit(compiler, &new_trace);
@@ -3502,7 +3537,7 @@ static void
 EmitCharClass(LifoAlloc* alloc,
               RegExpMacroAssembler* macro_assembler,
               RegExpCharacterClass* cc,
-              bool ascii,
+              bool latin1,
               jit::Label* on_failure,
               int cp_offset,
               bool check_offset,
@@ -3513,7 +3548,7 @@ EmitCharClass(LifoAlloc* alloc,
         CharacterRange::Canonicalize(ranges);
     }
 
-    int max_char = MaximumCharacter(ascii);
+    int max_char = MaximumCharacter(latin1);
     int range_count = ranges.length();
 
     int last_valid_range = range_count - 1;
@@ -3631,49 +3666,44 @@ EmitSimpleCharacter(RegExpCompiler* compiler,
     return bound_checked;
 }
 
-// Only emits non-letters (things that don't have case).  Only used for case
-// independent matches.
+// Emit character for case independent match, when GetCaseIndependentLetters
+// returns single character.
+// This is used by the following 2 cases:
+//   * non-letters (things that don't have case)
+//   * letters that map across Latin1 and non-Latin1, and non-Latin1 case is
+//     filtered out because of Latin1 match
 static inline bool
-EmitAtomNonLetter(RegExpCompiler* compiler,
-                  char16_t c,
-                  jit::Label* on_failure,
-                  int cp_offset,
-                  bool check,
-                  bool preloaded)
+EmitAtomSingle(RegExpCompiler* compiler,
+               char16_t c,
+               jit::Label* on_failure,
+               int cp_offset,
+               bool check,
+               bool preloaded)
 {
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
-    bool ascii = compiler->ascii();
+    bool latin1 = compiler->latin1();
     char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-    int length = GetCaseIndependentLetters(c, ascii, compiler->unicode(), chars);
-    if (length < 1) {
-        // This can't match.  Must be an ASCII subject and a non-ASCII character.
-        // We do not need to do anything since the ASCII pass already handled this.
-        return false;  // Bounds not checked.
-    }
+    int length = GetCaseIndependentLetters(c, latin1, compiler->unicode(), chars);
+    if (length != 1)
+        return false;
+
     bool checked = false;
-    // We handle the length > 1 case in a later pass.
-    if (length == 1) {
-        if (ascii && c > kMaxOneByteCharCode) {
-            // Can't match - see above.
-            return false;  // Bounds not checked.
-        }
-        if (!preloaded) {
-            macro_assembler->LoadCurrentCharacter(cp_offset, on_failure, check);
-            checked = check;
-        }
-        macro_assembler->CheckNotCharacter(c, on_failure);
+    if (!preloaded) {
+        macro_assembler->LoadCurrentCharacter(cp_offset, on_failure, check);
+        checked = check;
     }
+    macro_assembler->CheckNotCharacter(chars[0], on_failure);
     return checked;
 }
 
 static bool
 ShortCutEmitCharacterPair(RegExpMacroAssembler* macro_assembler,
-                          bool ascii,
+                          bool latin1,
                           char16_t c1,
                           char16_t c2,
                           jit::Label* on_failure)
 {
-    char16_t char_mask = MaximumCharacter(ascii);
+    char16_t char_mask = MaximumCharacter(latin1);
 
     MOZ_ASSERT(c1 != c2);
     if (c1 > c2) {
@@ -3707,20 +3737,20 @@ ShortCutEmitCharacterPair(RegExpMacroAssembler* macro_assembler,
     return false;
 }
 
-// Only emits letters (things that have case).  Only used for case independent
-// matches.
+// Emit character for case independent match, when GetCaseIndependentLetters
+// returns multiple characters.
 static inline bool
-EmitAtomLetter(RegExpCompiler* compiler,
-               char16_t c,
-               jit::Label* on_failure,
-               int cp_offset,
-               bool check,
-               bool preloaded)
+EmitAtomMulti(RegExpCompiler* compiler,
+              char16_t c,
+              jit::Label* on_failure,
+              int cp_offset,
+              bool check,
+              bool preloaded)
 {
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
-    bool ascii = compiler->ascii();
+    bool latin1 = compiler->latin1();
     char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-    int length = GetCaseIndependentLetters(c, ascii, compiler->unicode(), chars);
+    int length = GetCaseIndependentLetters(c, latin1, compiler->unicode(), chars);
     if (length <= 1) return false;
     // We may not need to check against the end of the input string
     // if this character lies before a character that matched.
@@ -3731,7 +3761,7 @@ EmitAtomLetter(RegExpCompiler* compiler,
     switch (length) {
       case 2: {
         if (ShortCutEmitCharacterPair(macro_assembler,
-                                      ascii,
+                                      latin1,
                                       chars[0],
                                       chars[1],
                                       on_failure)) {
@@ -3795,7 +3825,7 @@ TextNode::TextEmitPass(RegExpCompiler* compiler,
                        int* checked_up_to)
 {
     RegExpMacroAssembler* assembler = compiler->macro_assembler();
-    bool ascii = compiler->ascii();
+    bool latin1 = compiler->latin1();
     jit::Label* backtrack = trace->backtrack();
     QuickCheckDetails* quick_check = trace->quick_check_performed();
     int element_count = elements().length();
@@ -3809,21 +3839,21 @@ TextNode::TextEmitPass(RegExpCompiler* compiler,
                 if (DeterminedAlready(quick_check, elm.cp_offset() + j)) continue;
                 EmitCharacterFunction* emit_function = nullptr;
                 switch (pass) {
-                  case NON_ASCII_MATCH:
-                    MOZ_ASSERT(ascii);
-                    if (quarks[j] > kMaxOneByteCharCode) {
+                  case NON_LATIN1_MATCH:
+                    MOZ_ASSERT(latin1);
+                    if (!IsLatin1Equivalent(quarks[j], compiler)) {
                         assembler->JumpOrBacktrack(backtrack);
                         return;
                     }
                     break;
-                  case NON_LETTER_CHARACTER_MATCH:
-                    emit_function = &EmitAtomNonLetter;
+                  case CASE_SINGLE_CHARACTER_MATCH:
+                    emit_function = &EmitAtomSingle;
                     break;
                   case SIMPLE_CHARACTER_MATCH:
                     emit_function = &EmitSimpleCharacter;
                     break;
-                  case CASE_CHARACTER_MATCH:
-                    emit_function = &EmitAtomLetter;
+                  case CASE_MUTLI_CHARACTER_MATCH:
+                    emit_function = &EmitAtomMulti;
                     break;
                   default:
                     break;
@@ -3847,7 +3877,7 @@ TextNode::TextEmitPass(RegExpCompiler* compiler,
                 EmitCharClass(alloc(),
                               assembler,
                               cc,
-                              ascii,
+                              latin1,
                               backtrack,
                               cp_offset,
                               *checked_up_to < cp_offset,
@@ -3872,7 +3902,7 @@ TextNode::SkipPass(int int_pass, bool ignore_case)
     TextEmitPassType pass = static_cast<TextEmitPassType>(int_pass);
     if (ignore_case)
         return pass == SIMPLE_CHARACTER_MATCH;
-    return pass == NON_LETTER_CHARACTER_MATCH || pass == CASE_CHARACTER_MATCH;
+    return pass == CASE_SINGLE_CHARACTER_MATCH || pass == CASE_MUTLI_CHARACTER_MATCH;
 }
 
 // This generates the code to match a text node.  A text node can contain
@@ -3893,9 +3923,9 @@ TextNode::Emit(RegExpCompiler* compiler, Trace* trace)
         return;
     }
 
-    if (compiler->ascii()) {
+    if (compiler->latin1()) {
         int dummy = 0;
-        TextEmitPass(compiler, NON_ASCII_MATCH, false, trace, false, &dummy);
+        TextEmitPass(compiler, NON_LATIN1_MATCH, false, trace, false, &dummy);
     }
 
     bool first_elt_done = false;
@@ -4080,8 +4110,8 @@ ChoiceNode::CalculatePreloadCharacters(RegExpCompiler* compiler, int eats_at_lea
 {
     int preload_characters = Min(4, eats_at_least);
     if (compiler->macro_assembler()->CanReadUnaligned()) {
-        bool ascii = compiler->ascii();
-        if (ascii) {
+        bool latin1 = compiler->latin1();
+        if (latin1) {
             if (preload_characters > 4)
                 preload_characters = 4;
             // We can't preload 3 characters because there is no machine instruction
@@ -4122,7 +4152,7 @@ TextNode::GetSuccessorOfOmnivorousTextNode(RegExpCompiler* compiler)
     if (ranges.length() != 1)
         return nullptr;
 
-    uint32_t max_char = MaximumCharacter(compiler->ascii());
+    uint32_t max_char = MaximumCharacter(compiler->latin1());
     return ranges[0].IsEverything(max_char) ? on_success() : nullptr;
 }
 
@@ -4298,7 +4328,7 @@ ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace)
     if (eats_at_least == kEatsAtLeastNotYetInitialized) {
         // Save some time by looking at most one machine word ahead.
         eats_at_least =
-            EatsAtLeast(compiler->ascii() ? 4 : 2, kRecursionBudget, not_at_start);
+            EatsAtLeast(compiler->latin1() ? 4 : 2, kRecursionBudget, not_at_start);
     }
     int preload_characters = CalculatePreloadCharacters(compiler, eats_at_least);
 
@@ -4652,7 +4682,7 @@ RegExpNode::EmitQuickCheck(RegExpCompiler* compiler,
     GetQuickCheckDetails(
                          details, compiler, 0, trace->at_start() == Trace::FALSE_VALUE);
     if (details->cannot_match()) return false;
-    if (!details->Rationalize(compiler->ascii())) return false;
+    if (!details->Rationalize(compiler->latin1())) return false;
     MOZ_ASSERT(details->characters() == 1 ||
                compiler->macro_assembler()->CanReadUnaligned());
     uint32_t mask = details->mask();
@@ -4672,15 +4702,15 @@ RegExpNode::EmitQuickCheck(RegExpCompiler* compiler,
     if (details->characters() == 1) {
         // If number of characters preloaded is 1 then we used a byte or 16 bit
         // load so the value is already masked down.
-        uint32_t char_mask = MaximumCharacter(compiler->ascii());
+        uint32_t char_mask = MaximumCharacter(compiler->latin1());
         if ((mask & char_mask) == char_mask) need_mask = false;
         mask &= char_mask;
     } else {
-        // For 2-character preloads in ASCII mode or 1-character preloads in
+        // For 2-character preloads in LATIN1 mode or 1-character preloads in
         // TWO_BYTE mode we also use a 16 bit load with zero extend.
-        if (details->characters() == 2 && compiler->ascii()) {
+        if (details->characters() == 2 && compiler->latin1()) {
             if ((mask & 0xffff) == 0xffff) need_mask = false;
-        } else if (details->characters() == 1 && !compiler->ascii()) {
+        } else if (details->characters() == 1 && !compiler->latin1()) {
             if ((mask & 0xffff) == 0xffff) need_mask = false;
         } else {
             if (mask == 0xffffffff) need_mask = false;
@@ -4808,7 +4838,7 @@ TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
 {
     MOZ_ASSERT(characters_filled_in < details->characters());
     int characters = details->characters();
-    int char_mask = MaximumCharacter(compiler->ascii());
+    int char_mask = MaximumCharacter(compiler->latin1());
 
     for (size_t k = 0; k < elements().length(); k++) {
         TextElement elm = elements()[k];
@@ -4819,9 +4849,9 @@ TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                     details->positions(characters_filled_in);
                 char16_t c = quarks[i];
                 if (c > char_mask) {
-                    // If we expect a non-ASCII character from an ASCII string,
+                    // If we expect a non-LATIN1 character from an LATIN1 string,
                     // there is no way we can match. Not even case independent
-                    // matching can turn an ASCII character into non-ASCII or
+                    // matching can turn an LATIN1 character into non-LATIN1 or
                     // vice versa.
                     details->set_cannot_match();
                     pos->determines_perfectly = false;
@@ -4829,7 +4859,7 @@ TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                 }
                 if (compiler->ignore_case()) {
                     char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-                    size_t length = GetCaseIndependentLetters(c, compiler->ascii(),
+                    size_t length = GetCaseIndependentLetters(c, compiler->latin1(),
                                                               compiler->unicode(), chars);
                     MOZ_ASSERT(length != 0);  // Can only happen if c > char_mask (see above).
                     if (length == 1) {
@@ -4960,7 +4990,7 @@ QuickCheckDetails::Clear()
 }
 
 void
-QuickCheckDetails::Advance(int by, bool ascii)
+QuickCheckDetails::Advance(int by)
 {
     MOZ_ASSERT(by >= 0);
     if (by >= characters_) {
@@ -4982,10 +5012,10 @@ QuickCheckDetails::Advance(int by, bool ascii)
 }
 
 bool
-QuickCheckDetails::Rationalize(bool is_ascii)
+QuickCheckDetails::Rationalize(bool is_latin1)
 {
     bool found_useful_op = false;
-    uint32_t char_mask = MaximumCharacter(is_ascii);
+    uint32_t char_mask = MaximumCharacter(is_latin1);
 
     mask_ = 0;
     value_ = 0;
@@ -4996,7 +5026,7 @@ QuickCheckDetails::Rationalize(bool is_ascii)
             found_useful_op = true;
         mask_ |= (pos->mask & char_mask) << char_shift;
         value_ |= (pos->value & char_mask) << char_shift;
-        char_shift += is_ascii ? 8 : 16;
+        char_shift += is_latin1 ? 8 : 16;
     }
     return found_useful_op;
 }

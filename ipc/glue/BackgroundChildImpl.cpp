@@ -23,12 +23,15 @@
 #include "mozilla/dom/indexedDB/PBackgroundIDBFactoryChild.h"
 #include "mozilla/dom/indexedDB/PBackgroundIndexedDBUtilsChild.h"
 #include "mozilla/dom/ipc/BlobChild.h"
+#include "mozilla/dom/ipc/MemoryStreamChild.h"
 #include "mozilla/dom/quota/PQuotaChild.h"
 #include "mozilla/dom/GamepadEventChannelChild.h"
 #include "mozilla/dom/GamepadTestChannelChild.h"
 #include "mozilla/dom/MessagePortChild.h"
+#include "mozilla/ipc/IPCStreamAlloc.h"
 #include "mozilla/ipc/PBackgroundTestChild.h"
-#include "mozilla/ipc/PSendStreamChild.h"
+#include "mozilla/ipc/PChildToParentStreamChild.h"
+#include "mozilla/ipc/PParentToChildStreamChild.h"
 #include "mozilla/layout/VsyncChild.h"
 #include "mozilla/net/PUDPSocketChild.h"
 #include "mozilla/dom/network/UDPSocketChild.h"
@@ -136,9 +139,7 @@ BackgroundChildImpl::ProcessingError(Result aCode, const char* aReason)
       MOZ_CRASH("Unknown error code!");
   }
 
-  // This is just MOZ_CRASH() un-inlined so that we can pass the result code as
-  // a string. MOZ_CRASH() only supports string literals at the moment.
-  MOZ_ReportCrash(abortMessage.get(), __FILE__, __LINE__); MOZ_REALLY_CRASH();
+  MOZ_CRASH_UNSAFE_PRINTF("%s: %s", abortMessage.get(), aReason);
 }
 
 void
@@ -212,6 +213,19 @@ BackgroundChildImpl::DeallocPBlobChild(PBlobChild* aActor)
   MOZ_ASSERT(aActor);
 
   mozilla::dom::BlobChild::Destroy(aActor);
+  return true;
+}
+
+PMemoryStreamChild*
+BackgroundChildImpl::AllocPMemoryStreamChild(const uint64_t& aSize)
+{
+  return new mozilla::dom::MemoryStreamChild();
+}
+
+bool
+BackgroundChildImpl::DeallocPMemoryStreamChild(PMemoryStreamChild* aActor)
+{
+  delete aActor;
   return true;
 }
 
@@ -405,14 +419,27 @@ BackgroundChildImpl::DeallocPMessagePortChild(PMessagePortChild* aActor)
   return true;
 }
 
-PSendStreamChild*
-BackgroundChildImpl::AllocPSendStreamChild()
+PChildToParentStreamChild*
+BackgroundChildImpl::AllocPChildToParentStreamChild()
 {
-  MOZ_CRASH("PSendStreamChild actors should be manually constructed!");
+  MOZ_CRASH("PChildToParentStreamChild actors should be manually constructed!");
 }
 
 bool
-BackgroundChildImpl::DeallocPSendStreamChild(PSendStreamChild* aActor)
+BackgroundChildImpl::DeallocPChildToParentStreamChild(PChildToParentStreamChild* aActor)
+{
+  delete aActor;
+  return true;
+}
+
+PParentToChildStreamChild*
+BackgroundChildImpl::AllocPParentToChildStreamChild()
+{
+  return mozilla::ipc::AllocPParentToChildStreamChild();
+}
+
+bool
+BackgroundChildImpl::DeallocPParentToChildStreamChild(PParentToChildStreamChild* aActor)
 {
   delete aActor;
   return true;

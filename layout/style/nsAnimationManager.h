@@ -15,8 +15,11 @@
 
 class nsIGlobalObject;
 class nsStyleContext;
+struct nsStyleDisplay;
+struct ServoComputedValues;
 
 namespace mozilla {
+struct ServoComputedValuesWithParent;
 namespace css {
 class Declaration;
 } /* namespace css */
@@ -26,6 +29,7 @@ class Promise;
 } /* namespace dom */
 
 enum class CSSPseudoElementType : uint8_t;
+struct NonOwningAnimationTarget;
 
 struct AnimationEventInfo {
   RefPtr<dom::Element> mElement;
@@ -110,8 +114,6 @@ public:
   void PauseFromStyle();
   void CancelFromStyle() override
   {
-    mOwningElement = OwningElementRef();
-
     // When an animation is disassociated with style it enters an odd state
     // where its composite order is undefined until it first transitions
     // out of the idle state.
@@ -126,10 +128,15 @@ public:
     mNeedsNewAnimationIndexWhenRun = true;
 
     Animation::CancelFromStyle();
+
+    // We need to do this *after* calling CancelFromStyle() since
+    // CancelFromStyle might synchronously trigger a cancel event for which
+    // we need an owning element to target the event at.
+    mOwningElement = OwningElementRef();
   }
 
   void Tick() override;
-  void QueueEvents();
+  void QueueEvents(StickyTimeDuration aActiveTime = StickyTimeDuration());
 
   bool IsStylePaused() const { return mIsStylePaused; }
 
@@ -157,6 +164,10 @@ public:
   // True for animations that are generated from CSS markup and continue to
   // reflect changes to that markup.
   bool IsTiedToMarkup() const { return mOwningElement.IsSet(); }
+
+  void MaybeQueueCancelEvent(StickyTimeDuration aActiveTime) override {
+    QueueEvents(aActiveTime);
+  }
 
 protected:
   virtual ~CSSAnimation()
@@ -314,6 +325,15 @@ public:
                         mozilla::dom::Element* aElement);
 
   /**
+   * This function does the same thing as the above UpdateAnimations()
+   * but with servo's computed values.
+   */
+  void UpdateAnimations(
+    mozilla::dom::Element* aElement,
+    mozilla::CSSPseudoElementType aPseudoType,
+    const mozilla::ServoComputedValuesWithParent& aServoValues);
+
+  /**
    * Add a pending event.
    */
   void QueueEvent(mozilla::AnimationEventInfo&& aEventInfo)
@@ -337,21 +357,15 @@ public:
   void SortEvents()      { mEventDispatcher.SortEvents(); }
   void ClearEventQueue() { mEventDispatcher.ClearEventQueue(); }
 
-  // Stop animations on the element. This method takes the real element
-  // rather than the element for the generated content for animations on
-  // ::before and ::after.
-  void StopAnimationsForElement(mozilla::dom::Element* aElement,
-                                mozilla::CSSPseudoElementType aPseudoType);
-
 protected:
   ~nsAnimationManager() override = default;
 
 private:
-
-  void BuildAnimations(nsStyleContext* aStyleContext,
-                       mozilla::dom::Element* aTarget,
-                       CSSAnimationCollection* aCollection,
-                       OwningCSSAnimationPtrArray& aAnimations);
+  template<class BuilderType>
+  void DoUpdateAnimations(
+    const mozilla::NonOwningAnimationTarget& aTarget,
+    const nsStyleDisplay& aStyleDisplay,
+    BuilderType& aBuilder);
 
   mozilla::DelayedEventDispatcher<mozilla::AnimationEventInfo> mEventDispatcher;
 };

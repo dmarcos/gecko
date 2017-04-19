@@ -324,23 +324,22 @@ IMContextWrapper::GetTextEventDispatcher()
   return dispatcher;
 }
 
-nsIMEUpdatePreference
-IMContextWrapper::GetIMEUpdatePreference() const
+NS_IMETHODIMP_(IMENotificationRequests)
+IMContextWrapper::GetIMENotificationRequests()
 {
     // While a plugin has focus, IMContextWrapper doesn't need any
     // notifications.
     if (mInputContext.mIMEState.mEnabled == IMEState::PLUGIN) {
-      return nsIMEUpdatePreference();
+      return IMENotificationRequests();
     }
 
-    nsIMEUpdatePreference::Notifications notifications =
-        nsIMEUpdatePreference::NOTIFY_NOTHING;
+    IMENotificationRequests::Notifications notifications =
+        IMENotificationRequests::NOTIFY_NOTHING;
     // If it's not enabled, we don't need position change notification.
     if (IsEnabled()) {
-        notifications |= nsIMEUpdatePreference::NOTIFY_POSITION_CHANGE;
+        notifications |= IMENotificationRequests::NOTIFY_POSITION_CHANGE;
     }
-    nsIMEUpdatePreference updatePreference(notifications);
-    return updatePreference;
+    return IMENotificationRequests(notifications);
 }
 
 void
@@ -1642,7 +1641,7 @@ IMContextWrapper::CreateTextRangeArray(GtkIMContext* aContext,
                 MOZ_LOG(gGtkIMLog, LogLevel::Warning,
                     ("0x%p   CreateTextRangeArray(), WARNING, failed to "
                      "convert to UTF-16 string before the caret "
-                     "(cursor_pos_in_chars=%d, caretOffset=%d)",
+                     "(cursor_pos_in_chars=%d, caretOffset=%ld)",
                      this, cursor_pos_in_chars, caretOffset));
             } else {
                 caretOffsetInUTF16 = static_cast<uint32_t>(caretOffset);
@@ -2175,7 +2174,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
     if (offsetInUTF8Characters < 0) {
         MOZ_LOG(gGtkIMLog, LogLevel::Error,
             ("0x%p   DeleteText(), FAILED, aOffset is too small for "
-             "current cursor pos (computed offset: %d)",
+             "current cursor pos (computed offset: %ld)",
              this, offsetInUTF8Characters));
         return NS_ERROR_FAILURE;
     }
@@ -2190,7 +2189,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
     if (countOfCharactersInUTF8 < endInUTF8Characters) {
         MOZ_LOG(gGtkIMLog, LogLevel::Error,
             ("0x%p   DeleteText(), FAILED, aNChars is too large for "
-             "current contents (content length: %d, computed end offset: %d)",
+             "current contents (content length: %ld, computed end offset: %ld)",
              this, countOfCharactersInUTF8, endInUTF8Characters));
         return NS_ERROR_FAILURE;
     }

@@ -20,10 +20,6 @@
 #include "secrng.h" /* for RNG_SystemRNG() */
 #include "secmpi.h"
 
-#ifdef UNSAFE_FUZZER_MODE
-#include "det_rng.h"
-#endif
-
 /* PRNG_SEEDLEN defined in NIST SP 800-90 section 10.1
  * for SHA-1, SHA-224, and SHA-256 it's 440 bits.
  * for SHA-384 and SHA-512 it's 888 bits */
@@ -99,7 +95,8 @@ struct RNGContextStr {
      * RNG_RandomUpdate. */
     PRUint8 additionalDataCache[PRNG_ADDITONAL_DATA_CACHE_SIZE];
     PRUint32 additionalAvail;
-    PRBool isValid; /* false if RNG reaches an invalid state */
+    PRBool isValid;   /* false if RNG reaches an invalid state */
+    PRBool isKatTest; /* true if running NIST PRNG KAT tests */
 };
 
 typedef struct RNGContextStr RNGContext;
@@ -150,7 +147,7 @@ prng_Hash_df(PRUint8 *requested_bytes, unsigned int no_of_bytes_to_return,
 }
 
 /*
- * Hash_DRBG Instantiate NIST SP 800-80 10.1.1.2
+ * Hash_DRBG Instantiate NIST SP 800-90 10.1.1.2
  *
  * NOTE: bytes & len are entropy || nonce || personalization_string. In
  * normal operation, NSS calculates them all together in a single call.
@@ -158,9 +155,11 @@ prng_Hash_df(PRUint8 *requested_bytes, unsigned int no_of_bytes_to_return,
 static SECStatus
 prng_instantiate(RNGContext *rng, const PRUint8 *bytes, unsigned int len)
 {
-    if (len < PRNG_SEEDLEN) {
-        /* if the seedlen is to small, it's probably because we failed to get
-     * enough random data */
+    if (!rng->isKatTest && len < PRNG_SEEDLEN) {
+        /* If the seedlen is too small, it's probably because we failed to get
+         * enough random data.
+         * This is stricter than NIST SP800-90A requires. Don't enforce it for
+         * tests. */
         PORT_SetError(SEC_ERROR_NEED_RANDOM);
         return SECFailure;
     }
@@ -272,7 +271,7 @@ prng_reseed_test(RNGContext *rng, const PRUint8 *entropy,
 
 #define PRNG_ADD_BITS_AND_CARRY(dest, dest_len, add, len, carry) \
     PRNG_ADD_BITS(dest, dest_len, add, len, carry)               \
-    PRNG_ADD_CARRY_ONLY(dest, dest_len - len, carry)
+    PRNG_ADD_CARRY_ONLY(dest, dest_len - len - 1, carry)
 
 /*
  * This function expands the internal state of the prng to fulfill any number
@@ -398,10 +397,8 @@ static PRStatus
 rng_init(void)
 {
     PRUint8 bytes[PRNG_SEEDLEN * 2]; /* entropy + nonce */
-#ifndef UNSAFE_FUZZER_MODE
     unsigned int numBytes;
     SECStatus rv = SECSuccess;
-#endif
 
     if (globalrng == NULL) {
         /* bytes needs to have enough space to hold
@@ -418,7 +415,6 @@ rng_init(void)
             return PR_FAILURE;
         }
 
-#ifndef UNSAFE_FUZZER_MODE
         /* Try to get some seed data for the RNG */
         numBytes = (unsigned int)RNG_SystemRNG(bytes, sizeof bytes);
         PORT_Assert(numBytes == 0 || numBytes == sizeof bytes);
@@ -441,10 +437,10 @@ rng_init(void)
         if (rv != SECSuccess) {
             return PR_FAILURE;
         }
-#endif
 
         /* the RNG is in a valid state */
         globalrng->isValid = PR_TRUE;
+        globalrng->isKatTest = PR_FALSE;
 
         /* fetch one random value so that we can populate rng->oldV for our
          * continous random number test. */
@@ -658,21 +654,7 @@ prng_GenerateGlobalRandomBytes(RNGContext *rng,
 SECStatus
 RNG_GenerateGlobalRandomBytes(void *dest, size_t len)
 {
-#ifdef UNSAFE_FUZZER_MODE
-    return prng_GenerateDeterministicRandomBytes(globalrng->lock, dest, len);
-#else
     return prng_GenerateGlobalRandomBytes(globalrng, dest, len);
-#endif
-}
-
-SECStatus
-RNG_ResetForFuzzing(void)
-{
-#ifdef UNSAFE_FUZZER_MODE
-    return prng_ResetForFuzzing(globalrng->lock);
-#else
-    return SECFailure;
-#endif
 }
 
 void
@@ -699,6 +681,17 @@ RNG_RNGShutdown(void)
   * allows us to test the internal random number generator without losing
   * entropy we may have previously collected. */
 RNGContext testContext;
+
+SECStatus
+PRNGTEST_Instantiate_Kat(const PRUint8 *entropy, unsigned int entropy_len,
+                         const PRUint8 *nonce, unsigned int nonce_len,
+                         const PRUint8 *personal_string, unsigned int ps_len)
+{
+    testContext.isKatTest = PR_TRUE;
+    return PRNGTEST_Instantiate(entropy, entropy_len,
+                                nonce, nonce_len,
+                                personal_string, ps_len);
+}
 
 /*
  * Test vector API. Use NIST SP 800-90 general interface so one of the

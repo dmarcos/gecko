@@ -40,6 +40,11 @@ extern LogModule* GetMediaManagerLog();
 #define LOG(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Debug, msg)
 #define LOG_FRAMES(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Verbose, msg)
 
+LogModule* AudioLogModule() {
+  static mozilla::LazyLogModule log("AudioLatency");
+  return static_cast<LogModule*>(log);
+}
+
 /**
  * Webrtc microphone source source.
  */
@@ -198,6 +203,8 @@ MediaEngineWebRTCMicrophoneSource::MediaEngineWebRTCMicrophoneSource(
   , mTrackID(TRACK_NONE)
   , mStarted(false)
   , mSampleFrequency(MediaEngine::DEFAULT_SAMPLE_RATE)
+  , mTotalFrames(0)
+  , mLastLogFrames(0)
   , mPlayoutDelay(0)
   , mNullTransport(nullptr)
   , mSkipProcessing(false)
@@ -373,10 +380,10 @@ MediaEngineWebRTCMicrophoneSource::SetLastPrefs(
 
   RefPtr<MediaEngineWebRTCMicrophoneSource> that = this;
 
-  NS_DispatchToMainThread(media::NewRunnableFrom([this, that, aPrefs]() mutable {
-    mSettings.mEchoCancellation.Value() = aPrefs.mAecOn;
-    mSettings.mMozAutoGainControl.Value() = aPrefs.mAgcOn;
-    mSettings.mMozNoiseSuppression.Value() = aPrefs.mNoiseOn;
+  NS_DispatchToMainThread(media::NewRunnableFrom([that, aPrefs]() mutable {
+    that->mSettings.mEchoCancellation.Value() = aPrefs.mAecOn;
+    that->mSettings.mMozAutoGainControl.Value() = aPrefs.mAgcOn;
+    that->mSettings.mMozNoiseSuppression.Value() = aPrefs.mNoiseOn;
     return NS_OK;
   }));
 }
@@ -525,7 +532,7 @@ MediaEngineWebRTCMicrophoneSource::NotifyPull(MediaStreamGraph *aGraph,
                                               const PrincipalHandle& aPrincipalHandle)
 {
   // Ignore - we push audio data
-  LOG_FRAMES(("NotifyPull, desired = %ld", (int64_t) aDesiredTime));
+  LOG_FRAMES(("NotifyPull, desired = %" PRId64, (int64_t) aDesiredTime));
 }
 
 void
@@ -576,6 +583,16 @@ MediaEngineWebRTCMicrophoneSource::InsertInGraph(const T* aBuffer,
 {
   if (mState != kStarted) {
     return;
+  }
+
+  if (MOZ_LOG_TEST(AudioLogModule(), LogLevel::Debug)) {
+    mTotalFrames += aFrames;
+    if (mTotalFrames > mLastLogFrames + mSampleFrequency) { // ~ 1 second
+      MOZ_LOG(AudioLogModule(), LogLevel::Debug,
+              ("%p: Inserting %" PRIuSIZE " samples into graph, total frames = %" PRIu64,
+               (void*)this, aFrames, mTotalFrames));
+      mLastLogFrames = mTotalFrames;
+    }
   }
 
   size_t len = mSources.Length();

@@ -8,14 +8,14 @@
  */
 
 add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/l10n");
+  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
   let { tab, monitor } = yield initNetMonitor(JSON_B64_URL);
   info("Starting test... ");
 
-  let { document, NetMonitorView } = monitor.panelWin;
-  let { RequestsMenu } = NetMonitorView;
+  let { document, gStore, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
 
-  RequestsMenu.lazyUpdate = false;
+  gStore.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -24,9 +24,10 @@ add_task(function* () {
   yield wait;
 
   wait = waitForDOM(document, "#response-panel");
-  EventUtils.sendMouseEvent({ type: "mousedown" },
-    document.getElementById("details-pane-toggle"));
-  document.querySelector("#response-tab").click();
+  EventUtils.sendMouseEvent({ type: "click" },
+    document.querySelector(".network-details-panel-toggle"));
+  EventUtils.sendMouseEvent({ type: "click" },
+    document.querySelector("#response-tab"));
   yield wait;
 
   let tabpanel = document.querySelector("#response-panel");
@@ -36,7 +37,7 @@ add_task(function* () {
   let jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
   is(jsonView.textContent === L10N.getStr("jsonScopeName"), true,
     "The response json view has the intended visibility.");
-  is(tabpanel.querySelector(".editor-mount iframe") === null, true,
+  is(tabpanel.querySelector(".CodeMirror-code") === null, true,
     "The response editor doesn't have the intended visibility.");
   is(tabpanel.querySelector(".response-image-box") === null, true,
     "The response image box doesn't have the intended visibility.");
@@ -55,7 +56,7 @@ add_task(function* () {
 
   is(labels[0].textContent, "greeting",
     "The first json property name was incorrect.");
-  is(values[0].textContent, "\"This is a base 64 string.\"",
+  is(values[0].textContent, "This is a base 64 string.",
     "The first json property value was incorrect.");
 
   yield teardown(monitor);

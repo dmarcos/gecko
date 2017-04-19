@@ -381,12 +381,12 @@ add_task(function* log_message_with_params() {
   ob = function() {};
   ob.toJSON = function() {throw "oh noes JSON"};
   do_check_eq(formatMessage("Fail is ${sub}", {sub: ob}),
-              "Fail is (function () {})");
+              "Fail is (function() {})");
 
   // Fall back to .toString if both .toJSON and .toSource fail.
   ob.toSource = function() {throw "oh noes SOURCE"};
   do_check_eq(formatMessage("Fail is ${sub}", {sub: ob}),
-              "Fail is function () {}");
+              "Fail is function() {}");
 
   // Fall back to '[object]' if .toJSON, .toSource and .toString fail.
   ob.toString = function() {throw "oh noes STRING"};
@@ -404,13 +404,13 @@ add_task(function* log_message_with_params() {
               "Text with partial sub b");
 
   // We don't format internal fields stored in params.
-  do_check_eq(formatMessage("Params with _ ${}", {a: "b", _c: "d", _level:20, _message:"froo",
-                                                  _time:123456, _namespace:"here.there"}),
+  do_check_eq(formatMessage("Params with _ ${}", {a: "b", _c: "d", _level: 20, _message: "froo",
+                                                  _time: 123456, _namespace: "here.there"}),
               'Params with _ {"a":"b","_c":"d"}');
 
   // Don't print an empty params holder if all params are internal.
-  do_check_eq(formatMessage("All params internal", {_level:20, _message:"froo",
-                                                    _time:123456, _namespace:"here.there"}),
+  do_check_eq(formatMessage("All params internal", {_level: 20, _message: "froo",
+                                                    _time: 123456, _namespace: "here.there"}),
               "All params internal");
 
   // Format params with null and undefined values.
@@ -451,7 +451,7 @@ add_task(function* log_message_with_params() {
   /* eslint-disable object-shorthand */
   let vOf = {a: 1, valueOf: function() {throw "oh noes valueOf"}};
   do_check_eq(formatMessage("Broken valueOf ${}", vOf),
-              'Broken valueOf ({a:1, valueOf:(function () {throw "oh noes valueOf"})})');
+              'Broken valueOf ({a:1, valueOf:(function() {throw "oh noes valueOf"})})');
   /* eslint-enable object-shorthand */
 
   // Test edge cases of bad data to formatter:
@@ -545,7 +545,7 @@ add_task(function* log_message_with_params() {
   let appender = new MockAppender(mockFormatter);
   log.addAppender(appender);
 
-  let testParams = {a:1, b:2};
+  let testParams = {a: 1, b: 2};
   log.fatal("Test fatal", testParams);
   log.error("Test error", testParams);
   log.warn("Test warn", testParams);

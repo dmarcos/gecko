@@ -1,3 +1,6 @@
+// This file expects contextMenu to be defined in the scope it is loaded into.
+/* global contextMenu:true */
+
 var lastElement;
 
 function openContextMenuFor(element, shiftkey, waitForSpellCheck) {
@@ -12,12 +15,14 @@ function openContextMenuFor(element, shiftkey, waitForSpellCheck) {
     // run on them.
     function actuallyOpenContextMenuFor() {
       lastElement = element;
-      var eventDetails = { type : "contextmenu", button : 2, shiftKey : shiftkey };
+      var eventDetails = { type: "contextmenu", button: 2, shiftKey: shiftkey };
       synthesizeMouse(element, 2, 2, eventDetails, element.ownerGlobal);
     }
 
     if (waitForSpellCheck) {
-      var { onSpellCheck } = SpecialPowers.Cu.import("resource://gre/modules/AsyncSpellCheckTestHelper.jsm", {});
+      var { onSpellCheck } =
+        SpecialPowers.Cu.import(
+          "resource://testing-common/AsyncSpellCheckTestHelper.jsm", {});
       onSpellCheck(element, actuallyOpenContextMenuFor);
     } else {
       actuallyOpenContextMenuFor();
@@ -278,7 +283,9 @@ function* test_contextmenu(selector, menuItems, options = {}) {
   if (options.waitForSpellCheck) {
     info("Waiting for spell check");
     yield ContentTask.spawn(gBrowser.selectedBrowser, selector, function*(contentSelector) {
-      let {onSpellCheck} = Cu.import("resource://gre/modules/AsyncSpellCheckTestHelper.jsm", {});
+      let {onSpellCheck} =
+        Cu.import("resource://testing-common/AsyncSpellCheckTestHelper.jsm",
+                  {});
       let element = content.document.querySelector(contentSelector);
       yield new Promise(resolve => onSpellCheck(element, resolve));
       info("Spell check running");

@@ -7,12 +7,13 @@ do_get_profile();   // so we can use FxAccounts
 
 Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://services-common/utils.js");
-Cu.import("resource://gre/modules/ExtensionStorageSync.jsm");
+Cu.import("resource://services-crypto/utils.js");
 const {
   CollectionKeyEncryptionRemoteTransformer,
-  cryptoCollection,
+  CryptoCollection,
+  ExtensionStorageSync,
   idToKey,
-  extensionIdToCollectionId,
+  KeyRingEncryptionRemoteTransformer,
   keyToId,
 } = Cu.import("resource://gre/modules/ExtensionStorageSync.jsm", {});
 Cu.import("resource://services-sync/engines/extension-storage.js");
@@ -20,7 +21,6 @@ Cu.import("resource://services-sync/keys.js");
 Cu.import("resource://services-sync/util.js");
 
 /* globals BulkKeyBundle, CommonUtils, EncryptionRemoteTransformer */
-/* globals KeyRingEncryptionRemoteTransformer */
 /* globals Utils */
 
 function handleCannedResponse(cannedResponse, request, response) {
@@ -46,14 +46,18 @@ class KintoServer {
     this.httpServer = new HttpServer();
     this.httpServer.start(-1);
 
-    // Map<CollectionId, Set<Object>> corresponding to the data in the
-    // Kinto server
-    this.collections = new Map();
+    // Set<Object> corresponding to records that might be served.
+    // The format of these objects is defined in the documentation for #addRecord.
+    this.records = [];
+
+    // Collections that we have set up access to (see `installCollection`).
+    this.collections = new Set();
 
     // ETag to serve with responses
     this.etag = 1;
 
     this.port = this.httpServer.identity.primaryPort;
+
     // POST requests we receive from the client go here
     this.posts = [];
     // DELETEd buckets will go here.
@@ -117,7 +121,7 @@ class KintoServer {
       let body = JSON.parse(bodyStr);
       let defaults = body.defaults;
       for (let req of body.requests) {
-        let headers = Object.assign({}, defaults && defaults.headers || {}, req.headers);
+        let headers = Object.assign({}, (defaults && defaults.headers) || {}, req.headers);
         // FIXME: assert auth is "Bearer ...token..."
         this.posts.push(Object.assign({}, req, {headers}));
       }
@@ -153,8 +157,9 @@ class KintoServer {
       };
 
       if (this.conflicts.length > 0) {
-        const {collectionId, encrypted} = this.conflicts.shift();
-        this.collections.get(collectionId).add(encrypted);
+        const nextConflict = this.conflicts.shift();
+        this.records.push(nextConflict);
+        const {data} = nextConflict;
         dump(`responding with etag ${this.etag}\n`);
         postResponse = {
           responses: body.requests.map(req => {
@@ -164,7 +169,7 @@ class KintoServer {
               headers: {"ETag": this.etag}, // is this correct??
               body: {
                 details: {
-                  existing: encrypted,
+                  existing: data,
                 },
               },
             };
@@ -192,44 +197,85 @@ class KintoServer {
     });
   }
 
+  /**
+   * Add a record to those that can be served by this server.
+   *
+   * @param {Object} properties  An object describing the record that
+   *   should be served. The properties of this object are:
+   * - collectionId {string} This record should only be served if a
+   *   request is for this collection.
+   * - predicate {Function} If present, this record should only be served if the
+   *   predicate returns true. The predicate will be called with
+   *   {request: Request, response: Response, since: number, server: KintoServer}.
+   * - data {string} The record to serve.
+   * - conflict {boolean} If present and true, this record is added to
+   *   "conflicts" and won't be served, but will cause a conflict on
+   *   the next push.
+   */
+  addRecord(properties) {
+    if (!properties.conflict) {
+      this.records.push(properties);
+    } else {
+      this.conflicts.push(properties);
+    }
+
+    this.installCollection(properties.collectionId);
+  }
+
+  /**
+   * Tell the server to set up a route for this collection.
+   *
+   * This will automatically be called for any collection to which you `addRecord`.
+   *
+   * @param {string} collectionId   the collection whose route we
+   *    should set up.
+   */
   installCollection(collectionId) {
-    this.collections.set(collectionId, new Set());
-
+    if (this.collections.has(collectionId)) {
+      return;
+    }
+    this.collections.add(collectionId);
     const remoteRecordsPath = "/v1" + collectionRecordsPath(encodeURIComponent(collectionId));
+    this.httpServer.registerPathHandler(remoteRecordsPath, this.handleGetRecords.bind(this, collectionId));
+  }
 
-    function handleGetRecords(request, response) {
-      if (request.method != "GET") {
-        do_throw(`only GET is supported on ${remoteRecordsPath}`);
+  handleGetRecords(collectionId, request, response) {
+    if (request.method != "GET") {
+      do_throw(`only GET is supported on ${request.path}`);
+    }
+
+    let sinceMatch = request.queryString.match(/(^|&)_since=(\d+)/);
+    let since = sinceMatch && parseInt(sinceMatch[2], 10);
+
+    response.setStatusLine(null, 200, "OK");
+    response.setHeader("Content-Type", "application/json; charset=UTF-8");
+    response.setHeader("Date", (new Date()).toUTCString());
+    response.setHeader("ETag", this.etag.toString());
+
+    const records = this.records.filter(properties => {
+      if (properties.collectionId != collectionId) {
+        return false;
       }
 
-      response.setStatusLine(null, 200, "OK");
-      response.setHeader("Content-Type", "application/json; charset=UTF-8");
-      response.setHeader("Date", (new Date()).toUTCString());
-      response.setHeader("ETag", this.etag.toString());
-
-      const records = this.collections.get(collectionId);
-      // Can't JSON a Set directly, so convert to Array
-      let data = Array.from(records);
-      if (request.queryString.includes("_since=")) {
-        data = data.filter(r => !(r._inPast || false));
-      }
-
-      // Remove records that we only needed to serve once.
-      // FIXME: come up with a more coherent idea of time here.
-      // See bug 1321570.
-      for (const record of records) {
-        if (record._onlyOnce) {
-          records.delete(record);
+      if (properties.predicate) {
+        const predAllowed = properties.predicate({
+          request: request,
+          response: response,
+          since: since,
+          server: this,
+        });
+        if (!predAllowed) {
+          return false;
         }
       }
 
-      const body = JSON.stringify({
-        "data": data,
-      });
-      response.write(body);
-    }
+      return true;
+    }).map(properties => properties.data);
 
-    this.httpServer.registerPathHandler(remoteRecordsPath, handleGetRecords.bind(this));
+    const body = JSON.stringify({
+      "data": records,
+    });
+    response.write(body);
   }
 
   installDeleteBucket() {
@@ -247,9 +293,7 @@ class KintoServer {
 
       this.deletedBuckets.push(bucket);
       // Fake like this actually deletes the records.
-      for (const [, set] of this.collections) {
-        set.clear();
-      }
+      this.records = [];
 
       response.write(JSON.stringify({
         data: {
@@ -262,72 +306,50 @@ class KintoServer {
   }
 
   // Utility function to install a keyring at the start of a test.
-  installKeyRing(keysData, etag, {conflict = false} = {}) {
-    this.installCollection("storage-sync-crypto");
+  installKeyRing(fxaService, keysData, salts, etag, properties) {
     const keysRecord = {
       "id": "keys",
       "keys": keysData,
+      "salts": salts,
       "last_modified": etag,
     };
     this.etag = etag;
-    const methodName = conflict ? "encryptAndAddRecordWithConflict" : "encryptAndAddRecord";
-    this[methodName](new KeyRingEncryptionRemoteTransformer(),
-                     "storage-sync-crypto", keysRecord);
+    const transformer = new KeyRingEncryptionRemoteTransformer(fxaService);
+    this.encryptAndAddRecord(transformer, Object.assign({}, properties, {
+      collectionId: "storage-sync-crypto",
+      data: keysRecord,
+    }));
   }
 
-  // Add an already-encrypted record.
-  addRecord(collectionId, record) {
-    this.collections.get(collectionId).add(record);
-  }
-
-  // Add a record that is only served if no `_since` is present.
-  //
-  // Since in real life, Kinto only serves a record as part of a
-  // changes feed if `_since` is before the record's modification
-  // time, this can be helpful to test certain kinds of syncing logic.
-  //
-  // FIXME: tracking of "time" in this mock server really needs to be
-  // implemented correctly rather than these hacks. See bug 1321570.
-  addRecordInPast(collectionId, record) {
-    record._inPast = true;
-    this.addRecord(collectionId, record);
-  }
-
-  encryptAndAddRecord(transformer, collectionId, record) {
-    return transformer.encode(record).then(encrypted => {
-      this.addRecord(collectionId, encrypted);
+  encryptAndAddRecord(transformer, properties) {
+    return transformer.encode(properties.data).then(encrypted => {
+      this.addRecord(Object.assign({}, properties, {data: encrypted}));
     });
-  }
-
-  // Like encryptAndAddRecord, but add a flag that will only serve
-  // this record once.
-  //
-  // Since in real life, Kinto only serves a record as part of a changes feed
-  // once, this can be useful for testing complicated syncing logic.
-  //
-  // FIXME: This kind of logic really needs to be subsumed into some
-  // more-realistic tracking of "time" (simulated by etags). See bug 1321570.
-  encryptAndAddRecordOnlyOnce(transformer, collectionId, record) {
-    return transformer.encode(record).then(encrypted => {
-      encrypted._onlyOnce = true;
-      this.addRecord(collectionId, encrypted);
-    });
-  }
-
-  // Conflicts block the next push and then appear in the collection specified.
-  encryptAndAddRecordWithConflict(transformer, collectionId, record) {
-    return transformer.encode(record).then(encrypted => {
-      this.conflicts.push({collectionId, encrypted});
-    });
-  }
-
-  clearCollection(collectionId) {
-    this.collections.get(collectionId).clear();
   }
 
   stop() {
     this.httpServer.stop(() => { });
   }
+}
+
+/**
+ * Predicate that represents a record appearing at some time.
+ * Requests with "_since" before this time should see this record,
+ * unless the server itself isn't at this time yet (etag is before
+ * this time).
+ *
+ * Requests with _since after this time shouldn't see this record any
+ * more, since it hasn't changed after this time.
+ *
+ * @param {int} startTime  the etag at which time this record should
+ *    start being available (and thus, the predicate should start
+ *    returning true)
+ * @returns {Function}
+ */
+function appearsAt(startTime) {
+  return function({since, server}) {
+    return since < startTime && startTime < server.etag;
+  };
 }
 
 // Run a block of code with access to a KintoServer.
@@ -355,10 +377,10 @@ function* withContextAndServer(f) {
 }
 
 // Run a block of code with fxa mocked out to return a specific user.
+// Calls the given function with an ExtensionStorageSync instance that
+// was constructed using a mocked FxAccounts instance.
 function* withSignedInUser(user, f) {
-  const oldESSFxAccounts = ExtensionStorageSync._fxaService;
-  const oldERTFxAccounts = EncryptionRemoteTransformer.prototype._fxaService;
-  ExtensionStorageSync._fxaService = EncryptionRemoteTransformer.prototype._fxaService = {
+  let fxaServiceMock = {
     getSignedInUser() {
       return Promise.resolve(user);
     },
@@ -370,12 +392,29 @@ function* withSignedInUser(user, f) {
     },
   };
 
-  try {
-    yield* f();
-  } finally {
-    ExtensionStorageSync._fxaService = oldESSFxAccounts;
-    EncryptionRemoteTransformer.prototype._fxaService = oldERTFxAccounts;
-  }
+  let telemetryMock = {
+    _calls: [],
+    _histograms: {},
+    scalarSet(name, value) {
+      this._calls.push({method: "scalarSet", name, value});
+    },
+    keyedScalarSet(name, key, value) {
+      this._calls.push({method: "keyedScalarSet", name, key, value});
+    },
+    getKeyedHistogramById(name) {
+      let self = this;
+      return {
+        add(key, value) {
+          if (!self._histograms[name]) {
+            self._histograms[name] = [];
+          }
+          self._histograms[name].push(value);
+        },
+      };
+    },
+  };
+  let extensionStorageSync = new ExtensionStorageSync(fxaServiceMock, telemetryMock);
+  yield* f(extensionStorageSync, fxaServiceMock);
 }
 
 // Some assertions that make it easier to write tests about what was
@@ -408,12 +447,13 @@ function assertPostedUpdatedRecord(post, since) {
 
 // Assert that this post was an encrypted keyring, and produce the
 // decrypted body. Sanity check the body while we're here.
-const assertPostedEncryptedKeys = Task.async(function* (post) {
+const assertPostedEncryptedKeys = Task.async(function* (fxaService, post) {
   equal(post.path, collectionRecordsPath("storage-sync-crypto") + "/keys");
 
-  let body = yield new KeyRingEncryptionRemoteTransformer().decode(post.body.data);
+  let body = yield new KeyRingEncryptionRemoteTransformer(fxaService).decode(post.body.data);
   ok(body.keys, `keys object should be present in decoded body`);
   ok(body.keys.default, `keys object should have a default key`);
+  ok(body.salts, `salts object should be present in decoded body`);
   return body;
 });
 
@@ -428,12 +468,26 @@ function assertKeyRingKey(keyRing, extensionId, expectedKey, message) {
             message);
 }
 
+// Assert that this post was posted for a given extension.
+const assertExtensionRecord = Task.async(function* (fxaService, post, extension, key) {
+  const extensionId = extension.id;
+  const cryptoCollection = new CryptoCollection(fxaService);
+  const hashedId = "id-" + (yield cryptoCollection.hashWithExtensionSalt(keyToId(key), extensionId));
+  const collectionId = yield cryptoCollection.extensionIdToCollectionId(extensionId);
+  const transformer = new CollectionKeyEncryptionRemoteTransformer(cryptoCollection, extensionId);
+  equal(post.path, `${collectionRecordsPath(collectionId)}/${hashedId}`,
+        "decrypted data should be posted to path corresponding to its key");
+  let decoded = yield transformer.decode(post.body.data);
+  equal(decoded.key, key,
+        "decrypted data should have a key attribute corresponding to the extension data key");
+  return decoded;
+});
+
 // Tests using this ID will share keys in local storage, so be careful.
 const defaultExtensionId = "{13bdde76-4dc7-11e6-9bdc-54ee758d6342}";
 const defaultExtension = {id: defaultExtensionId};
 
 const BORING_KB = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const ANOTHER_KB = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0";
 const loggedInUser = {
   uid: "0123456789abcdef0123456789abcdef",
   kB: BORING_KB,
@@ -443,7 +497,6 @@ const loggedInUser = {
     },
   },
 };
-const defaultCollectionId = extensionIdToCollectionId(loggedInUser, defaultExtensionId);
 
 function uuid() {
   const uuidgen = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
@@ -476,60 +529,71 @@ add_task(function* test_key_to_id() {
 });
 
 add_task(function* test_extension_id_to_collection_id() {
-  const newKBUser = Object.assign(loggedInUser, {kB: ANOTHER_KB});
   const extensionId = "{9419cce6-5435-11e6-84bf-54ee758d6342}";
-  const extensionId2 = "{9419cce6-5435-11e6-84bf-54ee758d6343}";
+  // FIXME: this doesn't actually require the signed in user, but the
+  // extensionIdToCollectionId method exists on CryptoCollection,
+  // which needs an fxaService to be instantiated.
+  yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+    // Fake a static keyring since the server doesn't exist.
+    const salt = "Scgx8RJ8Y0rxMGFYArUiKeawlW+0zJyFmtTDvro9qPo=";
+    const cryptoCollection = new CryptoCollection(fxaService);
+    yield cryptoCollection._setSalt(extensionId, salt);
 
-  // "random" 32-char hex userid
-  equal(extensionIdToCollectionId(loggedInUser, extensionId),
-        "abf4e257dad0c89027f8f25bd196d4d69c100df375655a0c49f4cea7b791ea7d");
-  equal(extensionIdToCollectionId(loggedInUser, extensionId),
-        extensionIdToCollectionId(newKBUser, extensionId));
-  equal(extensionIdToCollectionId(loggedInUser, extensionId2),
-        "6584b0153336fb274912b31a3225c15a92b703cdc3adfe1917c1aa43122a52b8");
+    equal(yield cryptoCollection.extensionIdToCollectionId(extensionId),
+          "ext-0_QHA1P93_yJoj7ONisrR0lW6uN4PZ3Ii-rT-QOjtvo");
+  });
 });
 
-add_task(function* ensureKeysFor_posts_new_keys() {
+add_task(function* ensureCanSync_posts_new_keys() {
   const extensionId = uuid();
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
       server.installCollection("storage-sync-crypto");
       server.etag = 1000;
 
-      let newKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId]);
+      let newKeys = yield extensionStorageSync.ensureCanSync([extensionId]);
       ok(newKeys.hasKeysFor([extensionId]), `key isn't present for ${extensionId}`);
 
       let posts = server.getPosts();
       equal(posts.length, 1);
       const post = posts[0];
       assertPostedNewRecord(post);
-      const body = yield assertPostedEncryptedKeys(post);
+      const body = yield assertPostedEncryptedKeys(fxaService, post);
+      const oldSalt = body.salts[extensionId];
       ok(body.keys.collections[extensionId], `keys object should have a key for ${extensionId}`);
+      ok(oldSalt, `salts object should have a salt for ${extensionId}`);
 
       // Try adding another key to make sure that the first post was
       // OK, even on a new profile.
-      yield cryptoCollection._clear();
+      yield extensionStorageSync.cryptoCollection._clear();
       server.clearPosts();
       // Restore the first posted keyring, but add a last_modified date
       const firstPostedKeyring = Object.assign({}, post.body.data, {last_modified: server.etag});
-      server.addRecordInPast("storage-sync-crypto", firstPostedKeyring);
+      server.addRecord({
+        data: firstPostedKeyring,
+        collectionId: "storage-sync-crypto",
+        predicate: appearsAt(250),
+      });
       const extensionId2 = uuid();
-      newKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId2]);
+      newKeys = yield extensionStorageSync.ensureCanSync([extensionId2]);
       ok(newKeys.hasKeysFor([extensionId]), `didn't forget key for ${extensionId}`);
       ok(newKeys.hasKeysFor([extensionId2]), `new key generated for ${extensionId2}`);
 
       posts = server.getPosts();
       equal(posts.length, 1);
       const newPost = posts[posts.length - 1];
-      const newBody = yield assertPostedEncryptedKeys(newPost);
+      const newBody = yield assertPostedEncryptedKeys(fxaService, newPost);
       ok(newBody.keys.collections[extensionId], `keys object should have a key for ${extensionId}`);
       ok(newBody.keys.collections[extensionId2], `keys object should have a key for ${extensionId2}`);
+      ok(newBody.salts[extensionId], `salts object should have a key for ${extensionId}`);
+      ok(newBody.salts[extensionId2], `salts object should have a key for ${extensionId2}`);
+      equal(oldSalt, newBody.salts[extensionId], `old salt should be preserved in post`);
     });
   });
 });
 
-add_task(function* ensureKeysFor_pulls_key() {
-  // ensureKeysFor is implemented by adding a key to our local record
+add_task(function* ensureCanSync_pulls_key() {
+  // ensureCanSync is implemented by adding a key to our local record
   // and doing a sync. This means that if the same key exists
   // remotely, we get a "conflict". Ensure that we handle this
   // correctly -- we keep the server key (since presumably it's
@@ -537,46 +601,101 @@ add_task(function* ensureKeysFor_pulls_key() {
   // collections' keys.
   const extensionId = uuid();
   const extensionId2 = uuid();
+  const extensionOnlyKey = uuid();
+  const extensionOnlySalt = uuid();
   const DEFAULT_KEY = new BulkKeyBundle("[default]");
   DEFAULT_KEY.generateRandom();
   const RANDOM_KEY = new BulkKeyBundle(extensionId);
   RANDOM_KEY.generateRandom();
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+      // FIXME: generating a random salt probably shouldn't require a CryptoCollection?
+      const cryptoCollection = new CryptoCollection(fxaService);
+      const RANDOM_SALT = cryptoCollection.getNewSalt();
+      yield extensionStorageSync.cryptoCollection._clear();
       const keysData = {
         "default": DEFAULT_KEY.keyPairB64,
         "collections": {
           [extensionId]: RANDOM_KEY.keyPairB64,
         },
       };
-      server.installKeyRing(keysData, 999);
+      const saltData = {
+        [extensionId]: RANDOM_SALT,
+      };
+      server.installKeyRing(fxaService, keysData, saltData, 950, {
+        predicate: appearsAt(900),
+      });
 
-      let collectionKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId]);
+      let collectionKeys = yield extensionStorageSync.ensureCanSync([extensionId]);
       assertKeyRingKey(collectionKeys, extensionId, RANDOM_KEY);
 
       let posts = server.getPosts();
       equal(posts.length, 0,
-            "ensureKeysFor shouldn't push when the server keyring has the right key");
+            "ensureCanSync shouldn't push when the server keyring has the right key");
 
       // Another client generates a key for extensionId2
       const newKey = new BulkKeyBundle(extensionId2);
       newKey.generateRandom();
       keysData.collections[extensionId2] = newKey.keyPairB64;
-      server.clearCollection("storage-sync-crypto");
-      server.installKeyRing(keysData, 1000);
+      saltData[extensionId2] = cryptoCollection.getNewSalt();
+      server.installKeyRing(fxaService, keysData, saltData, 1050, {
+        predicate: appearsAt(1000),
+      });
 
-      let newCollectionKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId, extensionId2]);
+      let newCollectionKeys = yield extensionStorageSync.ensureCanSync([extensionId, extensionId2]);
       assertKeyRingKey(newCollectionKeys, extensionId2, newKey);
       assertKeyRingKey(newCollectionKeys, extensionId, RANDOM_KEY,
-                       `ensureKeysFor shouldn't lose the old key for ${extensionId}`);
+                       `ensureCanSync shouldn't lose the old key for ${extensionId}`);
 
       posts = server.getPosts();
-      equal(posts.length, 0, "ensureKeysFor shouldn't push when updating keys");
+      equal(posts.length, 0, "ensureCanSync shouldn't push when updating keys");
+
+      // Another client generates a key, but not a salt, for extensionOnlyKey
+      const onlyKey = new BulkKeyBundle(extensionOnlyKey);
+      onlyKey.generateRandom();
+      keysData.collections[extensionOnlyKey] = onlyKey.keyPairB64;
+      server.installKeyRing(fxaService, keysData, saltData, 1150, {
+        predicate: appearsAt(1100),
+      });
+
+      let withNewKey = yield extensionStorageSync.ensureCanSync([extensionId, extensionOnlyKey]);
+      dump(`got ${JSON.stringify(withNewKey.asWBO().cleartext)}\n`);
+      assertKeyRingKey(withNewKey, extensionOnlyKey, onlyKey);
+      assertKeyRingKey(withNewKey, extensionId, RANDOM_KEY,
+                       `ensureCanSync shouldn't lose the old key for ${extensionId}`);
+
+      posts = server.getPosts();
+      equal(posts.length, 1, "ensureCanSync should push when generating a new salt");
+      const withNewKeyRecord = yield assertPostedEncryptedKeys(fxaService, posts[0]);
+      // We don't a priori know what the new salt is
+      dump(`${JSON.stringify(withNewKeyRecord)}\n`);
+      ok(withNewKeyRecord.salts[extensionOnlyKey],
+         `ensureCanSync should generate a salt for an extension that only had a key`);
+
+      // Another client generates a key, but not a salt, for extensionOnlyKey
+      const newSalt = cryptoCollection.getNewSalt();
+      saltData[extensionOnlySalt] = newSalt;
+      server.installKeyRing(fxaService, keysData, saltData, 1250, {
+        predicate: appearsAt(1200),
+      });
+
+      let withOnlySaltKey = yield extensionStorageSync.ensureCanSync([extensionId, extensionOnlySalt]);
+      assertKeyRingKey(withOnlySaltKey, extensionId, RANDOM_KEY,
+                       `ensureCanSync shouldn't lose the old key for ${extensionId}`);
+      // We don't a priori know what the new key is
+      ok(withOnlySaltKey.hasKeysFor([extensionOnlySalt]),
+         `ensureCanSync generated a key for an extension that only had a salt`);
+
+      posts = server.getPosts();
+      equal(posts.length, 2, "ensureCanSync should push when generating a new key");
+      const withNewSaltRecord = yield assertPostedEncryptedKeys(fxaService, posts[1]);
+      equal(withNewSaltRecord.salts[extensionOnlySalt], newSalt,
+            "ensureCanSync should keep the existing salt when generating only a key");
     });
   });
 });
 
-add_task(function* ensureKeysFor_handles_conflicts() {
+add_task(function* ensureCanSync_handles_conflicts() {
   // Syncing is done through a pull followed by a push of any merged
   // changes. Accordingly, the only way to have a "true" conflict --
   // i.e. with the server rejecting a change -- is if
@@ -588,18 +707,24 @@ add_task(function* ensureKeysFor_handles_conflicts() {
   const RANDOM_KEY = new BulkKeyBundle(extensionId);
   RANDOM_KEY.generateRandom();
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+      // FIXME: generating salts probably shouldn't rely on a CryptoCollection
+      const cryptoCollection = new CryptoCollection(fxaService);
+      const RANDOM_SALT = cryptoCollection.getNewSalt();
       const keysData = {
         "default": DEFAULT_KEY.keyPairB64,
         "collections": {
           [extensionId]: RANDOM_KEY.keyPairB64,
         },
       };
-      server.installKeyRing(keysData, 765, {conflict: true});
+      const saltData = {
+        [extensionId]: RANDOM_SALT,
+      };
+      server.installKeyRing(fxaService, keysData, saltData, 765, {conflict: true});
 
-      yield cryptoCollection._clear();
+      yield extensionStorageSync.cryptoCollection._clear();
 
-      let collectionKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId]);
+      let collectionKeys = yield extensionStorageSync.ensureCanSync([extensionId]);
       assertKeyRingKey(collectionKeys, extensionId, RANDOM_KEY,
                        `syncing keyring should keep the server key for ${extensionId}`);
 
@@ -608,7 +733,7 @@ add_task(function* ensureKeysFor_handles_conflicts() {
             "syncing keyring should have tried to post a keyring");
       const failedPost = posts[0];
       assertPostedNewRecord(failedPost);
-      let body = yield assertPostedEncryptedKeys(failedPost);
+      let body = yield assertPostedEncryptedKeys(fxaService, failedPost);
       // This key will be the one the client generated locally, so
       // we don't know what its value will be
       ok(body.keys.collections[extensionId],
@@ -623,21 +748,23 @@ add_task(function* checkSyncKeyRing_reuploads_keys() {
   // Verify that when keys are present, they are reuploaded with the
   // new kB when we call touchKeys().
   const extensionId = uuid();
-  let extensionKey;
+  let extensionKey, extensionSalt;
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
       server.installCollection("storage-sync-crypto");
       server.etag = 765;
 
-      yield cryptoCollection._clear();
+      yield extensionStorageSync.cryptoCollection._clear();
 
-      // Do an `ensureKeysFor` to generate some keys.
-      let collectionKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId]);
+      // Do an `ensureCanSync` to generate some keys.
+      let collectionKeys = yield extensionStorageSync.ensureCanSync([extensionId]);
       ok(collectionKeys.hasKeysFor([extensionId]),
-         `ensureKeysFor should return a keyring that has a key for ${extensionId}`);
+         `ensureCanSync should return a keyring that has a key for ${extensionId}`);
       extensionKey = collectionKeys.keyForCollection(extensionId).keyPairB64;
       equal(server.getPosts().length, 1,
             "generating a key that doesn't exist on the server should post it");
+      const body = yield assertPostedEncryptedKeys(fxaService, server.getPosts()[0]);
+      extensionSalt = body.salts[extensionId];
     });
 
     // The user changes their password. This is their new kB, with
@@ -645,8 +772,8 @@ add_task(function* checkSyncKeyRing_reuploads_keys() {
     const NOVEL_KB = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee";
     const newUser = Object.assign({}, loggedInUser, {kB: NOVEL_KB});
     let postedKeys;
-    yield* withSignedInUser(newUser, function* () {
-      yield ExtensionStorageSync.checkSyncKeyRing();
+    yield* withSignedInUser(newUser, function* (extensionStorageSync, fxaService) {
+      yield extensionStorageSync.checkSyncKeyRing();
 
       let posts = server.getPosts();
       equal(posts.length, 2,
@@ -654,16 +781,18 @@ add_task(function* checkSyncKeyRing_reuploads_keys() {
       postedKeys = posts[1];
       assertPostedUpdatedRecord(postedKeys, 765);
 
-      let body = yield assertPostedEncryptedKeys(postedKeys);
+      let body = yield assertPostedEncryptedKeys(fxaService, postedKeys);
       deepEqual(body.keys.collections[extensionId], extensionKey,
                 `the posted keyring should have the same key for ${extensionId} as the old one`);
+      deepEqual(body.salts[extensionId], extensionSalt,
+                `the posted keyring should have the same salt for ${extensionId} as the old one`);
     });
 
     // Verify that with the old kB, we can't decrypt the record.
-    yield* withSignedInUser(loggedInUser, function* () {
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
       let error;
       try {
-        yield new KeyRingEncryptionRemoteTransformer().decode(postedKeys.body.data);
+        yield new KeyRingEncryptionRemoteTransformer(fxaService).decode(postedKeys.body.data);
       } catch (e) {
         error = e;
       }
@@ -679,7 +808,6 @@ add_task(function* checkSyncKeyRing_overwrites_on_conflict() {
   // with a different kB, we wipe the server, clear sync state, and
   // overwrite it with our keys.
   const extensionId = uuid();
-  const transformer = new KeyRingEncryptionRemoteTransformer();
   let extensionKey;
   yield* withSyncContext(function* (context) {
     yield* withServer(function* (server) {
@@ -687,29 +815,21 @@ add_task(function* checkSyncKeyRing_overwrites_on_conflict() {
       // current kB but with the last f changed to an e.
       const NOVEL_KB = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee";
       const oldUser = Object.assign({}, loggedInUser, {kB: NOVEL_KB});
-      server.installCollection("storage-sync-crypto");
       server.installDeleteBucket();
-      server.etag = 765;
-      yield* withSignedInUser(oldUser, function* () {
-        const FAKE_KEYRING = {
-          id: "keys",
-          keys: {},
-          uuid: "abcd",
-          kbHash: "abcd",
-        };
-        yield server.encryptAndAddRecord(transformer, "storage-sync-crypto", FAKE_KEYRING);
+      yield* withSignedInUser(oldUser, function* (extensionStorageSync, fxaService) {
+        yield server.installKeyRing(fxaService, {}, {}, 765);
       });
 
       // Now we have this new user with a different kB.
-      yield* withSignedInUser(loggedInUser, function* () {
-        yield cryptoCollection._clear();
+      yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+        yield extensionStorageSync.cryptoCollection._clear();
 
-        // Do an `ensureKeysFor` to generate some keys.
+        // Do an `ensureCanSync` to generate some keys.
         // This will try to sync, notice that the record is
         // undecryptable, and clear the server.
-        let collectionKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId]);
+        let collectionKeys = yield extensionStorageSync.ensureCanSync([extensionId]);
         ok(collectionKeys.hasKeysFor([extensionId]),
-           `ensureKeysFor should always return a keyring with a key for ${extensionId}`);
+           `ensureCanSync should always return a keyring with a key for ${extensionId}`);
         extensionKey = collectionKeys.keyForCollection(extensionId).keyPairB64;
 
         deepEqual(server.getDeletedBuckets(), ["default"],
@@ -727,7 +847,7 @@ add_task(function* checkSyncKeyRing_overwrites_on_conflict() {
         equal(postedKeys.path, collectionRecordsPath("storage-sync-crypto") + "/keys",
               "keyring upload should be to keyring path");
 
-        let body = yield new KeyRingEncryptionRemoteTransformer().decode(postedKeys.body.data);
+        let body = yield new KeyRingEncryptionRemoteTransformer(fxaService).decode(postedKeys.body.data);
         ok(body.uuid, "new keyring should have a UUID");
         equal(typeof body.uuid, "string", "keyring UUIDs should be strings");
         notEqual(body.uuid, "abcd",
@@ -737,10 +857,10 @@ add_task(function* checkSyncKeyRing_overwrites_on_conflict() {
         ok(body.keys.default, "new keyring should have a default key");
         // We should keep the extension key that was in our uploaded version.
         deepEqual(extensionKey, body.keys.collections[extensionId],
-                  "ensureKeysFor should have returned keyring with the same key that was uploaded");
+                  "ensureCanSync should have returned keyring with the same key that was uploaded");
 
         // This should be a no-op; the keys were uploaded as part of ensurekeysfor
-        yield ExtensionStorageSync.checkSyncKeyRing();
+        yield extensionStorageSync.checkSyncKeyRing();
         equal(server.getPosts().length, 1,
               "checkSyncKeyRing should not need to post keys after they were reuploaded");
       });
@@ -754,26 +874,28 @@ add_task(function* checkSyncKeyRing_flushes_on_uuid_change() {
   // keyring, so reset sync state and reupload everything.
   const extensionId = uuid();
   const extension = {id: extensionId};
-  const collectionId = extensionIdToCollectionId(loggedInUser, extensionId);
-  const transformer = new KeyRingEncryptionRemoteTransformer();
   yield* withSyncContext(function* (context) {
     yield* withServer(function* (server) {
       server.installCollection("storage-sync-crypto");
-      server.installCollection(collectionId);
       server.installDeleteBucket();
-      yield* withSignedInUser(loggedInUser, function* () {
-        yield cryptoCollection._clear();
+      yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+        const cryptoCollection = new CryptoCollection(fxaService);
+        const transformer = new KeyRingEncryptionRemoteTransformer(fxaService);
+        yield extensionStorageSync.cryptoCollection._clear();
 
-        // Do an `ensureKeysFor` to get access to keys.
-        let collectionKeys = yield ExtensionStorageSync.ensureKeysFor([extensionId]);
+        // Do an `ensureCanSync` to get access to keys and salt.
+        let collectionKeys = yield extensionStorageSync.ensureCanSync([extensionId]);
+        const collectionId = yield cryptoCollection.extensionIdToCollectionId(extensionId);
+        server.installCollection(collectionId);
+
         ok(collectionKeys.hasKeysFor([extensionId]),
-           `ensureKeysFor should always return a keyring that has a key for ${extensionId}`);
+           `ensureCanSync should always return a keyring that has a key for ${extensionId}`);
         const extensionKey = collectionKeys.keyForCollection(extensionId).keyPairB64;
 
         // Set something to make sure that it gets re-uploaded when
         // uuid changes.
-        yield ExtensionStorageSync.set(extension, {"my-key": 5}, context);
-        yield ExtensionStorageSync.syncAll();
+        yield extensionStorageSync.set(extension, {"my-key": 5}, context);
+        yield extensionStorageSync.syncAll();
 
         let posts = server.getPosts();
         equal(posts.length, 2,
@@ -789,6 +911,9 @@ add_task(function* checkSyncKeyRing_flushes_on_uuid_change() {
            "keyring should have a keys attribute");
         ok(body.keys.default,
            "keyring should have a default key");
+        ok(body.salts[extensionId],
+           `keyring should have a salt for ${extensionId}`);
+        const extensionSalt = body.salts[extensionId];
         deepEqual(extensionKey, body.keys.collections[extensionId],
                   "new keyring should have the same key that we uploaded");
 
@@ -802,23 +927,26 @@ add_task(function* checkSyncKeyRing_flushes_on_uuid_change() {
           // either direction, so this is OK.
           last_modified: 765,
         });
-        server.clearCollection("storage-sync-crypto");
-        server.etag = 765;
-        yield server.encryptAndAddRecordOnlyOnce(transformer, "storage-sync-crypto", newKeyRingData);
+        server.etag = 1000;
+        yield server.encryptAndAddRecord(transformer, {
+          collectionId: "storage-sync-crypto",
+          data: newKeyRingData,
+          predicate: appearsAt(800),
+        });
 
         // Fake adding another extension just so that the keyring will
         // really get synced.
         const newExtension = uuid();
-        const newKeyRing = yield ExtensionStorageSync.ensureKeysFor([newExtension]);
+        const newKeyRing = yield extensionStorageSync.ensureCanSync([newExtension]);
 
         // This should have detected the UUID change and flushed everything.
         // The keyring should, however, be the same, since we just
         // changed the UUID of the previously POSTed one.
         deepEqual(newKeyRing.keyForCollection(extensionId).keyPairB64, extensionKey,
-                  "ensureKeysFor should have pulled down a new keyring with the same keys");
+                  "ensureCanSync should have pulled down a new keyring with the same keys");
 
         // Syncing should reupload the data for the extension.
-        yield ExtensionStorageSync.syncAll();
+        yield extensionStorageSync.syncAll();
         posts = server.getPosts();
         equal(posts.length, 4,
               "should have posted keyring for new extension and reuploaded extension data");
@@ -831,13 +959,11 @@ add_task(function* checkSyncKeyRing_flushes_on_uuid_change() {
         let finalKeyRing = yield transformer.decode(finalKeyRingPost.body.data);
         equal(finalKeyRing.uuid, "abcd",
               "newly uploaded keyring should preserve UUID from replacement keyring");
+        deepEqual(finalKeyRing.salts[extensionId], extensionSalt,
+                  "newly uploaded keyring should preserve salts from existing salts");
 
         // Confirm that the data got reuploaded
-        equal(reuploadedPost.path, collectionRecordsPath(collectionId) + "/key-my_2D_key",
-              "extension data should be posted to path corresponding to its key");
-        let reuploadedData = yield new CollectionKeyEncryptionRemoteTransformer(extensionId).decode(reuploadedPost.body.data);
-        equal(reuploadedData.key, "my-key",
-              "extension data should have a key attribute corresponding to the extension data key");
+        let reuploadedData = yield assertExtensionRecord(fxaService, reuploadedPost, extension, "my-key");
         equal(reuploadedData.data, 5,
               "extension data should have a data attribute corresponding to the extension data value");
       });
@@ -847,28 +973,33 @@ add_task(function* checkSyncKeyRing_flushes_on_uuid_change() {
 
 add_task(function* test_storage_sync_pulls_changes() {
   const extensionId = defaultExtensionId;
-  const collectionId = defaultCollectionId;
   const extension = defaultExtension;
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
-      let transformer = new CollectionKeyEncryptionRemoteTransformer(extensionId);
-      server.installCollection(collectionId);
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+      const cryptoCollection = new CryptoCollection(fxaService);
+      let transformer = new CollectionKeyEncryptionRemoteTransformer(cryptoCollection, extensionId);
       server.installCollection("storage-sync-crypto");
 
       let calls = [];
-      yield ExtensionStorageSync.addOnChangedListener(extension, function() {
+      yield extensionStorageSync.addOnChangedListener(extension, function() {
         calls.push(arguments);
       }, context);
 
-      yield ExtensionStorageSync.ensureKeysFor([extensionId]);
-      yield server.encryptAndAddRecord(transformer, collectionId, {
-        "id": "key-remote_2D_key",
-        "key": "remote-key",
-        "data": 6,
+      yield extensionStorageSync.ensureCanSync([extensionId]);
+      const collectionId = yield cryptoCollection.extensionIdToCollectionId(extensionId);
+      yield server.encryptAndAddRecord(transformer, {
+        collectionId,
+        data: {
+          "id": "key-remote_2D_key",
+          "key": "remote-key",
+          "data": 6,
+        },
+        predicate: appearsAt(850),
       });
+      server.etag = 900;
 
-      yield ExtensionStorageSync.syncAll();
-      const remoteValue = (yield ExtensionStorageSync.get(extension, "remote-key", context))["remote-key"];
+      yield extensionStorageSync.syncAll();
+      const remoteValue = (yield extensionStorageSync.get(extension, "remote-key", context))["remote-key"];
       equal(remoteValue, 6,
             "ExtensionStorageSync.get() returns value retrieved from sync");
 
@@ -878,22 +1009,25 @@ add_task(function* test_storage_sync_pulls_changes() {
       calls = [];
 
       // Syncing again doesn't do anything
-      yield ExtensionStorageSync.syncAll();
+      yield extensionStorageSync.syncAll();
 
       equal(calls.length, 0,
             "syncing again shouldn't call on-changed listener");
 
       // Updating the server causes us to pull down the new value
       server.etag = 1000;
-      server.clearCollection(collectionId);
-      yield server.encryptAndAddRecord(transformer, collectionId, {
-        "id": "key-remote_2D_key",
-        "key": "remote-key",
-        "data": 7,
+      yield server.encryptAndAddRecord(transformer, {
+        collectionId,
+        data: {
+          "id": "key-remote_2D_key",
+          "key": "remote-key",
+          "data": 7,
+        },
+        predicate: appearsAt(950),
       });
 
-      yield ExtensionStorageSync.syncAll();
-      const remoteValue2 = (yield ExtensionStorageSync.get(extension, "remote-key", context))["remote-key"];
+      yield extensionStorageSync.syncAll();
+      const remoteValue2 = (yield extensionStorageSync.get(extension, "remote-key", context))["remote-key"];
       equal(remoteValue2, 7,
             "ExtensionStorageSync.get() returns value updated from sync");
 
@@ -905,35 +1039,39 @@ add_task(function* test_storage_sync_pulls_changes() {
 });
 
 add_task(function* test_storage_sync_pushes_changes() {
-  const extensionId = defaultExtensionId;
-  const collectionId = defaultCollectionId;
+  // FIXME: This test relies on the fact that previous tests pushed
+  // keys and salts for the default extension ID
   const extension = defaultExtension;
+  const extensionId = defaultExtensionId;
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
-      let transformer = new CollectionKeyEncryptionRemoteTransformer(extensionId);
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+      const cryptoCollection = new CryptoCollection(fxaService);
+      const collectionId = yield cryptoCollection.extensionIdToCollectionId(extensionId);
       server.installCollection(collectionId);
       server.installCollection("storage-sync-crypto");
       server.etag = 1000;
 
-      yield ExtensionStorageSync.set(extension, {"my-key": 5}, context);
+      yield extensionStorageSync.set(extension, {"my-key": 5}, context);
 
       // install this AFTER we set the key to 5...
       let calls = [];
-      ExtensionStorageSync.addOnChangedListener(extension, function() {
+      extensionStorageSync.addOnChangedListener(extension, function() {
         calls.push(arguments);
       }, context);
 
-      yield ExtensionStorageSync.syncAll();
-      const localValue = (yield ExtensionStorageSync.get(extension, "my-key", context))["my-key"];
+      yield extensionStorageSync.syncAll();
+      const localValue = (yield extensionStorageSync.get(extension, "my-key", context))["my-key"];
       equal(localValue, 5,
             "pushing an ExtensionStorageSync value shouldn't change local value");
+      const hashedId = "id-" + (yield cryptoCollection.hashWithExtensionSalt("key-my_2D_key", extensionId));
 
       let posts = server.getPosts();
+      // FIXME: Keys were pushed in a previous test
       equal(posts.length, 1,
             "pushing a value should cause a post to the server");
       const post = posts[0];
       assertPostedNewRecord(post);
-      equal(post.path, collectionRecordsPath(collectionId) + "/key-my_2D_key",
+      equal(post.path, `${collectionRecordsPath(collectionId)}/${hashedId}`,
             "pushing a value should have a path corresponding to its id");
 
       const encrypted = post.body.data;
@@ -941,12 +1079,10 @@ add_task(function* test_storage_sync_pushes_changes() {
          "pushing a value should post an encrypted record");
       ok(!encrypted.data,
          "pushing a value should not have any plaintext data");
-      equal(encrypted.id, "key-my_2D_key",
+      equal(encrypted.id, hashedId,
             "pushing a value should use a kinto-friendly record ID");
 
-      const record = yield transformer.decode(encrypted);
-      equal(record.key, "my-key",
-            "when decrypted, a pushed value should have a key field corresponding to its storage.sync key");
+      const record = yield assertExtensionRecord(fxaService, post, extension, "my-key");
       equal(record.data, 5,
             "when decrypted, a pushed value should have a data field corresponding to its storage.sync value");
       equal(record.id, "key-my_2D_key",
@@ -955,8 +1091,8 @@ add_task(function* test_storage_sync_pushes_changes() {
       equal(calls.length, 0,
             "pushing a value shouldn't call the on-changed listener");
 
-      yield ExtensionStorageSync.set(extension, {"my-key": 6}, context);
-      yield ExtensionStorageSync.syncAll();
+      yield extensionStorageSync.set(extension, {"my-key": 6}, context);
+      yield extensionStorageSync.syncAll();
 
       // Doesn't push keys because keys were pushed by a previous test.
       posts = server.getPosts();
@@ -964,7 +1100,7 @@ add_task(function* test_storage_sync_pushes_changes() {
             "updating a value should trigger another push");
       const updatePost = posts[1];
       assertPostedUpdatedRecord(updatePost, 1000);
-      equal(updatePost.path, collectionRecordsPath(collectionId) + "/key-my_2D_key",
+      equal(updatePost.path, `${collectionRecordsPath(collectionId)}/${hashedId}`,
             "pushing an updated value should go to the same path");
 
       const updateEncrypted = updatePost.body.data;
@@ -972,36 +1108,42 @@ add_task(function* test_storage_sync_pushes_changes() {
          "pushing an updated value should still be encrypted");
       ok(!updateEncrypted.data,
          "pushing an updated value should not have any plaintext visible");
-      equal(updateEncrypted.id, "key-my_2D_key",
+      equal(updateEncrypted.id, hashedId,
             "pushing an updated value should maintain the same ID");
     });
   });
 });
 
 add_task(function* test_storage_sync_pulls_deletes() {
-  const collectionId = defaultCollectionId;
   const extension = defaultExtension;
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+      const cryptoCollection = new CryptoCollection(fxaService);
+      const collectionId = yield cryptoCollection.extensionIdToCollectionId(defaultExtensionId);
       server.installCollection(collectionId);
       server.installCollection("storage-sync-crypto");
 
-      yield ExtensionStorageSync.set(extension, {"my-key": 5}, context);
-      yield ExtensionStorageSync.syncAll();
+      yield extensionStorageSync.set(extension, {"my-key": 5}, context);
+      yield extensionStorageSync.syncAll();
       server.clearPosts();
 
       let calls = [];
-      yield ExtensionStorageSync.addOnChangedListener(extension, function() {
+      yield extensionStorageSync.addOnChangedListener(extension, function() {
         calls.push(arguments);
       }, context);
 
-      yield server.addRecord(collectionId, {
-        "id": "key-my_2D_key",
-        "deleted": true,
+      const transformer = new CollectionKeyEncryptionRemoteTransformer(new CryptoCollection(fxaService), extension.id);
+      yield server.encryptAndAddRecord(transformer, {
+        collectionId,
+        data: {
+          "id": "key-my_2D_key",
+          "data": 6,
+          "_status": "deleted",
+        },
       });
 
-      yield ExtensionStorageSync.syncAll();
-      const remoteValues = (yield ExtensionStorageSync.get(extension, "my-key", context));
+      yield extensionStorageSync.syncAll();
+      const remoteValues = (yield extensionStorageSync.get(extension, "my-key", context));
       ok(!remoteValues["my-key"],
          "ExtensionStorageSync.get() shows value was deleted by sync");
 
@@ -1014,7 +1156,7 @@ add_task(function* test_storage_sync_pulls_deletes() {
       calls = [];
 
       // Syncing again doesn't do anything
-      yield ExtensionStorageSync.syncAll();
+      yield extensionStorageSync.syncAll();
 
       equal(calls.length, 0,
             "syncing again shouldn't call on-changed listener");
@@ -1024,46 +1166,55 @@ add_task(function* test_storage_sync_pulls_deletes() {
 
 add_task(function* test_storage_sync_pushes_deletes() {
   const extensionId = uuid();
-  const collectionId = extensionIdToCollectionId(loggedInUser, extensionId);
   const extension = {id: extensionId};
-  yield cryptoCollection._clear();
   yield* withContextAndServer(function* (context, server) {
-    yield* withSignedInUser(loggedInUser, function* () {
+    yield* withSignedInUser(loggedInUser, function* (extensionStorageSync, fxaService) {
+      const cryptoCollection = new CryptoCollection(fxaService);
+      yield cryptoCollection._clear();
+      yield cryptoCollection._setSalt(extensionId, cryptoCollection.getNewSalt());
+      const collectionId = yield cryptoCollection.extensionIdToCollectionId(extensionId);
+
       server.installCollection(collectionId);
       server.installCollection("storage-sync-crypto");
       server.etag = 1000;
 
-      yield ExtensionStorageSync.set(extension, {"my-key": 5}, context);
+      yield extensionStorageSync.set(extension, {"my-key": 5}, context);
 
       let calls = [];
-      ExtensionStorageSync.addOnChangedListener(extension, function() {
+      extensionStorageSync.addOnChangedListener(extension, function() {
         calls.push(arguments);
       }, context);
 
-      yield ExtensionStorageSync.syncAll();
+      yield extensionStorageSync.syncAll();
       let posts = server.getPosts();
       equal(posts.length, 2,
             "pushing a non-deleted value should post keys and post the value to the server");
 
-      yield ExtensionStorageSync.remove(extension, ["my-key"], context);
+      yield extensionStorageSync.remove(extension, ["my-key"], context);
       equal(calls.length, 1,
             "deleting a value should call the on-changed listener");
 
-      yield ExtensionStorageSync.syncAll();
+      yield extensionStorageSync.syncAll();
       equal(calls.length, 1,
             "pushing a deleted value shouldn't call the on-changed listener");
 
       // Doesn't push keys because keys were pushed by a previous test.
+      const hashedId = "id-" + (yield cryptoCollection.hashWithExtensionSalt("key-my_2D_key", extensionId));
       posts = server.getPosts();
       equal(posts.length, 3,
             "deleting a value should trigger another push");
       const post = posts[2];
       assertPostedUpdatedRecord(post, 1000);
-      equal(post.path, collectionRecordsPath(collectionId) + "/key-my_2D_key",
+      equal(post.path, `${collectionRecordsPath(collectionId)}/${hashedId}`,
             "pushing a deleted value should go to the same path");
-      ok(post.method, "DELETE");
-      ok(!post.body,
-         "deleting a value shouldn't have a body");
+      ok(post.method, "PUT");
+      ok(post.body.data.ciphertext,
+         "deleting a value should have an encrypted body");
+      const decoded = yield new CollectionKeyEncryptionRemoteTransformer(cryptoCollection, extensionId).decode(post.body.data);
+      equal(decoded._status, "deleted");
+      // Ideally, we'd check that decoded.deleted is not true, because
+      // the encrypted record shouldn't have it, but the decoder will
+      // add it when it sees _status == deleted
     });
   });
 });

@@ -61,9 +61,8 @@ SerializedLoadContext::Init(nsILoadContext* aLoadContext)
     mIsPrivateBitValid = true;
     aLoadContext->GetIsContent(&mIsContent);
     aLoadContext->GetUseRemoteTabs(&mUseRemoteTabs);
-    if (!aLoadContext->GetOriginAttributes(mOriginAttributes)) {
-      NS_WARNING("GetOriginAttributes failed");
-    }
+    aLoadContext->GetUseTrackingProtection(&mUseTrackingProtection);
+    aLoadContext->GetOriginAttributes(mOriginAttributes);
   } else {
     mIsNotNull = false;
     mIsPrivateBitValid = false;
@@ -71,6 +70,7 @@ SerializedLoadContext::Init(nsILoadContext* aLoadContext)
     // we won't be GetInterfaced to nsILoadContext
     mIsContent = true;
     mUseRemoteTabs = false;
+    mUseTrackingProtection = false;
   }
 }
 

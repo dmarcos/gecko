@@ -17,10 +17,10 @@ fails == float-outside-block-push.html float-outside-block-push.html
 == 345369-4.html 345369-4.html
 == 345369-5.html 345369-5.html
 == 429974-1.html 429974-1.html
-fails == 478834-1.html 478834-1.html
+== 478834-1.html 478834-1.html
 == 546048-1.html 546048-1.html
 == 775350-1.html 775350-1.html
-fails == 1114329.html 1114329.html
+== 1114329.html 1114329.html
 == 1236745-1.html 1236745-1.html
 fails == 1260031-1.html?display:table 1260031-1.html?display:table
 fails == 1260031-1.html?display:table-cell 1260031-1.html?display:table-cell
@@ -88,27 +88,27 @@ fails == float-in-rtl-vrl-3d.html float-in-rtl-vrl-3d.html
 fails == float-in-rtl-vrl-4d.html float-in-rtl-vrl-4d.html
 == orthogonal-floats-1a.html orthogonal-floats-1a.html
 == orthogonal-floats-1b.html orthogonal-floats-1b.html
-fails == orthogonal-floats-1c.html orthogonal-floats-1c.html
-fails == orthogonal-floats-1d.html orthogonal-floats-1d.html
+== orthogonal-floats-1c.html orthogonal-floats-1c.html
+== orthogonal-floats-1d.html orthogonal-floats-1d.html
 
-fails pref(layout.css.float-logical-values.enabled,true) == logical-float-side-1.html logical-float-side-1.html
-fails pref(layout.css.float-logical-values.enabled,true) == logical-float-side-2.html logical-float-side-2.html
-fails pref(layout.css.float-logical-values.enabled,true) == logical-float-side-3.html logical-float-side-3.html
-fails pref(layout.css.float-logical-values.enabled,true) == logical-float-side-4.html logical-float-side-4.html
+pref(layout.css.float-logical-values.enabled,true) == logical-float-side-1.html logical-float-side-1.html
+pref(layout.css.float-logical-values.enabled,true) == logical-float-side-2.html logical-float-side-2.html
+pref(layout.css.float-logical-values.enabled,true) == logical-float-side-3.html logical-float-side-3.html
+pref(layout.css.float-logical-values.enabled,true) == logical-float-side-4.html logical-float-side-4.html
 
-fails == float-in-rtl-slr-1a.html float-in-rtl-slr-1a.html
-fails == float-in-rtl-slr-1b.html float-in-rtl-slr-1b.html
-fails == float-in-rtl-slr-1c.html float-in-rtl-slr-1c.html
-fails == float-in-rtl-slr-1d.html float-in-rtl-slr-1d.html
-fails == float-in-rtl-slr-2a.html float-in-rtl-slr-2a.html
-fails == float-in-rtl-slr-2b.html float-in-rtl-slr-2b.html
-fails == float-in-rtl-slr-2c.html float-in-rtl-slr-2c.html
+== float-in-rtl-slr-1a.html float-in-rtl-slr-1a.html
+== float-in-rtl-slr-1b.html float-in-rtl-slr-1b.html
+== float-in-rtl-slr-1c.html float-in-rtl-slr-1c.html
+== float-in-rtl-slr-1d.html float-in-rtl-slr-1d.html
+== float-in-rtl-slr-2a.html float-in-rtl-slr-2a.html
+== float-in-rtl-slr-2b.html float-in-rtl-slr-2b.html
+== float-in-rtl-slr-2c.html float-in-rtl-slr-2c.html
 fails == float-in-rtl-slr-2d.html float-in-rtl-slr-2d.html
-fails == float-in-rtl-slr-3a.html float-in-rtl-slr-3a.html
-fails == float-in-rtl-slr-3b.html float-in-rtl-slr-3b.html
-fails == float-in-rtl-slr-3c.html float-in-rtl-slr-3c.html
+== float-in-rtl-slr-3a.html float-in-rtl-slr-3a.html
+== float-in-rtl-slr-3b.html float-in-rtl-slr-3b.html
+== float-in-rtl-slr-3c.html float-in-rtl-slr-3c.html
 fails == float-in-rtl-slr-3d.html float-in-rtl-slr-3d.html
-fails == float-in-rtl-slr-4a.html float-in-rtl-slr-4a.html
-fails == float-in-rtl-slr-4b.html float-in-rtl-slr-4b.html
-fails == float-in-rtl-slr-4c.html float-in-rtl-slr-4c.html
+== float-in-rtl-slr-4a.html float-in-rtl-slr-4a.html
+== float-in-rtl-slr-4b.html float-in-rtl-slr-4b.html
+== float-in-rtl-slr-4c.html float-in-rtl-slr-4c.html
 fails == float-in-rtl-slr-4d.html float-in-rtl-slr-4d.html

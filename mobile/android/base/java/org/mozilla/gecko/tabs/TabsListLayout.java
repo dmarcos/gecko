@@ -31,8 +31,9 @@ public class TabsListLayout extends TabsLayout {
 
         setLayoutManager(new LinearLayoutManager(context));
 
-        // A TouchHelper handler for swipe to close.
-        final TabsTouchHelperCallback callback = new TabsTouchHelperCallback(this) {
+        final int dragDirections = ItemTouchHelper.UP | ItemTouchHelper.DOWN;
+        // A TouchHelper handler for drag and drop and swipe to close.
+        final TabsTouchHelperCallback callback = new TabsTouchHelperCallback(this, dragDirections, this) {
             @Override
             protected float alphaForItemSwipeDx(float dX, int distanceToAlphaMin) {
                 return Math.max(0.1f,
@@ -110,6 +111,9 @@ public class TabsListLayout extends TabsLayout {
 
     @Override
     protected boolean addAtIndexRequiresScroll(int index) {
+        // Scroll if we're adding a new first tab (from a close undo) or if we're adding a new last
+        // tab (needed both for close undo and for when a new last tab is added by another app
+        // opening a link in Fennec where Fennec loads with the tabs tray already open).
         return index == 0 || index == getAdapter().getItemCount() - 1;
     }
 }

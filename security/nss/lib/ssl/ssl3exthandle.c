@@ -354,6 +354,27 @@ ssl3_ParseEncryptedSessionTicket(sslSocket *ss, SECItem *data,
     return SECSuccess;
 }
 
+PRBool
+ssl_AlpnTagAllowed(const sslSocket *ss, const SECItem *tag)
+{
+    const unsigned char *data = ss->opt.nextProtoNego.data;
+    unsigned int length = ss->opt.nextProtoNego.len;
+    unsigned int offset = 0;
+
+    if (!tag->len)
+        return PR_TRUE;
+
+    while (offset < length) {
+        unsigned int taglen = (unsigned int)data[offset];
+        if ((taglen == tag->len) &&
+            !PORT_Memcmp(data + offset + 1, tag->data, tag->len))
+            return PR_TRUE;
+        offset += 1 + taglen;
+    }
+
+    return PR_FALSE;
+}
+
 /* handle an incoming Next Protocol Negotiation extension. */
 SECStatus
 ssl3_ServerHandleNextProtoNegoXtn(const sslSocket *ss, TLSExtensionData *xtnData, PRUint16 ex_type,
@@ -564,6 +585,12 @@ ssl3_ClientHandleAppProtoXtn(const sslSocket *ss, TLSExtensionData *xtnData, PRU
     /* The list must have exactly one value. */
     if (rv != SECSuccess || data->len != 0) {
         ssl3_ExtSendAlert(ss, alert_fatal, decode_error);
+        PORT_SetError(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID);
+        return SECFailure;
+    }
+
+    if (!ssl_AlpnTagAllowed(ss, &protocol_name)) {
+        ssl3_ExtSendAlert(ss, alert_fatal, illegal_parameter);
         PORT_SetError(SSL_ERROR_NEXT_PROTOCOL_DATA_INVALID);
         return SECFailure;
     }
@@ -850,6 +877,9 @@ ssl3_ClientHandleStatusRequestXtn(const sslSocket *ss, TLSExtensionData *xtnData
     return SECSuccess;
 }
 
+PRUint32 ssl_ticket_lifetime = 2 * 24 * 60 * 60; /* 2 days in seconds */
+#define TLS_EX_SESS_TICKET_VERSION (0x0104)
+
 /*
  * Called from ssl3_SendNewSessionTicket, tls13_SendNewSessionTicket
  */
@@ -973,10 +1003,15 @@ ssl3_EncodeSessionTicket(sslSocket *ss,
         + 1                                    /* extendedMasterSecretUsed */
         + sizeof(ticket->ticket_lifetime_hint) /* ticket lifetime hint */
         + sizeof(ticket->flags)                /* ticket flags */
-        + 1 + alpnSelection.len;               /* npn value + length field. */
+        + 1 + alpnSelection.len                /* npn value + length field. */
+        + 4;                                   /* maxEarlyData */
+#ifdef UNSAFE_FUZZER_MODE
+    padding_length = 0;
+#else
     padding_length = AES_BLOCK_SIZE -
                      (ciphertext_length %
                       AES_BLOCK_SIZE);
+#endif
     ciphertext_length += padding_length;
 
     if (SECITEM_AllocItem(NULL, &plaintext_item, ciphertext_length) == NULL)
@@ -1118,6 +1153,10 @@ ssl3_EncodeSessionTicket(sslSocket *ss,
             goto loser;
     }
 
+    rv = ssl3_AppendNumberToItem(&plaintext, ssl_max_early_data_size, 4);
+    if (rv != SECSuccess)
+        goto loser;
+
     PORT_Assert(plaintext.len == padding_length);
     for (i = 0; i < padding_length; i++)
         plaintext.data[i] = (unsigned char)padding_length;
@@ -1129,6 +1168,10 @@ ssl3_EncodeSessionTicket(sslSocket *ss,
 
     /* Generate encrypted portion of ticket. */
     PORT_Assert(aes_key);
+#ifdef UNSAFE_FUZZER_MODE
+    ciphertext.len = plaintext_item.len;
+    PORT_Memcpy(ciphertext.data, plaintext_item.data, plaintext_item.len);
+#else
     aes_ctx = PK11_CreateContextBySymKey(cipherMech, CKA_ENCRYPT, aes_key, &ivItem);
     if (!aes_ctx)
         goto loser;
@@ -1140,10 +1183,10 @@ ssl3_EncodeSessionTicket(sslSocket *ss,
     PK11_DestroyContext(aes_ctx, PR_TRUE);
     if (rv != SECSuccess)
         goto loser;
+#endif
 
     /* Convert ciphertext length to network order. */
-    length_buf[0] = (ciphertext.len >> 8) & 0xff;
-    length_buf[1] = (ciphertext.len) & 0xff;
+    (void)ssl_EncodeUintX(ciphertext.len, 2, length_buf);
 
     /* Compute MAC. */
     PORT_Assert(mac_key);
@@ -1307,9 +1350,11 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, SECItem *data)
      */
     if (PORT_Memcmp(enc_session_ticket.key_name, key_name,
                     SESS_TICKET_KEY_NAME_LEN) != 0) {
+#ifndef UNSAFE_FUZZER_MODE
         SSL_DBG(("%d: SSL[%d]: Session ticket key_name sent mismatch.",
                  SSL_GETPID(), ss->fd));
         goto no_ticket;
+#endif
     }
 
     /* Verify the MAC on the ticket.  MAC verification may also
@@ -1346,9 +1391,11 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, SECItem *data)
     if (NSS_SecureMemcmp(computed_mac, enc_session_ticket.mac,
                          computed_mac_length) !=
         0) {
+#ifndef UNSAFE_FUZZER_MODE
         SSL_DBG(("%d: SSL[%d]: Session ticket MAC mismatch.",
                  SSL_GETPID(), ss->fd));
         goto no_ticket;
+#endif
     }
 
     /* We ignore key_name for now.
@@ -1362,6 +1409,12 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, SECItem *data)
                                         enc_session_ticket.encrypted_state.len);
 
     PORT_Assert(aes_key);
+#ifdef UNSAFE_FUZZER_MODE
+    decrypted_state->len = enc_session_ticket.encrypted_state.len;
+    PORT_Memcpy(decrypted_state->data,
+                enc_session_ticket.encrypted_state.data,
+                enc_session_ticket.encrypted_state.len);
+#else
     ivItem.data = enc_session_ticket.iv;
     ivItem.len = AES_BLOCK_SIZE;
     aes_ctx = PK11_CreateContextBySymKey(cipherMech, CKA_DECRYPT,
@@ -1392,6 +1445,7 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, SECItem *data)
         if (padding_length != (PRUint32)*padding)
             goto no_ticket;
     }
+#endif
 
     /* Deserialize session state. */
     buffer = decrypted_state->data;
@@ -1559,16 +1613,24 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, SECItem *data)
             goto no_ticket;
     }
 
-    /* Done parsing.  Check that all bytes have been consumed. */
-    if (buffer_len != padding_length)
+    rv = ssl3_ExtConsumeHandshakeNumber(ss, &temp, 4, &buffer, &buffer_len);
+    if (rv != SECSuccess) {
         goto no_ticket;
+    }
+    parsed_session_ticket->maxEarlyData = temp;
+
+#ifndef UNSAFE_FUZZER_MODE
+    /* Done parsing.  Check that all bytes have been consumed. */
+    if (buffer_len != padding_length) {
+        goto no_ticket;
+    }
+#endif
 
     /* Use the ticket if it has not expired, otherwise free the allocated
      * memory since the ticket is of no use.
      */
     if (parsed_session_ticket->timestamp != 0 &&
-        parsed_session_ticket->timestamp +
-                TLS_EX_SESS_TICKET_LIFETIME_HINT >
+        parsed_session_ticket->timestamp + ssl_ticket_lifetime >
             ssl_Time()) {
 
         sid = ssl3_NewSessionID(ss, PR_TRUE);
@@ -1591,6 +1653,8 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, SECItem *data)
                              &extension_data) != SECSuccess)
             goto no_ticket;
         sid->u.ssl3.locked.sessionTicket.flags = parsed_session_ticket->flags;
+        sid->u.ssl3.locked.sessionTicket.max_early_data_size =
+            parsed_session_ticket->maxEarlyData;
 
         if (parsed_session_ticket->ms_length >
             sizeof(sid->u.ssl3.keys.wrapped_master_secret))
@@ -1623,6 +1687,7 @@ ssl3_ProcessSessionTicketCommon(sslSocket *ss, SECItem *data)
                 SECITEM_FreeItem(&sid->u.ssl3.srvName, PR_FALSE);
             }
             sid->u.ssl3.srvName = parsed_session_ticket->srvName;
+            parsed_session_ticket->srvName.data = NULL;
         }
         if (parsed_session_ticket->alpnSelection.data != NULL) {
             sid->u.ssl3.alpnSelection = parsed_session_ticket->alpnSelection;
@@ -1661,6 +1726,9 @@ loser:
         }
         if (parsed_session_ticket->alpnSelection.data) {
             SECITEM_FreeItem(&parsed_session_ticket->alpnSelection, PR_FALSE);
+        }
+        if (parsed_session_ticket->srvName.data) {
+            SECITEM_FreeItem(&parsed_session_ticket->srvName, PR_FALSE);
         }
         PORT_ZFree(parsed_session_ticket, sizeof(SessionTicket));
     }
@@ -2117,55 +2185,73 @@ ssl3_ClientSendSigAlgsXtn(const sslSocket *ss, TLSExtensionData *xtnData, PRBool
 
 /* Takes the size of the ClientHello, less the record header, and determines how
  * much padding is required. */
-unsigned int
-ssl3_CalculatePaddingExtensionLength(unsigned int clientHelloLength)
+void
+ssl3_CalculatePaddingExtLen(sslSocket *ss,
+                            unsigned int clientHelloLength)
 {
     unsigned int recordLength = 1 /* handshake message type */ +
                                 3 /* handshake message length */ +
                                 clientHelloLength;
-    unsigned int extensionLength;
+    unsigned int extensionLen;
 
+    /* Don't pad for DTLS, for SSLv3, or for renegotiation. */
+    if (IS_DTLS(ss) ||
+        ss->vrange.max < SSL_LIBRARY_VERSION_TLS_1_0 ||
+        ss->firstHsDone) {
+        return;
+    }
+
+    /* A padding extension may be included to ensure that the record containing
+     * the ClientHello doesn't have a length between 256 and 511 bytes
+     * (inclusive). Initial ClientHello records with such lengths trigger bugs
+     * in F5 devices. */
     if (recordLength < 256 || recordLength >= 512) {
-        return 0;
+        return;
     }
 
-    extensionLength = 512 - recordLength;
+    extensionLen = 512 - recordLength;
     /* Extensions take at least four bytes to encode. Always include at least
-     * one byte of data if including the extension. Some servers (e.g.
-     * WebSphere Application Server 7.0 and Tomcat) will time out or terminate
-     * the connection if the last extension in the client hello is empty. */
-    if (extensionLength < 4 + 1) {
-        extensionLength = 4 + 1;
+     * one byte of data if we are padding. Some servers will time out or
+     * terminate the connection if the last ClientHello extension is empty. */
+    if (extensionLen < 4 + 1) {
+        extensionLen = 4 + 1;
     }
 
-    return extensionLength;
+    ss->xtnData.paddingLen = extensionLen - 4;
 }
 
-/* ssl3_AppendPaddingExtension possibly adds an extension which ensures that a
+/* ssl3_SendPaddingExtension possibly adds an extension which ensures that a
  * ClientHello record is either < 256 bytes or is >= 512 bytes. This ensures
  * that we don't trigger bugs in F5 products. */
 PRInt32
-ssl3_AppendPaddingExtension(sslSocket *ss, unsigned int extensionLen,
-                            PRUint32 maxBytes)
+ssl3_ClientSendPaddingExtension(const sslSocket *ss, TLSExtensionData *xtnData,
+                                PRBool append, PRUint32 maxBytes)
 {
-    unsigned int paddingLen = extensionLen - 4;
-    static unsigned char padding[252];
+    static unsigned char padding[252] = { 0 };
+    unsigned int extensionLen;
+    SECStatus rv;
 
-    if (extensionLen == 0) {
+    /* On the length-calculation pass, report zero total length.  The record
+     * will be larger on the second pass if needed. */
+    if (!append || !xtnData->paddingLen) {
         return 0;
     }
 
+    extensionLen = xtnData->paddingLen + 4;
     if (extensionLen > maxBytes ||
-        !paddingLen ||
-        paddingLen > sizeof(padding)) {
+        xtnData->paddingLen > sizeof(padding)) {
         PORT_Assert(0);
         return -1;
     }
 
-    if (SECSuccess != ssl3_ExtAppendHandshakeNumber(ss, ssl_padding_xtn, 2))
+    rv = ssl3_ExtAppendHandshakeNumber(ss, ssl_padding_xtn, 2);
+    if (rv != SECSuccess) {
         return -1;
-    if (SECSuccess != ssl3_ExtAppendHandshakeVariable(ss, padding, paddingLen, 2))
+    }
+    rv = ssl3_ExtAppendHandshakeVariable(ss, padding, xtnData->paddingLen, 2);
+    if (rv != SECSuccess) {
         return -1;
+    }
 
     return extensionLen;
 }

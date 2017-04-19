@@ -33,7 +33,8 @@ function SteamTracker(name, engine) {
 }
 
 SteamTracker.prototype = {
-  __proto__: Tracker.prototype
+  __proto__: Tracker.prototype,
+  persistChangedIDs: false,
 };
 
 function SteamEngine(service) {
@@ -59,10 +60,10 @@ function BogusEngine(service) {
 BogusEngine.prototype = Object.create(SteamEngine.prototype);
 
 async function cleanAndGo(engine, server) {
+  engine._tracker.clearChangedIDs();
   Svc.Prefs.resetBranch("");
   Svc.Prefs.set("log.logger.engine.rotary", "Trace");
   Service.recordManager.clearCache();
-  engine._tracker.clearChangedIDs();
   await promiseStopServer(server);
 }
 
@@ -70,6 +71,8 @@ async function cleanAndGo(engine, server) {
 Service.engineManager.unregister("addons");
 
 add_task(async function test_basic() {
+  enableValidationPrefs();
+
   let helper = track_collections_helper();
   let upd = helper.with_updated_collection;
 
@@ -90,6 +93,7 @@ add_task(async function test_basic() {
 
   await sync_and_validate_telem(true);
 
+  Svc.Prefs.resetBranch("");
   await promiseStopServer(server);
 });
 
@@ -241,6 +245,7 @@ add_task(async function test_upload_failed() {
 
   } finally {
     await cleanAndGo(engine, server);
+    await engine.finalize();
   }
 });
 
@@ -323,10 +328,13 @@ add_task(async function test_sync_partialUpload() {
 
   } finally {
     await cleanAndGo(engine, server);
+    await engine.finalize();
   }
 });
 
 add_task(async function test_generic_engine_fail() {
+  enableValidationPrefs();
+
   Service.engineManager.register(SteamEngine);
   let engine = Service.engineManager.get("steam");
   engine.enabled = true;
@@ -355,6 +363,8 @@ add_task(async function test_generic_engine_fail() {
 });
 
 add_task(async function test_engine_fail_ioerror() {
+  enableValidationPrefs();
+
   Service.engineManager.register(SteamEngine);
   let engine = Service.engineManager.get("steam");
   engine.enabled = true;
@@ -392,6 +402,8 @@ add_task(async function test_engine_fail_ioerror() {
 });
 
 add_task(async function test_initial_sync_engines() {
+  enableValidationPrefs();
+
   Service.engineManager.register(SteamEngine);
   let engine = Service.engineManager.get("steam");
   engine.enabled = true;
@@ -431,6 +443,8 @@ add_task(async function test_initial_sync_engines() {
 });
 
 add_task(async function test_nserror() {
+  enableValidationPrefs();
+
   Service.engineManager.register(SteamEngine);
   let engine = Service.engineManager.get("steam");
   engine.enabled = true;
@@ -461,6 +475,8 @@ add_task(async function test_nserror() {
 });
 
 add_task(async function test_discarding() {
+  enableValidationPrefs();
+
   let helper = track_collections_helper();
   let upd = helper.with_updated_collection;
   let telem = get_sync_test_telemetry();
@@ -506,6 +522,8 @@ add_task(async function test_discarding() {
 })
 
 add_task(async function test_no_foreign_engines_in_error_ping() {
+  enableValidationPrefs();
+
   Service.engineManager.register(BogusEngine);
   let engine = Service.engineManager.get("bogus");
   engine.enabled = true;
@@ -526,6 +544,8 @@ add_task(async function test_no_foreign_engines_in_error_ping() {
 });
 
 add_task(async function test_sql_error() {
+  enableValidationPrefs();
+
   Service.engineManager.register(SteamEngine);
   let engine = Service.engineManager.get("steam");
   engine.enabled = true;
@@ -553,6 +573,8 @@ add_task(async function test_sql_error() {
 });
 
 add_task(async function test_no_foreign_engines_in_success_ping() {
+  enableValidationPrefs();
+
   Service.engineManager.register(BogusEngine);
   let engine = Service.engineManager.get("bogus");
   engine.enabled = true;
@@ -572,6 +594,8 @@ add_task(async function test_no_foreign_engines_in_success_ping() {
 });
 
 add_task(async function test_events() {
+  enableValidationPrefs();
+
   Service.engineManager.register(BogusEngine);
   let engine = Service.engineManager.get("bogus");
   engine.enabled = true;
@@ -616,6 +640,8 @@ add_task(async function test_events() {
 });
 
 add_task(async function test_invalid_events() {
+  enableValidationPrefs();
+
   Service.engineManager.register(BogusEngine);
   let engine = Service.engineManager.get("bogus");
   engine.enabled = true;
@@ -660,6 +686,8 @@ add_task(async function test_invalid_events() {
 });
 
 add_task(async function test_no_ping_for_self_hosters() {
+  enableValidationPrefs();
+
   let telem = get_sync_test_telemetry();
   let oldSubmit = telem.submit;
 

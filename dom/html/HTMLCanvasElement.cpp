@@ -523,8 +523,10 @@ HTMLCanvasElement::DispatchPrintCallback(nsITimerCallback* aCallback)
   mPrintState = new HTMLCanvasPrintState(this, mCurrentContext, aCallback);
 
   RefPtr<nsRunnableMethod<HTMLCanvasElement> > renderEvent =
-        NewRunnableMethod(this, &HTMLCanvasElement::CallPrintCallback);
-  return NS_DispatchToCurrentThread(renderEvent);
+    NewRunnableMethod(this, &HTMLCanvasElement::CallPrintCallback);
+  return OwnerDoc()->Dispatch("HTMLCanvasElement::CallPrintCallback",
+                              TaskCategory::Other,
+                              renderEvent.forget());
 }
 
 void
@@ -642,11 +644,11 @@ void
 HTMLCanvasElement::ToDataURL(JSContext* aCx, const nsAString& aType,
                              JS::Handle<JS::Value> aParams,
                              nsAString& aDataURL,
-                             CallerType aCallerType,
                              ErrorResult& aRv)
 {
   // do a trust check if this is a write-only canvas
-  if (mWriteOnly && aCallerType != CallerType::System) {
+  if (mWriteOnly &&
+      !nsContentUtils::CallerHasPermission(aCx, NS_LITERAL_STRING("<all_urls>"))) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return;
   }
@@ -825,17 +827,32 @@ HTMLCanvasElement::ToBlob(JSContext* aCx,
                           BlobCallback& aCallback,
                           const nsAString& aType,
                           JS::Handle<JS::Value> aParams,
-                          CallerType aCallerType,
                           ErrorResult& aRv)
 {
   // do a trust check if this is a write-only canvas
-  if (mWriteOnly && aCallerType != CallerType::System) {
+  if (mWriteOnly &&
+      !nsContentUtils::CallerHasPermission(aCx, NS_LITERAL_STRING("<all_urls>"))) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return;
   }
 
   nsCOMPtr<nsIGlobalObject> global = OwnerDoc()->GetScopeObject();
   MOZ_ASSERT(global);
+
+  nsIntSize elemSize = GetWidthHeight();
+  if (elemSize.width == 0 || elemSize.height == 0) {
+    // According to spec, blob should return null if either its horizontal
+    // dimension or its vertical dimension is zero. See link below.
+    // https://html.spec.whatwg.org/multipage/scripting.html#dom-canvas-toblob
+    OwnerDoc()->Dispatch("FireNullBlobEvent",
+                  TaskCategory::Other,
+                  NewRunnableMethod<Blob*, const char*>(
+                          &aCallback,
+                          static_cast<void(BlobCallback::*)(
+                            Blob*, const char*)>(&BlobCallback::Call),
+                          nullptr, nullptr));
+    return;
+  }
 
   CanvasRenderingContextHelper::ToBlob(aCx, global, aCallback, aType,
                                        aParams, aRv);
@@ -1291,12 +1308,12 @@ HTMLCanvasElement::SetFrameCapture(already_AddRefed<SourceSurface> aSurface,
 }
 
 already_AddRefed<SourceSurface>
-HTMLCanvasElement::GetSurfaceSnapshot(bool* aPremultAlpha)
+HTMLCanvasElement::GetSurfaceSnapshot(gfxAlphaType* const aOutAlphaType)
 {
   if (!mCurrentContext)
     return nullptr;
 
-  return mCurrentContext->GetSurfaceSnapshot(aPremultAlpha);
+  return mCurrentContext->GetSurfaceSnapshot(aOutAlphaType);
 }
 
 AsyncCanvasRenderer*

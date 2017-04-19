@@ -392,12 +392,7 @@ function isPartnerBuild() {
 
 // Method to determine if we should be using geo-specific defaults
 function geoSpecificDefaultsEnabled() {
-  let geoSpecificDefaults = false;
-  try {
-    geoSpecificDefaults = Services.prefs.getBoolPref("browser.search.geoSpecificDefaults");
-  } catch (e) {}
-
-  return geoSpecificDefaults;
+  return Services.prefs.getBoolPref("browser.search.geoSpecificDefaults", false);
 }
 
 // Some notes on countryCode and region prefs:
@@ -502,10 +497,7 @@ function isUSTimezone() {
 // If it fails we don't touch that pref so isUS() does its normal thing.
 var ensureKnownCountryCode = Task.async(function* (ss) {
   // If we have a country-code already stored in our prefs we trust it.
-  let countryCode;
-  try {
-    countryCode = Services.prefs.getCharPref("browser.search.countryCode");
-  } catch (e) {}
+  let countryCode = Services.prefs.getCharPref("browser.search.countryCode", "");
 
   if (!countryCode) {
     // We don't have it cached, so fetch it. fetchCountryCode() will call
@@ -728,10 +720,7 @@ var fetchRegionDefault = (ss) => new Promise(resolve => {
 
   // Append the optional cohort value.
   const cohortPref = "browser.search.cohort";
-  let cohort;
-  try {
-    cohort = Services.prefs.getCharPref(cohortPref);
-  } catch (e) {}
+  let cohort = Services.prefs.getCharPref(cohortPref, "");
   if (cohort)
     endpoint += "/" + cohort;
 
@@ -886,12 +875,7 @@ function getDir(aKey, aIFace) {
  * exists in nsHttpHandler.cpp when building the UA string.
  */
 function getLocale() {
-  let locale = getLocalizedPref(LOCALE_PREF);
-  if (locale)
-    return locale;
-
-  // Not localized.
-  return Services.prefs.getCharPref(LOCALE_PREF);
+  return Services.locale.getRequestedLocale();
 }
 
 /**
@@ -1007,17 +991,15 @@ function QueryParameter(aName, aValue, aPurpose) {
 function ParamSubstitution(aParamValue, aSearchTerms, aEngine) {
   var value = aParamValue;
 
-  var distributionID = Services.appinfo.distributionID;
-  try {
-    distributionID = Services.prefs.getCharPref(BROWSER_SEARCH_PREF + "distributionID");
-  } catch (ex) { }
-  var official = MOZ_OFFICIAL;
-  try {
-    if (Services.prefs.getBoolPref(BROWSER_SEARCH_PREF + "official"))
-      official = "official";
-    else
-      official = "unofficial";
-  } catch (ex) { }
+  var distributionID =
+    Services.prefs.getCharPref(BROWSER_SEARCH_PREF + "distributionID",
+                               Services.appinfo.distributionID || "");
+
+  var official;
+  if (Services.prefs.getBoolPref(BROWSER_SEARCH_PREF + "official", MOZ_OFFICIAL))
+    official = "official";
+  else
+    official = "unofficial";
 
   // Custom search parameters. These are only available to default search
   // engines.
@@ -1611,7 +1593,13 @@ Engine.prototype = {
     } catch (ex) {
       LOG("_onLoad: Failed to init engine!\n" + ex);
       // Report an error to the user
-      promptError();
+      if (ex.result == Cr.NS_ERROR_FILE_CORRUPTED) {
+        promptError({ error: "error_invalid_engine_msg2",
+                      title: "error_invalid_format_title"
+                    });
+      } else {
+        promptError();
+      }
       return;
     }
 
@@ -1833,9 +1821,10 @@ Engine.prototype = {
 
       this._parse();
 
-    } else
-      FAIL(this._location + " is not a valid search plugin.", Cr.NS_ERROR_FAILURE);
-
+    } else {
+      Cu.reportError("Invalid search plugin due to namespace not matching.");
+      FAIL(this._location + " is not a valid search plugin.", Cr.NS_ERROR_FILE_CORRUPTED);
+    }
     // No need to keep a ref to our data (which in some cases can be a document
     // element) past this point
     this._data = null;
@@ -2558,6 +2547,7 @@ Engine.prototype = {
    * @param  options
    *         An object that must contain the following fields:
    *         {window} the content window for the window performing the search
+   *         {originAttributes} the originAttributes for performing the search
    *
    * @throws NS_ERROR_INVALID_ARG if options is omitted or lacks required
    *         elemeents
@@ -2576,12 +2566,26 @@ Engine.prototype = {
                            .getInterface(Components.interfaces.nsIWebNavigation)
                            .QueryInterface(Components.interfaces.nsILoadContext);
 
-    connector.speculativeConnect(searchURI, callbacks);
+    // Using the codebase principal which is constructed by the search URI
+    // and given originAttributes. If originAttributes are not given, we
+    // fallback to use the docShell's originAttributes.
+    let attrs = options.originAttributes;
+
+    if (!attrs) {
+      attrs = options.window.document
+                            .docShell
+                            .getOriginAttributes();
+    }
+
+    let principal = Services.scriptSecurityManager
+                            .createCodebasePrincipal(searchURI, attrs);
+
+    connector.speculativeConnect2(searchURI, principal, callbacks);
 
     if (this.supportsResponseType(URLTYPE_SUGGEST_JSON)) {
       let suggestURI = this.getSubmission("dummy", URLTYPE_SUGGEST_JSON).uri;
       if (suggestURI.prePath != searchURI.prePath)
-        connector.speculativeConnect(suggestURI, callbacks);
+        connector.speculativeConnect2(suggestURI, principal, callbacks);
     }
   },
 };
@@ -2628,7 +2632,7 @@ const gEmptyParseSubmissionResult =
       Object.freeze(new ParseSubmissionResult(null, "", -1, 0));
 
 function executeSoon(func) {
-  Services.tm.mainThread.dispatch(func, Ci.nsIThread.DISPATCH_NORMAL);
+  Services.tm.dispatchToMainThread(func);
 }
 
 /**
@@ -3635,22 +3639,24 @@ SearchService.prototype = {
       return;
     }
 
-    let jarNames = new Set();
-    for (let region in searchSettings) {
-      // Artifact builds use the full list.json which parses
-      // slightly differently
-      if (!("visibleDefaultEngines" in searchSettings[region])) {
-        continue;
-      }
-      for (let engine of searchSettings[region]["visibleDefaultEngines"]) {
-        jarNames.add(engine);
-      }
-    }
-
     // Check if we have a useable country specific list of visible default engines.
+    // This will only be set if we got the list from the Mozilla search server;
+    // it will not be set for distributions.
     let engineNames;
     let visibleDefaultEngines = this.getVerifiedGlobalAttr("visibleDefaultEngines");
     if (visibleDefaultEngines) {
+      let jarNames = new Set();
+      for (let region in searchSettings) {
+        // Artifact builds use the full list.json which parses
+        // slightly differently
+        if (!("visibleDefaultEngines" in searchSettings[region])) {
+          continue;
+        }
+        for (let engine of searchSettings[region]["visibleDefaultEngines"]) {
+          jarNames.add(engine);
+        }
+      }
+
       engineNames = visibleDefaultEngines.split(",");
       for (let engineName of engineNames) {
         // If all engineName values are part of jarNames,
@@ -3678,6 +3684,20 @@ SearchService.prototype = {
         region = "default";
       }
       engineNames = searchSettings[region]["visibleDefaultEngines"];
+    }
+
+    // Remove any engine names that are supposed to be ignored.
+    // This pref is only allows in a partner distribution.
+    let branch = Services.prefs.getDefaultBranch(BROWSER_SEARCH_PREF);
+    if (isPartnerBuild() &&
+        branch.getPrefType("ignoredJAREngines") == branch.PREF_STRING) {
+      let ignoredJAREngines = branch.getCharPref("ignoredJAREngines")
+                                    .split(",");
+      let filteredEngineNames = engineNames.filter(e => !ignoredJAREngines.includes(e));
+      // Don't allow all engines to be hidden
+      if (filteredEngineNames.length > 0) {
+        engineNames = filteredEngineNames;
+      }
     }
 
     for (let name of engineNames) {
@@ -3844,12 +3864,9 @@ SearchService.prototype = {
         alphaEngines.push(this._engines[engine.name]);
     }
 
-    let locale = Cc["@mozilla.org/intl/nslocaleservice;1"]
-                   .getService(Ci.nsILocaleService)
-                   .newLocale(getLocale());
     let collation = Cc["@mozilla.org/intl/collation-factory;1"]
                       .createInstance(Ci.nsICollationFactory)
-                      .CreateCollation(locale);
+                      .CreateCollation();
     const strength = Ci.nsICollation.kCollationCaseInsensitiveAscii;
     let comparator = (a, b) => collation.compareString(strength, a.name, b.name);
     alphaEngines.sort(comparator);
@@ -4345,20 +4362,6 @@ SearchService.prototype = {
   _recordEngineTelemetry() {
     Services.telemetry.getHistogramById("SEARCH_SERVICE_ENGINE_COUNT")
             .add(Object.keys(this._engines).length);
-    let hasUpdates = false;
-    let hasIconUpdates = false;
-    for (let name in this._engines) {
-      let engine = this._engines[name];
-      if (engine._hasUpdates) {
-        hasUpdates = true;
-        if (engine._iconUpdateURL) {
-          hasIconUpdates = true;
-          break;
-        }
-      }
-    }
-    Services.telemetry.getHistogramById("SEARCH_SERVICE_HAS_UPDATES").add(hasUpdates);
-    Services.telemetry.getHistogramById("SEARCH_SERVICE_HAS_ICON_UPDATES").add(hasIconUpdates);
   },
 
   /**
@@ -4666,11 +4669,11 @@ SearchService.prototype = {
     }
     this._observersAdded = true;
 
-    Services.obs.addObserver(this, SEARCH_ENGINE_TOPIC, false);
-    Services.obs.addObserver(this, QUIT_APPLICATION_TOPIC, false);
+    Services.obs.addObserver(this, SEARCH_ENGINE_TOPIC);
+    Services.obs.addObserver(this, QUIT_APPLICATION_TOPIC);
 
     if (AppConstants.MOZ_BUILD_APP == "mobile/android") {
-      Services.prefs.addObserver(LOCALE_PREF, this, false);
+      Services.prefs.addObserver(LOCALE_PREF, this);
     }
 
     // The current stage of shutdown. Used to help analyze crash

@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "TypedObjectConstants.h"
-
 function ViewedArrayBufferIfReified(tarray) {
     assert(IsTypedArray(tarray), "non-typed array asked for its buffer");
 
@@ -296,7 +294,8 @@ function TypedArrayEvery(callbackfn/*, thisArg*/) {
     return true;
 }
 
-// ES6 draft rev29 (2014/12/06) 22.2.3.8 %TypedArray%.prototype.fill(value [, start [, end ]])
+// ES2018 draft rev ad2d1c60c5dc42a806696d4b58b4dca42d1f7dd4
+// 22.2.3.8 %TypedArray%.prototype.fill ( value [ , start [ , end ] ] )
 function TypedArrayFill(value, start = 0, end = undefined) {
     // This function is not generic.
     if (!IsObject(this) || !IsTypedArray(this)) {
@@ -304,36 +303,50 @@ function TypedArrayFill(value, start = 0, end = undefined) {
                             "TypedArrayFill");
     }
 
-    GetAttachedArrayBuffer(this);
-
-    // Steps 1-2.
+    // Step 1.
     var O = this;
 
-    // Steps 3-5.
+    // Step 2.
+    var buffer = GetAttachedArrayBuffer(this);
+
+    // Step 3.
     var len = TypedArrayLength(O);
 
-    // Steps 6-7.
+    // Step 4.
+    value = ToNumber(value);
+
+    // Step 5.
     var relativeStart = ToInteger(start);
 
-    // Step 8.
+    // Step 6.
     var k = relativeStart < 0
             ? std_Math_max(len + relativeStart, 0)
             : std_Math_min(relativeStart, len);
 
-    // Steps 9-10.
+    // Step 7.
     var relativeEnd = end === undefined ? len : ToInteger(end);
 
-    // Step 11.
+    // Step 8.
     var final = relativeEnd < 0
                 ? std_Math_max(len + relativeEnd, 0)
                 : std_Math_min(relativeEnd, len);
 
-    // Step 12.
+    // Step 9.
+    if (buffer === null) {
+        // A typed array previously using inline storage may acquire a
+        // buffer, so we must check with the source.
+        buffer = ViewedArrayBufferIfReified(O);
+    }
+
+    if (IsDetachedBuffer(buffer))
+        ThrowTypeError(JSMSG_TYPED_ARRAY_DETACHED);
+
+    // Step 10.
     for (; k < final; k++) {
         O[k] = value;
     }
 
-    // Step 13.
+    // Step 11.
     return O;
 }
 
@@ -504,7 +517,7 @@ function TypedArrayForEach(callbackfn/*, thisArg*/) {
 
     // Step 5.
     if (arguments.length === 0)
-        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'TypedArray.prototype.forEach');
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, "TypedArray.prototype.forEach");
     if (!IsCallable(callbackfn))
         ThrowTypeError(JSMSG_NOT_FUNCTION, DecompileArg(0, callbackfn));
 
@@ -702,7 +715,7 @@ function TypedArrayMap(callbackfn/*, thisArg*/) {
 
     // Step 4.
     if (arguments.length === 0)
-        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, '%TypedArray%.prototype.map');
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, "%TypedArray%.prototype.map");
     if (!IsCallable(callbackfn))
         ThrowTypeError(JSMSG_NOT_FUNCTION, DecompileArg(0, callbackfn));
 
@@ -987,7 +1000,7 @@ function TypedArraySlice(start, end) {
         return callFunction(CallTypedArrayMethodIfWrapped, O, start, end, "TypedArraySlice");
     }
 
-    GetAttachedArrayBuffer(O);
+    var buffer = GetAttachedArrayBuffer(O);
 
     // Step 3.
     var len = TypedArrayLength(O);
@@ -1014,16 +1027,31 @@ function TypedArraySlice(start, end) {
     // Step 9.
     var A = TypedArraySpeciesCreateWithLength(O, count);
 
-    // Step 14.a.
-    var n = 0;
+    // Steps 10-13 (Not implemented, bug 1140152).
 
-    // Step 14.b.
-    while (k < final) {
-        // Steps 14.b.i-v.
-        A[n++] = O[k++];
+    // Steps 14-15.
+    if (count > 0) {
+        // Step 14.a.
+        var n = 0;
+
+        // Steps 14.b.ii, 15.b.
+        if (buffer === null) {
+            // A typed array previously using inline storage may acquire a
+            // buffer, so we must check with the source.
+            buffer = ViewedArrayBufferIfReified(O);
+        }
+
+        if (IsDetachedBuffer(buffer))
+            ThrowTypeError(JSMSG_TYPED_ARRAY_DETACHED);
+
+        // Step 14.b.
+        while (k < final) {
+            // Steps 14.b.i-v.
+            A[n++] = O[k++];
+        }
+
+        // FIXME: Implement step 15 (bug 1140152).
     }
-
-    // FIXME: Implement step 15 (bug 1140152).
 
     // Step 16.
     return A;
@@ -1096,7 +1124,7 @@ function TypedArrayCompare(x, y) {
 
     // Steps 8-9.
     if (x === 0 && y === 0)
-        return (1/x > 0 ? 1 : 0) - (1/y > 0 ? 1 : 0);
+        return ((1 / x) > 0 ? 1 : 0) - ((1 / y) > 0 ? 1 : 0);
 
     // Steps 3-4.
     if (Number_isNaN(x))
@@ -1111,7 +1139,7 @@ function TypedArrayCompareInt(x, y) {
     // Step 1.
     assert(typeof x === "number" && typeof y === "number",
            "x and y are not numbers.");
-    assert((x === (x|0) || x === (x>>>0)) && (y === (y|0) || y === (y>>>0)),
+    assert((x === (x | 0) || x === (x >>> 0)) && (y === (y | 0) || y === (y >>> 0)),
            "x and y are not int32/uint32 numbers.");
 
     // Step 2 (Implemented in TypedArraySort).
@@ -1650,7 +1678,7 @@ function ArrayBufferSlice(start, end) {
         ThrowTypeError(JSMSG_TYPED_ARRAY_DETACHED);
 
     // Steps 19-21.
-    ArrayBufferCopyData(new_, O, first | 0, newLen | 0, isWrapped);
+    ArrayBufferCopyData(new_, 0, O, first | 0, newLen | 0, isWrapped);
 
     // Step 22.
     return new_;
@@ -1736,7 +1764,7 @@ function SharedArrayBufferSlice(start, end) {
         ThrowTypeError(JSMSG_SHORT_SHARED_ARRAY_BUFFER_RETURNED, newLen, actualLen);
 
     // Steps 16-18.
-    SharedArrayBufferCopyData(new_, O, first | 0, newLen | 0, isWrapped);
+    SharedArrayBufferCopyData(new_, 0, O, first | 0, newLen | 0, isWrapped);
 
     // Step 19.
     return new_;

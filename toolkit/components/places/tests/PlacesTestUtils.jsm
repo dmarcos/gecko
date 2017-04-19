@@ -25,7 +25,7 @@ this.PlacesTestUtils = Object.freeze({
    *        Can be an nsIURI, in such a case a single LINK visit will be added.
    *        Otherwise can be an object describing the visit to add, or an array
    *        of these objects:
-   *          { uri: nsIURI of the page,
+   *          { uri: href, URL or nsIURI of the page,
    *            [optional] transition: one of the TRANSITION_* from nsINavHistoryService,
    *            [optional] title: title of the page,
    *            [optional] visitDate: visit date, either in microseconds from the epoch or as a date object
@@ -63,7 +63,15 @@ this.PlacesTestUtils = Object.freeze({
       }
       let visitDate = place.visitDate;
       if (visitDate) {
-        if (!(visitDate instanceof Date)) {
+        if (visitDate.constructor.name != "Date") {
+          // visitDate should be in microseconds. It's easy to do the wrong thing
+          // and pass milliseconds to updatePlaces, so we lazily check for that.
+          // While it's not easily distinguishable, since both are integers, we
+          // can check if the value is very far in the past, and assume it's
+          // probably a mistake.
+          if (visitDate <= Date.now()) {
+            throw new Error("AddVisits expects a Date object or _micro_seconds!");
+          }
           visitDate = PlacesUtils.toDate(visitDate);
         }
       } else {
@@ -91,7 +99,7 @@ this.PlacesTestUtils = Object.freeze({
       Services.obs.addObserver(function observe(subj, topic, data) {
         Services.obs.removeObserver(observe, topic);
         resolve();
-      }, PlacesUtils.TOPIC_EXPIRATION_FINISHED, false);
+      }, PlacesUtils.TOPIC_EXPIRATION_FINISHED);
     });
 
     return Promise.all([expirationFinished, PlacesUtils.history.clear()]);
@@ -157,6 +165,25 @@ this.PlacesTestUtils = Object.freeze({
        JOIN moz_places h ON h.id = v.place_id
        WHERE url_hash = hash(:url) AND url = :url`,
       { url });
+    return rows[0].getResultByIndex(0);
+  }),
+
+  /**
+   * Asynchronously returns the required DB field for a specified page.
+   * @param aURI
+   *        nsIURI or address to look for.
+   *
+   * @return {Promise}
+   * @resolves Returns the field value.
+   * @rejects JavaScript exception.
+   */
+  fieldInDB: Task.async(function* (aURI, field) {
+    let url = aURI instanceof Ci.nsIURI ? new URL(aURI.spec) : new URL(aURI);
+    let db = yield PlacesUtils.promiseDBConnection();
+    let rows = yield db.executeCached(
+      `SELECT ${field} FROM moz_places
+       WHERE url_hash = hash(:url) AND url = :url`,
+      { url: url.href });
     return rows[0].getResultByIndex(0);
   }),
 

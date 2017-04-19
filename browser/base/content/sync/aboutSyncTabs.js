@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from ../utilityOverlay.js */
+
 var Cu = Components.utils;
 
 Cu.import("resource://services-common/utils.js");
@@ -24,10 +26,10 @@ var RemoteTabViewer = {
   _tabsList: null,
 
   init() {
-    Services.obs.addObserver(this, "weave:service:login:finish", false);
-    Services.obs.addObserver(this, "weave:engine:sync:finish", false);
+    Services.obs.addObserver(this, "weave:service:login:finish");
+    Services.obs.addObserver(this, "weave:engine:sync:finish");
 
-    Services.obs.addObserver(this, "cloudsync:tabs:update", false);
+    Services.obs.addObserver(this, "cloudsync:tabs:update");
 
     this._tabsList = document.getElementById("tabsList");
 
@@ -302,12 +304,7 @@ var RemoteTabViewer = {
   _refetchTabs(force) {
     if (!force) {
       // Don't bother refetching tabs if we already did so recently
-      let lastFetch = 0;
-      try {
-        lastFetch = Services.prefs.getIntPref("services.sync.lastTabFetch");
-      } catch (e) {
-        /* Just use the default value of 0 */
-      }
+      let lastFetch = Services.prefs.getIntPref("services.sync.lastTabFetch", 0);
 
       let now = Math.floor(Date.now() / 1000);
       if (now - lastFetch < 30) {

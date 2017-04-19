@@ -1243,17 +1243,18 @@ GetJSScalarFromGLType(GLenum type, js::Scalar::Type* const out_scalarType)
 }
 
 bool
-WebGLContext::ReadPixels_SharedPrecheck(ErrorResult* const out_error)
+WebGLContext::ReadPixels_SharedPrecheck(CallerType aCallerType,
+                                        ErrorResult& out_error)
 {
     if (IsContextLost())
         return false;
 
     if (mCanvasElement &&
         mCanvasElement->IsWriteOnly() &&
-        !nsContentUtils::IsCallerChrome())
+        aCallerType != CallerType::System)
     {
         GenerateWarning("readPixels: Not allowed");
-        out_error->Throw(NS_ERROR_DOM_SECURITY_ERR);
+        out_error.Throw(NS_ERROR_DOM_SECURITY_ERR);
         return false;
     }
 
@@ -1306,10 +1307,11 @@ WebGLContext::ValidatePackSize(const char* funcName, uint32_t width, uint32_t he
 void
 WebGLContext::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                          GLenum type, const dom::ArrayBufferView& dstView,
-                         GLuint dstElemOffset, ErrorResult& out_error)
+                         GLuint dstElemOffset, CallerType aCallerType,
+                         ErrorResult& out_error)
 {
     const char funcName[] = "readPixels";
-    if (!ReadPixels_SharedPrecheck(&out_error))
+    if (!ReadPixels_SharedPrecheck(aCallerType, out_error))
         return;
 
     if (mBoundPixelPackBuffer) {
@@ -1345,10 +1347,11 @@ WebGLContext::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum
 
 void
 WebGLContext::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
-                         GLenum type, WebGLsizeiptr offset, ErrorResult& out_error)
+                         GLenum type, WebGLsizeiptr offset,
+                         CallerType aCallerType, ErrorResult& out_error)
 {
     const char funcName[] = "readPixels";
-    if (!ReadPixels_SharedPrecheck(&out_error))
+    if (!ReadPixels_SharedPrecheck(aCallerType, out_error))
         return;
 
     const auto& buffer = ValidateBufferSelection(funcName, LOCAL_GL_PIXEL_PACK_BUFFER);
@@ -1553,18 +1556,32 @@ WebGLContext::ReadPixelsImpl(GLint x, GLint y, GLsizei rawWidth, GLsizei rawHeig
         return;
     }
 
+    ////
+
+    int32_t readX, readY;
+    int32_t writeX, writeY;
+    int32_t rwWidth, rwHeight;
+    if (!Intersect(srcWidth, x, width, &readX, &writeX, &rwWidth) ||
+        !Intersect(srcHeight, y, height, &readY, &writeY, &rwHeight))
+    {
+        ErrorOutOfMemory("readPixels: Bad subrect selection.");
+        return;
+    }
+
     ////////////////
     // Now that the errors are out of the way, on to actually reading!
 
     OnBeforeReadCall();
 
-    uint32_t readX, readY;
-    uint32_t writeX, writeY;
-    uint32_t rwWidth, rwHeight;
-    Intersect(srcWidth, x, width, &readX, &writeX, &rwWidth);
-    Intersect(srcHeight, y, height, &readY, &writeY, &rwHeight);
+    if (!rwWidth || !rwHeight) {
+        // Disjoint rects, so we're done already.
+        DummyReadFramebufferOperation("readPixels");
+        return;
+    }
 
-    if (rwWidth == uint32_t(width) && rwHeight == uint32_t(height)) {
+    if (uint32_t(rwWidth) == width &&
+        uint32_t(rwHeight) == height)
+    {
         DoReadPixelsAndConvert(srcFormat->format, x, y, width, height, packFormat,
                                packType, dest, dataLen, rowStride);
         return;
@@ -1582,12 +1599,6 @@ WebGLContext::ReadPixelsImpl(GLint x, GLint y, GLsizei rawWidth, GLsizei rawHeig
 
     ////////////////////////////////////
     // Read only the in-bounds pixels.
-
-    if (!rwWidth || !rwHeight) {
-        // There aren't any, so we're 'done'.
-        DummyReadFramebufferOperation("readPixels");
-        return;
-    }
 
     if (IsWebGL2()) {
         if (!mPixelStore_PackRowLength) {
@@ -1608,7 +1619,7 @@ WebGLContext::ReadPixelsImpl(GLint x, GLint y, GLsizei rawWidth, GLsizei rawHeig
 
         uint8_t* row = (uint8_t*)dest + writeX * bytesPerPixel;
         row += writeY * rowStride;
-        for (uint32_t j = 0; j < rwHeight; j++) {
+        for (uint32_t j = 0; j < uint32_t(rwHeight); j++) {
             DoReadPixelsAndConvert(srcFormat->format, readX, readY+j, rwWidth, 1,
                                    packFormat, packType, row, dataLen, rowStride);
             row += rowStride;
@@ -2032,9 +2043,21 @@ WebGLContext::UniformNfv(const char* funcName, uint8_t N, WebGLUniformLocation* 
     (gl->*func)(loc->mLoc, numElementsToUpload, elemBytes);
 }
 
+static inline void
+MatrixAxBToRowMajor(const uint8_t width, const uint8_t height,
+                    const float* __restrict srcColMajor,
+                    float* __restrict dstRowMajor)
+{
+    for (uint8_t x = 0; x < width; ++x) {
+        for (uint8_t y = 0; y < height; ++y) {
+            dstRowMajor[y * width + x] = srcColMajor[x * height + y];
+        }
+    }
+}
+
 void
 WebGLContext::UniformMatrixAxBfv(const char* funcName, uint8_t A, uint8_t B,
-                                 WebGLUniformLocation* loc, bool transpose,
+                                 WebGLUniformLocation* loc, const bool transpose,
                                  const Float32Arr& arr, GLuint elemOffset,
                                  GLuint elemCountOverride)
 {
@@ -2046,13 +2069,48 @@ WebGLContext::UniformMatrixAxBfv(const char* funcName, uint8_t A, uint8_t B,
     }
     const auto elemBytes = arr.elemBytes + elemOffset;
 
-    uint32_t numElementsToUpload;
+    uint32_t numMatsToUpload;
     if (!ValidateUniformMatrixArraySetter(loc, A, B, LOCAL_GL_FLOAT, elemCount,
-                                          transpose, funcName, &numElementsToUpload))
+                                          transpose, funcName, &numMatsToUpload))
     {
         return;
     }
     MOZ_ASSERT(!loc->mInfo->mSamplerTexList, "Should not be a sampler.");
+
+    ////
+
+    bool uploadTranspose = transpose;
+    const float* uploadBytes = elemBytes;
+
+    UniqueBuffer temp;
+    if (!transpose && gl->WorkAroundDriverBugs() && gl->IsANGLE() &&
+        gl->IsAtLeast(gl::ContextProfile::OpenGLES, 300))
+    {
+        // ANGLE is really slow at non-GL-transposed matrices.
+        const size_t kElemsPerMat = A * B;
+
+        temp = malloc(numMatsToUpload * kElemsPerMat * sizeof(float));
+        if (!temp) {
+            ErrorOutOfMemory("%s: Failed to alloc temporary buffer for transposition.",
+                             funcName);
+            return;
+        }
+
+        auto srcItr = (const float*)elemBytes;
+        auto dstItr = (float*)temp.get();
+        const auto srcEnd = srcItr + numMatsToUpload * kElemsPerMat;
+
+        while (srcItr != srcEnd) {
+            MatrixAxBToRowMajor(A, B, srcItr, dstItr);
+            srcItr += kElemsPerMat;
+            dstItr += kElemsPerMat;
+        }
+
+        uploadBytes = (const float*)temp.get();
+        uploadTranspose = true;
+    }
+
+    ////
 
     static const decltype(&gl::GLContext::fUniformMatrix2fv) kFuncList[] = {
         &gl::GLContext::fUniformMatrix2fv,
@@ -2070,7 +2128,7 @@ WebGLContext::UniformMatrixAxBfv(const char* funcName, uint8_t A, uint8_t B,
     const auto func = kFuncList[3*(A-2) + (B-2)];
 
     MakeContextCurrent();
-    (gl->*func)(loc->mLoc, numElementsToUpload, transpose, elemBytes);
+    (gl->*func)(loc->mLoc, numMatsToUpload, uploadTranspose, uploadBytes);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

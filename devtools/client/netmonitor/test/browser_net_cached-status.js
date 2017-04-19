@@ -8,13 +8,17 @@
  */
 
 add_task(function* () {
-  let { tab, monitor } = yield initNetMonitor(STATUS_CODES_URL, null, true);
+  let { tab, monitor } = yield initNetMonitor(STATUS_CODES_URL, true);
   info("Starting test... ");
 
-  let { NetMonitorView } = monitor.panelWin;
-  let { RequestsMenu, NetworkDetails } = NetMonitorView;
+  let { document, gStore, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  let {
+    getDisplayedRequests,
+    getSortedRequests,
+  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  RequestsMenu.lazyUpdate = false;
+  gStore.dispatch(Actions.batchEnable(false));
 
   const REQUEST_DATA = [
     {
@@ -89,11 +93,15 @@ add_task(function* () {
 
   let index = 0;
   for (let request of REQUEST_DATA) {
-    let item = RequestsMenu.getItemAtIndex(index);
-
     info("Verifying request #" + index);
-    yield verifyRequestItemTarget(RequestsMenu, item,
-      request.method, request.uri, request.details);
+    yield verifyRequestItemTarget(
+      document,
+      getDisplayedRequests(gStore.getState()),
+      getSortedRequests(gStore.getState()).get(index),
+      request.method,
+      request.uri,
+      request.details
+    );
 
     index++;
   }

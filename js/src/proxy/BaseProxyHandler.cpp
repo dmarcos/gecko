@@ -15,7 +15,7 @@ using namespace js;
 using JS::IsArrayAnswer;
 
 bool
-BaseProxyHandler::enter(JSContext* cx, HandleObject wrapper, HandleId id, Action act,
+BaseProxyHandler::enter(JSContext* cx, HandleObject wrapper, HandleId id, Action act, bool mayThrow,
                         bool* bp) const
 {
     *bp = true;
@@ -327,7 +327,7 @@ BaseProxyHandler::fun_toString(JSContext* cx, HandleObject proxy, unsigned inden
 
 bool
 BaseProxyHandler::regexp_toShared(JSContext* cx, HandleObject proxy,
-                                  RegExpGuard* g) const
+                                  MutableHandleRegExpShared shared) const
 {
     MOZ_CRASH("This should have been a wrapped regexp");
 }

@@ -92,6 +92,9 @@ fn public_api() {
                         assert!(opus.version > 0);
                         "Opus"
                     }
+                    mp4::AudioCodecSpecific::MP3 => {
+                        "MP3"
+                    }
                 }, "ES");
                 assert!(a.samplesize > 0);
                 assert!(a.samplerate > 0);
@@ -119,12 +122,12 @@ fn public_audio_tenc() {
         match track.data {
             Some(mp4::SampleEntry::Audio(a)) => {
                 match a.protection_info.iter().find(|sinf| sinf.tenc.is_some()) {
-                    Some(ref p) => {
+                    Some(p) => {
                         assert_eq!(p.code_name, "mp4a");
                         if let Some(ref tenc) = p.tenc {
                             assert!(tenc.is_encrypted > 0);
-                            assert!(tenc.iv_size ==  16);
-                            assert!(tenc.kid == kid);
+                            assert_eq!(tenc.iv_size, 16);
+                            assert_eq!(tenc.kid, kid);
                         } else {
                             assert!(false, "Invalid test condition");
                         }
@@ -172,12 +175,12 @@ fn public_video_cenc() {
         match track.data {
             Some(mp4::SampleEntry::Video(v)) => {
                 match v.protection_info.iter().find(|sinf| sinf.tenc.is_some()) {
-                    Some(ref p) => {
+                    Some(p) => {
                         assert_eq!(p.code_name, "avc1");
                         if let Some(ref tenc) = p.tenc {
                             assert!(tenc.is_encrypted > 0);
-                            assert!(tenc.iv_size ==  16);
-                            assert!(tenc.kid == kid);
+                            assert_eq!(tenc.iv_size, 16);
+                            assert_eq!(tenc.kid, kid);
                         } else {
                             assert!(false, "Invalid test condition");
                         }

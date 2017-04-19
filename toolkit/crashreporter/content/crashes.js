@@ -51,8 +51,6 @@ function submitPendingReport(event) {
 
 function populateReportList() {
 
-  Services.telemetry.getHistogramById("ABOUTCRASHES_OPENED_COUNT").add(1);
-
   var prefService = Cc["@mozilla.org/preferences-service;1"].
                     getService(Ci.nsIPrefBranch);
 
@@ -80,14 +78,8 @@ function populateReportList() {
   var dateFormatter;
   var timeFormatter;
   try {
-    const locale = Cc["@mozilla.org/chrome/chrome-registry;1"]
-                   .getService(Ci.nsIXULChromeRegistry)
-                   .getSelectedLocale("global", true);
-    dateFormatter = new Intl.DateTimeFormat(locale, { year: "2-digit",
-                                                      month: "numeric",
-                                                      day: "numeric" });
-    timeFormatter = new Intl.DateTimeFormat(locale, { hour: "numeric",
-                                                      minute: "numeric" });
+    dateFormatter = Services.intl.createDateTimeFormat(undefined, { dateStyle: "short" });
+    timeFormatter = Services.intl.createDateTimeFormat(undefined, { timeStyle: "short" });
   } catch (e) {
     // XXX Fallback to be removed once bug 1215247 is complete
     // and the Intl API is available on all platforms.

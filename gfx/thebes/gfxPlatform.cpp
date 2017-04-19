@@ -7,6 +7,7 @@
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 #include "mozilla/layers/ISurfaceAllocator.h"     // for GfxMemoryImageReporter
+#include "mozilla/webrender/RenderThread.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/GraphicsMessages.h"
@@ -66,7 +67,6 @@
 #include "nsUnicodeRange.h"
 #include "nsServiceManagerUtils.h"
 #include "nsTArray.h"
-#include "nsILocaleService.h"
 #include "nsIObserverService.h"
 #include "nsIScreenManager.h"
 #include "FrameMetrics.h"
@@ -87,10 +87,6 @@
 #include "GLContext.h"
 #include "GLContextProvider.h"
 #include "mozilla/gfx/Logging.h"
-
-#if defined(MOZ_WIDGET_GTK)
-#include "gfxPlatformGtk.h" // xxx - for UseFcFontList
-#endif
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "TexturePoolOGL.h"
@@ -136,6 +132,7 @@ class mozilla::gl::SkiaGLGlue : public GenericAtomicRefCounted {
 #include "SoftwareVsyncSource.h"
 #include "nscore.h" // for NS_FREE_PERMANENT_DATA
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/TouchEvent.h"
 #include "gfxVR.h"
 #include "VRManagerChild.h"
 #include "mozilla/gfx/GPUParent.h"
@@ -154,6 +151,8 @@ using namespace mozilla::gfx;
 
 gfxPlatform *gPlatform = nullptr;
 static bool gEverInitialized = false;
+
+const ContentDeviceData* gContentDeviceInitData = nullptr;
 
 static Mutex* gGfxPlatformPrefsLock = nullptr;
 
@@ -531,6 +530,8 @@ gfxPlatform*
 gfxPlatform::GetPlatform()
 {
     if (!gPlatform) {
+        MOZ_RELEASE_ASSERT(!XRE_IsContentProcess(),
+                           "Content Process should have called InitChild() before first GetPlatform()");
         Init();
     }
     return gPlatform;
@@ -540,6 +541,19 @@ bool
 gfxPlatform::Initialized()
 {
   return !!gPlatform;
+}
+
+/* static */ void
+gfxPlatform::InitChild(const ContentDeviceData& aData)
+{
+  MOZ_ASSERT(XRE_IsContentProcess());
+  MOZ_RELEASE_ASSERT(!gPlatform,
+                     "InitChild() should be called before first GetPlatform()");
+  // Make the provided initial ContentDeviceData available to the init
+  // routines, so they don't have to do a sync request from the parent.
+  gContentDeviceInitData = &aData;
+  Init();
+  gContentDeviceInitData = nullptr;
 }
 
 void RecordingPrefChanged(const char *aPrefName, void *aClosure)
@@ -624,6 +638,16 @@ gfxPlatform::Init()
         gfxVars::SetPDMWMFDisableD3D11Dlls(Preferences::GetCString("media.wmf.disable-d3d11-for-dlls"));
         gfxVars::SetPDMWMFDisableD3D9Dlls(Preferences::GetCString("media.wmf.disable-d3d9-for-dlls"));
       }
+
+      nsCOMPtr<nsIFile> file;
+      nsresult rv = NS_GetSpecialDirectory(NS_GRE_DIR, getter_AddRefs(file));
+      if (NS_FAILED(rv)) {
+        gfxVars::SetGREDirectory(nsCString());
+      } else {
+        nsAutoCString nativePath;
+        file->GetNativePath(nativePath);
+        gfxVars::SetGREDirectory(nsCString(nativePath));
+      }
     }
 
     // Drop a note in the crash report if we end up forcing an option that could
@@ -687,6 +711,9 @@ gfxPlatform::Init()
     #error "No gfxPlatform implementation available"
 #endif
     gPlatform->InitAcceleration();
+    if (XRE_IsParentProcess()) {
+      gPlatform->InitWebRenderConfig();
+    }
 
     if (gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
       GPUProcessManager* gpu = GPUProcessManager::Get();
@@ -710,17 +737,9 @@ gfxPlatform::Init()
     gPlatform->ComputeTileSize();
 
     nsresult rv;
-
-    bool usePlatformFontList = true;
-#if defined(MOZ_WIDGET_GTK)
-    usePlatformFontList = gfxPlatformGtk::UseFcFontList();
-#endif
-
-    if (usePlatformFontList) {
-        rv = gfxPlatformFontList::Init();
-        if (NS_FAILED(rv)) {
-            MOZ_CRASH("Could not initialize gfxPlatformFontList");
-        }
+    rv = gfxPlatformFontList::Init();
+    if (NS_FAILED(rv)) {
+        MOZ_CRASH("Could not initialize gfxPlatformFontList");
     }
 
     gPlatform->mScreenReferenceSurface =
@@ -761,7 +780,7 @@ gfxPlatform::Init()
     TexturePoolOGL::Init();
 #endif
 
-    Preferences::RegisterCallbackAndCall(RecordingPrefChanged, "gfx.2d.recording", nullptr);
+    Preferences::RegisterCallbackAndCall(RecordingPrefChanged, "gfx.2d.recording");
 
     CreateCMSOutputProfile();
 
@@ -832,6 +851,12 @@ gfxPlatform::InitMoz2DLogging()
     cfg.mMaxAllocSize = gfxPrefs::MaxAllocSize();
 
     gfx::Factory::Init(cfg);
+}
+
+/* static */ bool
+gfxPlatform::IsHeadless()
+{
+    return PR_GetEnv("MOZ_HEADLESS");
 }
 
 static bool sLayersIPCIsUp = false;
@@ -939,6 +964,9 @@ gfxPlatform::InitLayersIPC()
 
     if (XRE_IsParentProcess())
     {
+        if (gfxVars::UseWebRender()) {
+            wr::RenderThread::Start();
+        }
         layers::CompositorThreadHolder::Start();
     }
 }
@@ -967,6 +995,9 @@ gfxPlatform::ShutdownLayersIPC()
 #endif // defined(MOZ_WIDGET_ANDROID)
         // This has to happen after shutting down the child protocols.
         layers::CompositorThreadHolder::Shutdown();
+        if (gfxVars::UseWebRender()) {
+            wr::RenderThread::ShutDown();
+        }
     } else {
       // TODO: There are other kind of processes and we should make sure gfx
       // stuff is either not created there or shut down properly.
@@ -1209,6 +1240,7 @@ gfxPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
   nativeFont.mType = NativeFontType::CAIRO_FONT_FACE;
   nativeFont.mFont = aFont->GetCairoScaledFont();
   return Factory::CreateScaledFontForNativeFont(nativeFont,
+                                                aFont->GetUnscaledFont(),
                                                 aFont->GetAdjustedSize());
 }
 
@@ -1256,6 +1288,9 @@ gfxPlatform::PopulateScreenInfo()
   }
 
   screen->GetColorDepth(&mScreenDepth);
+  if (XRE_IsParentProcess()) {
+    gfxVars::SetScreenDepth(mScreenDepth);
+  }
 
   int left, top;
   screen->GetRect(&left, &top, &mScreenSize.width, &mScreenSize.height);
@@ -1421,11 +1456,9 @@ gfxPlatform::CreateDrawTargetForBackend(BackendType aBackend, const IntSize& aSi
     if (!surf || surf->CairoStatus()) {
       return nullptr;
     }
-
     return CreateDrawTargetForSurface(surf, aSize);
-  } else {
-    return Factory::CreateDrawTarget(aBackend, aSize, aFormat);
   }
+  return Factory::CreateDrawTarget(aBackend, aSize, aFormat);
 }
 
 already_AddRefed<DrawTarget>
@@ -1539,6 +1572,20 @@ gfxPlatform::GetStandardFamilyName(const nsAString& aFontName,
     gfxPlatformFontList::PlatformFontList()->GetStandardFamilyName(aFontName,
                                                                    aFamilyName);
     return NS_OK;
+}
+
+nsString
+gfxPlatform::GetDefaultFontName(const nsACString& aLangGroup,
+                                const nsACString& aGenericFamily)
+{
+    gfxFontFamily* fontFamily = gfxPlatformFontList::PlatformFontList()->
+        GetDefaultFontFamily(aLangGroup, aGenericFamily);
+    if (!fontFamily) {
+      return EmptyString();
+    }
+    nsAutoString result;
+    fontFamily->LocalizedName(result);
+    return result;
 }
 
 bool
@@ -1698,6 +1745,7 @@ gfxPlatform::InitBackendPrefs(uint32_t aCanvasBitmask, BackendType aCanvasDefaul
 
     if (XRE_IsParentProcess()) {
         gfxVars::SetContentBackend(mContentBackend);
+        gfxVars::SetSoftwareBackend(mSoftwareBackend);
     }
 }
 
@@ -2194,17 +2242,15 @@ gfxPlatform::InitAcceleration()
       NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_HARDWARE_VIDEO_DECODING,
                                                discardFailureId, &status))) {
       if (status == nsIGfxInfo::FEATURE_STATUS_OK || gfxPrefs::HardwareVideoDecodingForceEnabled()) {
-         sLayersSupportsHardwareVideoDecoding = true;
-    }
+        sLayersSupportsHardwareVideoDecoding = true;
+      }
   }
 
   sLayersAccelerationPrefsInitialized = true;
 
   if (XRE_IsParentProcess()) {
     Preferences::RegisterCallbackAndCall(VideoDecodingFailedChangedCallback,
-                                         "media.hardware-video-decoding.failed",
-                                         nullptr,
-                                         Preferences::ExactMatch);
+                                         "media.hardware-video-decoding.failed");
     InitGPUProcessPrefs();
   }
 }
@@ -2292,6 +2338,67 @@ gfxPlatform::InitCompositorAccelerationPrefs()
   }
 }
 
+void
+gfxPlatform::InitWebRenderConfig()
+{
+  FeatureState& featureWebRender = gfxConfig::GetFeature(Feature::WEBRENDER);
+
+  featureWebRender.DisableByDefault(
+      FeatureStatus::OptIn,
+      "WebRender is an opt-in feature",
+      NS_LITERAL_CSTRING("FEATURE_FAILURE_DEFAULT_OFF"));
+
+  bool prefEnabled = Preferences::GetBool("gfx.webrender.enabled", false);
+  if (prefEnabled) {
+    featureWebRender.UserEnable("Enabled by pref");
+  }
+
+  ScopedGfxFeatureReporter reporter("WR", prefEnabled);
+
+  // WebRender relies on the GPU process when on Windows
+#ifdef XP_WIN
+  if (!gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
+    featureWebRender.ForceDisable(
+      FeatureStatus::Unavailable,
+      "GPU Process is disabled",
+      NS_LITERAL_CSTRING("FEATURE_FAILURE_GPU_PROCESS_DISABLED"));
+  }
+#endif
+
+  if (InSafeMode()) {
+    featureWebRender.ForceDisable(
+      FeatureStatus::Unavailable,
+      "Safe-mode is enabled",
+      NS_LITERAL_CSTRING("FEATURE_FAILURE_SAFE_MODE"));
+  }
+
+#ifndef MOZ_BUILD_WEBRENDER
+  featureWebRender.ForceDisable(
+    FeatureStatus::Unavailable,
+    "Build doesn't include WebRender",
+    NS_LITERAL_CSTRING("FEATURE_FAILURE_NO_WEBRENDER"));
+#endif
+
+#ifdef XP_WIN
+  if (Preferences::GetBool("gfx.webrender.force-angle", false)) {
+    if (!gfxConfig::IsEnabled(Feature::D3D11_HW_ANGLE)) {
+      featureWebRender.ForceDisable(
+        FeatureStatus::Unavailable,
+        "ANGLE is disabled",
+        NS_LITERAL_CSTRING("FEATURE_FAILURE_ANGLE_DISABLED"));
+    } else {
+      gfxVars::SetUseWebRenderANGLE(gfxConfig::IsEnabled(Feature::WEBRENDER));
+    }
+  }
+#endif
+
+  // gfxFeature is not usable in the GPU process, so we use gfxVars to transmit this feature
+  if (gfxConfig::IsEnabled(Feature::WEBRENDER)) {
+    gfxVars::SetUseWebRender(true);
+    reporter.SetSuccessful();
+  }
+}
+
 bool
 gfxPlatform::CanUseHardwareVideoDecoding()
 {
@@ -2334,7 +2441,9 @@ gfxPlatform::GetScaledFontForFontWithCairoSkia(DrawTarget* aTarget, gfxFont* aFo
     if (aTarget->GetBackendType() == BackendType::CAIRO || aTarget->GetBackendType() == BackendType::SKIA) {
         nativeFont.mType = NativeFontType::CAIRO_FONT_FACE;
         nativeFont.mFont = aFont->GetCairoScaledFont();
-        return Factory::CreateScaledFontForNativeFont(nativeFont, aFont->GetAdjustedSize());
+        return Factory::CreateScaledFontForNativeFont(nativeFont,
+                                                      aFont->GetUnscaledFont(),
+                                                      aFont->GetAdjustedSize());
     }
 
     return nullptr;
@@ -2481,6 +2590,11 @@ gfxPlatform::AsyncPanZoomEnabled()
 #ifdef MOZ_WIDGET_ANDROID
   return true;
 #else
+  if (!gfxPrefs::SingletonExists()) {
+    // Make sure the gfxPrefs has been initialized before reading from it.
+    MOZ_ASSERT(NS_IsMainThread());
+    gfxPrefs::GetSingleton();
+  }
   return gfxPrefs::AsyncPanZoomEnabledDoNotUseDirectly();
 #endif
 }
@@ -2542,10 +2656,27 @@ gfxPlatform::NotifyCompositorCreated(LayersBackend aBackend)
   }));
 }
 
+/* static */ void
+gfxPlatform::NotifyGPUProcessDisabled()
+{
+  if (gfxConfig::IsEnabled(Feature::WEBRENDER)) {
+    gfxConfig::GetFeature(Feature::WEBRENDER).ForceDisable(
+      FeatureStatus::Unavailable,
+      "GPU Process is disabled",
+      NS_LITERAL_CSTRING("FEATURE_FAILURE_GPU_PROCESS_DISABLED"));
+    gfxVars::SetUseWebRender(false);
+  }
+}
+
 void
 gfxPlatform::FetchAndImportContentDeviceData()
 {
   MOZ_ASSERT(XRE_IsContentProcess());
+
+  if (gContentDeviceInitData) {
+    ImportContentDeviceData(*gContentDeviceInitData);
+    return;
+  }
 
   mozilla::dom::ContentChild* cc = mozilla::dom::ContentChild::GetSingleton();
 
@@ -2583,6 +2714,12 @@ gfxPlatform::ImportGPUDeviceData(const mozilla::gfx::GPUDeviceData& aData)
   MOZ_ASSERT(XRE_IsParentProcess());
 
   gfxConfig::ImportChange(Feature::OPENGL_COMPOSITING, aData.oglCompositing());
+}
+
+bool
+gfxPlatform::SupportsApzTouchInput() const
+{
+  return dom::TouchEvent::PrefEnabled(nullptr);
 }
 
 bool

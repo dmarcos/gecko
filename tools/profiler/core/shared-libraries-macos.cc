@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <AvailabilityMacros.h>
+#include <mach-o/arch.h>
 #include <mach-o/loader.h>
 #include <mach-o/dyld_images.h>
 #include <mach/task_info.h>
@@ -14,11 +15,13 @@
 #include <stdlib.h>
 #include <vector>
 #include <sstream>
+#include "mozilla/Unused.h"
+#include "nsNativeCharsetUtils.h"
 
 #include "shared-libraries.h"
 
 // Architecture specific abstraction.
-#ifdef __i386__
+#if defined(GP_ARCH_x86)
 typedef mach_header platform_mach_header;
 typedef segment_command mach_segment_command_type;
 #define MACHO_MAGIC_NUMBER MH_MAGIC
@@ -33,7 +36,7 @@ typedef segment_command_64 mach_segment_command_type;
 #endif
 
 static
-void addSharedLibrary(const platform_mach_header* header, char *name, SharedLibraryInfo &info) {
+void addSharedLibrary(const platform_mach_header* header, char *path, SharedLibraryInfo &info) {
   const struct load_command *cmd =
     reinterpret_cast<const struct load_command *>(header + 1);
 
@@ -70,8 +73,22 @@ void addSharedLibrary(const platform_mach_header* header, char *name, SharedLibr
     uuid << '0';
   }
 
+  nsAutoString pathStr;
+  mozilla::Unused << NS_WARN_IF(NS_FAILED(NS_CopyNativeToUnicode(nsDependentCString(path), pathStr)));
+
+  nsAutoString nameStr = pathStr;
+  int32_t pos = nameStr.RFindChar('/');
+  if (pos != kNotFound) {
+    nameStr.Cut(0, pos + 1);
+  }
+
+  const NXArchInfo* archInfo =
+    NXGetArchInfoFromCpuType(header->cputype, header->cpusubtype);
+
   info.AddSharedLibrary(SharedLibrary(start, start + size, 0, uuid.str(),
-                                      name));
+                                      nameStr, pathStr, nameStr, pathStr,
+                                      "",
+                                      archInfo ? archInfo->name : ""));
 }
 
 // Use dyld to inspect the macho image information. We can build the SharedLibraryEntry structure

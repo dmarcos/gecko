@@ -10,7 +10,7 @@
 #include "js/Class.h"
 
 #include "nsJSPrincipals.h"
-#include "nsNullPrincipal.h"
+#include "NullPrincipal.h"
 #include "nsThreadUtils.h"
 #include "nsContentUtils.h"
 
@@ -110,10 +110,10 @@ SimpleGlobalObject::Create(GlobalType globalType, JS::Handle<JS::Value> proto)
            // lots of zones for what are probably very short-lived
            // compartments.  This should help them be GCed quicker and take up
            // less memory before they're GCed.
-          .setZone(JS::SystemZone);
+           .setSystemZone();
 
     if (NS_IsMainThread()) {
-      nsCOMPtr<nsIPrincipal> principal = nsNullPrincipal::Create();
+      nsCOMPtr<nsIPrincipal> principal = NullPrincipal::Create();
       options.creationOptions().setTrace(xpc::TraceXPCGlobal);
       global = xpc::CreateGlobalObject(cx, js::Jsvalify(&SimpleGlobalClass),
                                        nsJSPrincipals::get(principal),

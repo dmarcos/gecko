@@ -85,18 +85,18 @@ enum class StyleClear : uint8_t {
 };
 
 // Define geometry box for clip-path's reference-box, background-clip,
-// background-origin, mask-clip and mask-origin.
+// background-origin, mask-clip, mask-origin, shape-box and transform-box.
 enum class StyleGeometryBox : uint8_t {
-  Content,
-  Padding,
-  Border,
-  Margin,  // XXX Bug 1260094 comment 9.
-           // Although margin-box is required by mask-origin and mask-clip, we
-           // do not implement that due to lack of support in other browsers.
-           // clip-path reference-box only.
-  Fill,    // mask-clip, mask-origin and clip-path reference-box only.
-  Stroke,  // mask-clip, mask-origin and clip-path reference-box only.
-  View,    // mask-clip, mask-origin and clip-path reference-box only.
+  ContentBox, // Used by everything, except transform-box.
+  PaddingBox, // Used by everything, except transform-box.
+  BorderBox,
+  MarginBox,  // XXX Bug 1260094 comment 9.
+              // Although margin-box is required by mask-origin and mask-clip,
+              // we do not implement that due to lack of support in other
+              // browsers. clip-path reference-box only.
+  FillBox,    // Used by everything, except shape-box.
+  StrokeBox,  // mask-clip, mask-origin and clip-path reference-box only.
+  ViewBox,    // Used by everything, except shape-box.
   NoClip,  // mask-clip only.
   Text,    // background-clip only.
   NoBox,   // Depending on which kind of element this style value applied on,
@@ -144,15 +144,6 @@ enum class StyleHyphens : uint8_t {
   Auto,
 };
 
-// shape-box for shape-outside
-enum class StyleShapeOutsideShapeBox : uint8_t {
-  NoBox,
-  Content,
-  Padding,
-  Border,
-  Margin
-};
-
 // <shape-radius> for <basic-shape>
 enum class StyleShapeRadius : uint8_t {
   ClosestSide,
@@ -165,6 +156,14 @@ enum class StyleShapeSourceType : uint8_t {
   URL,
   Shape,
   Box,
+};
+
+// text-justify
+enum class StyleTextJustify : uint8_t {
+  None,
+  Auto,
+  InterWord,
+  InterCharacter,
 };
 
 // user-focus
@@ -682,8 +681,10 @@ enum class StyleDisplay : uint8_t {
 
 // CSS Grid <track-breadth> keywords
 // Should not overlap with NS_STYLE_GRID_TEMPLATE_SUBGRID
-#define NS_STYLE_GRID_TRACK_BREADTH_MAX_CONTENT 1
-#define NS_STYLE_GRID_TRACK_BREADTH_MIN_CONTENT 2
+enum class StyleGridTrackBreadth : uint8_t {
+  MaxContent = 1,
+  MinContent = 2,
+};
 
 // CSS Grid keywords for <auto-repeat>
 #define NS_STYLE_GRID_REPEAT_AUTO_FILL          0
@@ -859,10 +860,9 @@ enum class StyleDisplay : uint8_t {
 #define NS_STYLE_TEXT_DECORATION_LINE_OVERLINE     0x02
 #define NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH 0x04
 #define NS_STYLE_TEXT_DECORATION_LINE_BLINK        0x08
-#define NS_STYLE_TEXT_DECORATION_LINE_PREF_ANCHORS 0x10
 // OVERRIDE_ALL does not occur in stylesheets; it only comes from HTML
 // attribute mapping (and thus appears in computed data)
-#define NS_STYLE_TEXT_DECORATION_LINE_OVERRIDE_ALL 0x20
+#define NS_STYLE_TEXT_DECORATION_LINE_OVERRIDE_ALL 0x10
 #define NS_STYLE_TEXT_DECORATION_LINE_LINES_MASK   (NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE | NS_STYLE_TEXT_DECORATION_LINE_OVERLINE | NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH)
 
 // See nsStyleText
@@ -896,11 +896,6 @@ enum class StyleDisplay : uint8_t {
 // See nsStyleDisplay
 #define NS_STYLE_TOP_LAYER_NONE   0 // not in the top layer
 #define NS_STYLE_TOP_LAYER_TOP    1 // in the top layer
-
-// See nsStyleDisplay
-#define NS_STYLE_TRANSFORM_BOX_BORDER_BOX                0
-#define NS_STYLE_TRANSFORM_BOX_FILL_BOX                  1
-#define NS_STYLE_TRANSFORM_BOX_VIEW_BOX                  2
 
 // See nsStyleDisplay
 #define NS_STYLE_TRANSITION_TIMING_FUNCTION_EASE         0
@@ -1034,6 +1029,9 @@ enum class StyleDisplay : uint8_t {
 
 #define NS_STYLE_COLUMN_FILL_AUTO               0
 #define NS_STYLE_COLUMN_FILL_BALANCE            1
+
+#define NS_STYLE_COLUMN_SPAN_NONE               0
+#define NS_STYLE_COLUMN_SPAN_ALL                1
 
 // See nsStyleUIReset
 #define NS_STYLE_IME_MODE_AUTO                  0

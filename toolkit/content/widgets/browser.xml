@@ -19,13 +19,7 @@
             if (this.getAttribute("autoscroll") == "false")
               return false;
 
-            var enabled = true;
-            try {
-              enabled = this.mPrefs.getBoolPref("general.autoScroll");
-            } catch (ex) {
-            }
-
-            return enabled;
+            return this.mPrefs.getBoolPref("general.autoScroll", true);
           ]]>
         </getter>
       </property>
@@ -236,16 +230,17 @@
                 readonly="true"/>
 
       <!--
-        Weak reference to the related browser (see
-        nsIBrowser.getRelatedBrowser).
+        Weak reference to an optional frame loader that can be used to influence
+        process selection for this browser.
+        See nsIBrowser.sameProcessAsFrameLoader.
       -->
-      <field name="_relatedBrowser">null</field>
-      <property name="relatedBrowser">
+      <field name="_sameProcessAsFrameLoader">null</field>
+      <property name="sameProcessAsFrameLoader">
         <getter><![CDATA[
-          return this._relatedBrowser && this._relatedBrowser.get();
+          return this._sameProcessAsFrameLoader && this._sameProcessAsFrameLoader.get();
         ]]></getter>
         <setter><![CDATA[
-          this._relatedBrowser = Cu.getWeakReference(val);
+          this._sameProcessAsFrameLoader = Cu.getWeakReference(val);
         ]]></setter>
       </property>
 
@@ -395,10 +390,11 @@
       <method name="getTabBrowser">
         <body>
           <![CDATA[
-            var tabBrowser = this.parentNode;
-            while (tabBrowser && tabBrowser.localName != "tabbrowser")
-              tabBrowser = tabBrowser.parentNode;
-            return tabBrowser;
+            for (let node = this.parentNode; node instanceof Element; node = node.parentNode) {
+              if (node.localName == "tabbrowser")
+                return node;
+            }
+            return null;
           ]]>
         </body>
       </method>
@@ -557,6 +553,13 @@
         ]]></setter>
       </property>
 
+      <property name="effectiveTextZoom"
+                readonly="true">
+        <getter><![CDATA[
+          return this.markupDocumentViewer.effectiveTextZoom;
+        ]]></getter>
+      </property>
+
       <property name="isSyntheticDocument">
         <getter><![CDATA[
           return this.contentDocument.mozSyntheticDocument;
@@ -697,15 +700,12 @@
       <method name="audioPlaybackStarted">
         <body>
           <![CDATA[
+            if (this._audioMuted) {
+              return;
+            }
             let event = document.createEvent("Events");
             event.initEvent("DOMAudioPlaybackStarted", true, false);
             this.dispatchEvent(event);
-            if (this._audioBlocked) {
-              this._audioBlocked = false;
-              event = document.createEvent("Events");
-              event.initEvent("DOMAudioPlaybackBlockStopped", true, false);
-              this.dispatchEvent(event);
-            }
           ]]>
         </body>
       </method>
@@ -720,12 +720,26 @@
         </body>
       </method>
 
-      <method name="audioPlaybackBlocked">
+      <method name="audioPlaybackBlockStarted">
         <body>
           <![CDATA[
             this._audioBlocked = true;
             let event = document.createEvent("Events");
             event.initEvent("DOMAudioPlaybackBlockStarted", true, false);
+            this.dispatchEvent(event);
+          ]]>
+        </body>
+      </method>
+
+      <method name="audioPlaybackBlockStopped">
+        <body>
+          <![CDATA[
+            if (!this._audioBlocked) {
+              return;
+            }
+            this._audioBlocked = false;
+            let event = document.createEvent("Events");
+            event.initEvent("DOMAudioPlaybackBlockStopped", true, false);
             this.dispatchEvent(event);
           ]]>
         </body>
@@ -939,14 +953,14 @@
           } catch (e) {
           }
 
-          // XXX tabbrowser.xml sets "relatedBrowser" as a direct property on
-          // some browsers before they are put into a DOM (and get a binding).
-          // This hack makes sure that we hold a weak reference to the other
-          // browser (and go through the proper getter and setter).
-          if (this.hasOwnProperty("relatedBrowser")) {
-            var relatedBrowser = this.relatedBrowser;
-            delete this.relatedBrowser;
-            this.relatedBrowser = relatedBrowser;
+          // tabbrowser.xml sets "sameProcessAsFrameLoader" as a direct property
+          // on some browsers before they are put into a DOM (and get a
+          // binding).  This hack makes sure that we hold a weak reference to
+          // the other browser (and go through the proper getter and setter).
+          if (this.hasOwnProperty("sameProcessAsFrameLoader")) {
+            var sameProcessAsFrameLoader = this.sameProcessAsFrameLoader;
+            delete this.sameProcessAsFrameLoader;
+            this.sameProcessAsFrameLoader = sameProcessAsFrameLoader;
           }
 
           if (!this.isRemoteBrowser) {
@@ -959,7 +973,8 @@
             this.messageManager.addMessageListener("Autoscroll:Cancel", this);
             this.messageManager.addMessageListener("AudioPlayback:Start", this);
             this.messageManager.addMessageListener("AudioPlayback:Stop", this);
-            this.messageManager.addMessageListener("AudioPlayback:Block", this);
+            this.messageManager.addMessageListener("AudioPlayback:BlockStart", this);
+            this.messageManager.addMessageListener("AudioPlayback:BlockStop", this);
 
             if (this.hasAttribute("selectmenulist")) {
               this.messageManager.addMessageListener("Forms:ShowDropDown", this);
@@ -1057,8 +1072,11 @@
             case "AudioPlayback:Stop":
               this.audioPlaybackStopped();
               break;
-            case "AudioPlayback:Block":
-              this.audioPlaybackBlocked();
+            case "AudioPlayback:BlockStart":
+              this.audioPlaybackBlockStarted();
+              break;
+            case "AudioPlayback:BlockStop":
+              this.audioPlaybackBlockStopped();
               break;
             case "Forms:ShowDropDown": {
               if (!this._selectParentHelper) {
@@ -1068,7 +1086,10 @@
 
               let menulist = document.getElementById(this.getAttribute("selectmenulist"));
               menulist.menupopup.style.direction = data.direction;
-              this._selectParentHelper.populate(menulist, data.options, data.selectedIndex, this._fullZoom);
+              this._selectParentHelper.populate(menulist, data.options, data.selectedIndex, this._fullZoom,
+                                                data.uaBackgroundColor, data.uaColor,
+                                                data.uaSelectBackgroundColor, data.uaSelectColor,
+                                                data.selectBackgroundColor, data.selectColor, data.selectTextShadow);
               this._selectParentHelper.open(this, menulist, data.rect, data.isOpenedViaTouch);
               break;
             }
@@ -1244,7 +1265,7 @@
               }
               case "DOMMouseScroll": {
                 this._autoScrollPopup.hidePopup();
-                event.preventDefault();
+                aEvent.preventDefault();
                 break;
               }
               case "popuphidden": {
@@ -1507,20 +1528,10 @@
             return;
 
           // Toggle browse with caret mode
-          var browseWithCaretOn = false;
-          var warn = true;
-
-          try {
-            warn = this.mPrefs.getBoolPref(kPrefWarnOnEnable);
-          } catch (ex) {
-          }
-
-          try {
-            browseWithCaretOn = this.mPrefs.getBoolPref(kPrefCaretBrowsingOn);
-          } catch (ex) {
-          }
+          var browseWithCaretOn = this.mPrefs.getBoolPref(kPrefCaretBrowsingOn, false);
+          var warn = this.mPrefs.getBoolPref(kPrefWarnOnEnable, true);
           if (warn && !browseWithCaretOn) {
-            var checkValue = {value:false};
+            var checkValue = {value: false};
             var promptService = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
                                           .getService(Components.interfaces.nsIPromptService);
 

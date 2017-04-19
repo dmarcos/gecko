@@ -182,6 +182,17 @@ public:
   nsresult CacheCompletions(CacheResultArray * aEntries);
   nsresult CacheMisses(PrefixArray * aEntries);
 
+  // Used to probe the state of the worker thread. When the update begins,
+  // mUpdateObserver will be set. When the update finished, mUpdateObserver
+  // will be nulled out in NotifyUpdateObserver.
+  bool IsBusyUpdating() const { return !!mUpdateObserver; }
+
+  // Delegate Classifier to disable async update. If there is an
+  // ongoing update on the update thread, we will be blocked until
+  // the background update is done and callback is fired.
+  // Should be called on the worker thread.
+  void FlushAndDisableAsyncUpdate();
+
 private:
   // No subclassing
   ~nsUrlClassifierDBServiceWorker();
@@ -189,8 +200,7 @@ private:
   // Disallow copy constructor
   nsUrlClassifierDBServiceWorker(nsUrlClassifierDBServiceWorker&);
 
-  // Applies the current transaction and resets the update/working times.
-  nsresult ApplyUpdate();
+  nsresult NotifyUpdateObserver(nsresult aUpdateStatus);
 
   // Reset the in-progress update stream
   void ResetStream();
@@ -207,6 +217,11 @@ private:
                     const nsCString tableName,
                     uint32_t aCount,
                     LookupResultArray& results);
+
+  nsresult CacheResultToTableUpdate(CacheResult* aCacheResult,
+                                    TableUpdate* aUpdate);
+
+  bool IsSameAsLastResults(CacheResultArray& aResult);
 
   // Can only be used on the background thread
   nsCOMPtr<nsICryptoHash> mCryptoHash;
@@ -229,7 +244,7 @@ private:
   PrefixArray mMissCache;
 
   // Stores the last results that triggered a table update.
-  CacheResultArray mLastResults;
+  nsAutoPtr<CacheResultArray> mLastResults;
 
   nsresult mUpdateStatus;
   nsTArray<nsCString> mUpdateTables;

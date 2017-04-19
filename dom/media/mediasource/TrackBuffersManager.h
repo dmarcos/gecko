@@ -234,12 +234,12 @@ private:
   RefPtr<SourceBufferResource> mCurrentInputBuffer;
   RefPtr<MediaDataDemuxer> mInputDemuxer;
   // Length already processed in current media segment.
-  uint32_t mProcessedInput;
+  uint64_t mProcessedInput;
   Maybe<media::TimeUnit> mLastParsedEndTime;
 
-  void OnDemuxerInitDone(nsresult);
+  void OnDemuxerInitDone(const MediaResult& aResult);
   void OnDemuxerInitFailed(const MediaResult& aFailure);
-  void OnDemuxerResetDone(nsresult);
+  void OnDemuxerResetDone(const MediaResult& aResult);
   MozPromiseRequestHolder<MediaDataDemuxer::InitPromise> mDemuxerInitRequest;
 
   void OnDemuxFailed(TrackType aTrack, const MediaResult& aError);
@@ -334,9 +334,9 @@ private:
     // Byte size of all samples contained in this track buffer.
     uint32_t mSizeBuffer;
     // TrackInfo of the first metadata received.
-    RefPtr<SharedTrackInfo> mInfo;
+    RefPtr<TrackInfoSharedPtr> mInfo;
     // TrackInfo of the last metadata parsed (updated with each init segment.
-    RefPtr<SharedTrackInfo> mLastInfo;
+    RefPtr<TrackInfoSharedPtr> mLastInfo;
 
     // If set, position of the next sample to be retrieved by GetSample().
     // If the position is equal to the TrackBuffer's length, it indicates that

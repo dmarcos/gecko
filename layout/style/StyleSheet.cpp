@@ -7,14 +7,14 @@
 #include "mozilla/StyleSheet.h"
 
 #include "mozilla/dom/CSSRuleList.h"
+#include "mozilla/dom/MediaList.h"
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/ServoStyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/CSSStyleSheet.h"
 
 #include "mozAutoDocUpdate.h"
-#include "nsMediaList.h"
-#include "nsNullPrincipal.h"
+#include "NullPrincipal.h"
 
 namespace mozilla {
 
@@ -26,6 +26,7 @@ StyleSheet::StyleSheet(StyleBackendType aType, css::SheetParsingMode aParsingMod
   , mType(aType)
   , mDisabled(false)
   , mDocumentAssociationMode(NotOwnedByDocument)
+  , mInner(nullptr)
 {
 }
 
@@ -42,7 +43,11 @@ StyleSheet::StyleSheet(const StyleSheet& aCopy,
     // We only use this constructor during cloning.  It's the cloner's
     // responsibility to notify us if we end up being owned by a document.
   , mDocumentAssociationMode(NotOwnedByDocument)
+  , mInner(aCopy.mInner) // Shallow copy, but concrete subclasses will fix up.
 {
+  MOZ_ASSERT(mInner, "Should only copy StyleSheets with an mInner.");
+  mInner->AddSheet(this);
+
   if (aCopy.mMedia) {
     // XXX This is wrong; we should be keeping @import rules and
     // sheets in sync!
@@ -52,12 +57,67 @@ StyleSheet::StyleSheet(const StyleSheet& aCopy,
 
 StyleSheet::~StyleSheet()
 {
+  MOZ_ASSERT(mInner, "Should have an mInner at time of destruction.");
+  MOZ_ASSERT(mInner->mSheets.Contains(this), "Our mInner should include us.");
+  mInner->RemoveSheet(this);
+  mInner = nullptr;
+
   DropMedia();
+}
+
+void
+StyleSheet::UnlinkInner()
+{
+  // We can only have a cycle through our inner if we have a unique inner,
+  // because otherwise there are no JS wrappers for anything in the inner.
+  if (mInner->mSheets.Length() != 1) {
+    return;
+  }
+
+  // Have to be a bit careful with child sheets, because we want to
+  // drop their mNext pointers and null out their mParent and
+  // mDocument, but don't want to work with deleted objects.  And we
+  // don't want to do any addrefing in the process, just to make sure
+  // we don't confuse the cycle collector (though on the face of it,
+  // addref/release pairs during unlink should probably be ok).
+  RefPtr<StyleSheet> child;
+  child.swap(SheetInfo().mFirstChild);
+  while (child) {
+    MOZ_ASSERT(child->mParent == this, "We have a unique inner!");
+    child->mParent = nullptr;
+    child->mDocument = nullptr;
+
+    RefPtr<StyleSheet> next;
+    // Null out child->mNext, but don't let it die yet
+    next.swap(child->mNext);
+    // Switch to looking at the old value of child->mNext next iteration
+    child.swap(next);
+    // "next" is now our previous value of child; it'll get released
+    // as we loop around.
+  }
+}
+
+void
+StyleSheet::TraverseInner(nsCycleCollectionTraversalCallback &cb)
+{
+  // We can only have a cycle through our inner if we have a unique inner,
+  // because otherwise there are no JS wrappers for anything in the inner.
+  if (mInner->mSheets.Length() != 1) {
+    return;
+  }
+
+  StyleSheet* childSheet = GetFirstChild();
+  while (childSheet) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "child sheet");
+    cb.NoteXPCOMChild(NS_ISUPPORTS_CAST(nsIDOMCSSStyleSheet*, childSheet));
+    childSheet = childSheet->mNext;
+  }
 }
 
 // QueryInterface implementation for StyleSheet
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(StyleSheet)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+  NS_INTERFACE_MAP_ENTRY(nsICSSLoaderObserver)
   NS_INTERFACE_MAP_ENTRY(nsIDOMStyleSheet)
   NS_INTERFACE_MAP_ENTRY(nsIDOMCSSStyleSheet)
 NS_INTERFACE_MAP_END
@@ -69,10 +129,12 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(StyleSheet)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(StyleSheet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMedia)
+  tmp->TraverseInner(cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(StyleSheet)
   tmp->DropMedia();
+  tmp->UnlinkInner();
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
@@ -140,7 +202,7 @@ StyleSheet::SetEnabled(bool aEnabled)
 StyleSheetInfo::StyleSheetInfo(CORSMode aCORSMode,
                                ReferrerPolicy aReferrerPolicy,
                                const dom::SRIMetadata& aIntegrity)
-  : mPrincipal(nsNullPrincipal::Create())
+  : mPrincipal(NullPrincipal::Create())
   , mCORSMode(aCORSMode)
   , mReferrerPolicy(aReferrerPolicy)
   , mIntegrity(aIntegrity)
@@ -150,7 +212,67 @@ StyleSheetInfo::StyleSheetInfo(CORSMode aCORSMode,
 #endif
 {
   if (!mPrincipal) {
-    NS_RUNTIMEABORT("nsNullPrincipal::Init failed");
+    NS_RUNTIMEABORT("NullPrincipal::Init failed");
+  }
+}
+
+StyleSheetInfo::StyleSheetInfo(StyleSheetInfo& aCopy,
+                               StyleSheet* aPrimarySheet)
+  : mSheetURI(aCopy.mSheetURI)
+  , mOriginalSheetURI(aCopy.mOriginalSheetURI)
+  , mBaseURI(aCopy.mBaseURI)
+  , mPrincipal(aCopy.mPrincipal)
+  , mCORSMode(aCopy.mCORSMode)
+  , mReferrerPolicy(aCopy.mReferrerPolicy)
+  , mIntegrity(aCopy.mIntegrity)
+  , mComplete(aCopy.mComplete)
+  , mFirstChild()  // We don't rebuild the child because we're making a copy
+                   // without children.
+#ifdef DEBUG
+  , mPrincipalSet(aCopy.mPrincipalSet)
+#endif
+{
+  AddSheet(aPrimarySheet);
+}
+
+void
+StyleSheetInfo::AddSheet(StyleSheet* aSheet)
+{
+  mSheets.AppendElement(aSheet);
+}
+
+void
+StyleSheetInfo::RemoveSheet(StyleSheet* aSheet)
+{
+  if ((aSheet == mSheets.ElementAt(0)) && (mSheets.Length() > 1)) {
+    StyleSheet::ChildSheetListBuilder::ReparentChildList(mSheets[1], mFirstChild);
+  }
+
+  if (1 == mSheets.Length()) {
+    NS_ASSERTION(aSheet == mSheets.ElementAt(0), "bad parent");
+    delete this;
+    return;
+  }
+
+  mSheets.RemoveElement(aSheet);
+}
+
+void
+StyleSheet::ChildSheetListBuilder::SetParentLinks(StyleSheet* aSheet)
+{
+  aSheet->mParent = parent;
+  aSheet->SetAssociatedDocument(parent->mDocument,
+                                parent->mDocumentAssociationMode);
+}
+
+void
+StyleSheet::ChildSheetListBuilder::ReparentChildList(StyleSheet* aPrimarySheet,
+                                                     StyleSheet* aFirstChild)
+{
+  for (StyleSheet *child = aFirstChild; child; child = child->mNext) {
+    child->mParent = aPrimarySheet;
+    child->SetAssociatedDocument(aPrimarySheet->mDocument,
+                                 aPrimarySheet->mDocumentAssociationMode);
   }
 }
 
@@ -298,6 +420,70 @@ StyleSheet::DeleteRule(uint32_t aIndex,
     return;
   }
   FORWARD_INTERNAL(DeleteRuleInternal, (aIndex, aRv))
+}
+
+nsresult
+StyleSheet::DeleteRuleFromGroup(css::GroupRule* aGroup, uint32_t aIndex)
+{
+  NS_ENSURE_ARG_POINTER(aGroup);
+  NS_ASSERTION(IsComplete(), "No deleting from an incomplete sheet!");
+  RefPtr<css::Rule> rule = aGroup->GetStyleRuleAt(aIndex);
+  NS_ENSURE_TRUE(rule, NS_ERROR_ILLEGAL_VALUE);
+
+  // check that the rule actually belongs to this sheet!
+  if (this != rule->GetStyleSheet()) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  mozAutoDocUpdate updateBatch(mDocument, UPDATE_STYLE, true);
+
+  WillDirty();
+
+  nsresult result = aGroup->DeleteStyleRuleAt(aIndex);
+  NS_ENSURE_SUCCESS(result, result);
+
+  rule->SetStyleSheet(nullptr);
+
+  DidDirty();
+
+  if (mDocument) {
+    mDocument->StyleRuleRemoved(this, rule);
+  }
+
+  return NS_OK;
+}
+
+nsresult
+StyleSheet::InsertRuleIntoGroup(const nsAString& aRule,
+                                css::GroupRule* aGroup,
+                                uint32_t aIndex)
+{
+  NS_ASSERTION(IsComplete(), "No inserting into an incomplete sheet!");
+  // check that the group actually belongs to this sheet!
+  if (this != aGroup->GetStyleSheet()) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  // parse and grab the rule
+  mozAutoDocUpdate updateBatch(mDocument, UPDATE_STYLE, true);
+
+  WillDirty();
+
+  nsresult result;
+  if (IsGecko()) {
+    result = AsGecko()->InsertRuleIntoGroupInternal(aRule, aGroup, aIndex);
+  } else {
+    result = AsServo()->InsertRuleIntoGroupInternal(aRule, aGroup, aIndex);
+  }
+  NS_ENSURE_SUCCESS(result, result);
+
+  DidDirty();
+
+  if (mDocument) {
+    mDocument->StyleRuleAdded(this, aGroup->GetStyleRuleAt(aIndex));
+  }
+
+  return NS_OK;
 }
 
 void
@@ -487,7 +673,7 @@ StyleSheet::List(FILE* out, int32_t aIndent) const
 #endif
 
 void
-StyleSheet::SetMedia(nsMediaList* aMedia)
+StyleSheet::SetMedia(dom::MediaList* aMedia)
 {
   mMedia = aMedia;
 }
@@ -501,11 +687,11 @@ StyleSheet::DropMedia()
   }
 }
 
-nsMediaList*
+dom::MediaList*
 StyleSheet::Media()
 {
   if (!mMedia) {
-    mMedia = new nsMediaList();
+    mMedia = dom::MediaList::Create(mType, nsString());
     mMedia->SetStyleSheet(this);
   }
 

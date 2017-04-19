@@ -155,6 +155,9 @@ add_task(function* test_about_page_navigate() {
   is(entries.length, 1, "there is one shistory entry");
   is(entries[0].url, "about:blank", "url is correct");
 
+  // Verify that the title is also recorded.
+  is(entries[0].title, "about:blank", "title is correct");
+
   browser.loadURI("about:robots");
   yield promiseBrowserLoaded(browser);
 
@@ -184,7 +187,7 @@ add_task(function* test_pushstate_replacestate() {
   is(entries[0].url, "http://example.com/1", "url is correct");
 
   yield ContentTask.spawn(browser, {}, function* () {
-    content.window.history.pushState({}, "", 'test-entry/');
+    content.window.history.pushState({}, "", "test-entry/");
   });
 
   // Check that we have added the history entry.

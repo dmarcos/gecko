@@ -10,11 +10,11 @@
 #include "mozilla/CSSEditUtils.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/TextEditor.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/File.h"
 
 #include "nsAttrName.h"
-#include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsIContentFilter.h"
 #include "nsICSSLoaderObserver.h"
@@ -29,7 +29,6 @@
 #include "nsIHTMLAbsPosEditor.h"
 #include "nsIHTMLEditor.h"
 #include "nsIHTMLInlineTableEditor.h"
-#include "nsIHTMLObjectResizeListener.h"
 #include "nsIHTMLObjectResizer.h"
 #include "nsISelectionListener.h"
 #include "nsITableEditor.h"
@@ -38,7 +37,6 @@
 #include "nsTArray.h"
 
 class nsDocumentFragment;
-class nsIDOMKeyEvent;
 class nsITransferable;
 class nsIClipboard;
 class nsILinkHandler;
@@ -61,6 +59,8 @@ class DocumentFragment;
 namespace widget {
 struct IMEState;
 } // namespace widget
+
+enum class ParagraphSeparator { div, p, br };
 
 /**
  * The HTML editor implementation.<br>
@@ -100,6 +100,9 @@ public:
 
   HTMLEditor();
 
+  virtual HTMLEditor* AsHTMLEditor() override { return this; }
+  virtual const HTMLEditor* AsHTMLEditor() const override { return this; }
+
   bool GetReturnInParagraphCreatesNewParagraph();
   Element* GetSelectionContainer();
 
@@ -107,9 +110,9 @@ public:
   NS_IMETHOD GetPreferredIMEState(widget::IMEState* aState) override;
 
   // TextEditor overrides
-  NS_IMETHOD GetIsDocumentEditable(bool* aIsDocumentEditable) override;
   NS_IMETHOD BeginningOfDocument() override;
-  virtual nsresult HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent) override;
+  virtual nsresult HandleKeyPressEvent(
+                     WidgetKeyboardEvent* aKeyboardEvent) override;
   virtual already_AddRefed<nsIContent> GetFocusedContent() override;
   virtual already_AddRefed<nsIContent> GetFocusedContentForIME() override;
   virtual bool IsActiveInDOMWindow() override;
@@ -117,7 +120,7 @@ public:
   virtual Element* GetEditorRoot() override;
   virtual already_AddRefed<nsIContent> FindSelectionRoot(
                                          nsINode *aNode) override;
-  virtual bool IsAcceptableInputEvent(nsIDOMEvent* aEvent) override;
+  virtual bool IsAcceptableInputEvent(WidgetGUIEvent* aGUIEvent) override;
   virtual already_AddRefed<nsIContent> GetInputEventTargetContent() override;
   virtual bool IsEditable(nsINode* aNode) override;
   using EditorBase::IsEditable;
@@ -202,7 +205,7 @@ public:
                                   int32_t* outOffset = 0);
 
   // Overrides of EditorBase interface methods
-  nsresult EndUpdateViewBatch() override;
+  virtual nsresult EndUpdateViewBatch() override;
 
   NS_IMETHOD Init(nsIDOMDocument* aDoc, nsIContent* aRoot,
                   nsISelectionController* aSelCon, uint32_t aFlags,
@@ -369,6 +372,15 @@ public:
     return attrCount > 1 ||
            (1 == attrCount &&
             !aElement->GetAttrNameAt(0)->Equals(nsGkAtoms::mozdirty));
+  }
+
+  ParagraphSeparator GetDefaultParagraphSeparator() const
+  {
+    return mDefaultParagraphSeparator;
+  }
+  void SetDefaultParagraphSeparator(ParagraphSeparator aSep)
+  {
+    mDefaultParagraphSeparator = aSep;
   }
 
 protected:
@@ -597,12 +609,12 @@ protected:
                                     nsIDOMNode *aDestinationNode,
                                     int32_t aDestinationOffset,
                                     bool aDoDeleteSelection);
-  nsresult InsertFromDataTransfer(dom::DataTransfer* aDataTransfer,
-                                  int32_t aIndex,
-                                  nsIDOMDocument* aSourceDoc,
-                                  nsIDOMNode* aDestinationNode,
-                                  int32_t aDestOffset,
-                                  bool aDoDeleteSelection) override;
+  virtual nsresult InsertFromDataTransfer(dom::DataTransfer* aDataTransfer,
+                                          int32_t aIndex,
+                                          nsIDOMDocument* aSourceDoc,
+                                          nsIDOMNode* aDestinationNode,
+                                          int32_t aDestOffset,
+                                          bool aDoDeleteSelection) override;
   bool HavePrivateHTMLFlavor(nsIClipboard* clipboard );
   nsresult ParseCFHTML(nsCString& aCfhtml, char16_t** aStuffToPaste,
                        char16_t** aCfcontext);
@@ -669,11 +681,6 @@ protected:
   void NormalizeEOLInsertPosition(nsINode* firstNodeToInsert,
                                   nsCOMPtr<nsIDOMNode>* insertParentNode,
                                   int32_t* insertOffset);
-
-  /**
-   * Small utility routine to test the eEditorReadonly bit.
-   */
-  bool IsModifiable();
 
   /**
    * Helpers for block transformations.
@@ -828,7 +835,7 @@ protected:
   bool mCRInParagraphCreatesParagraph;
 
   bool mCSSAware;
-  nsAutoPtr<CSSEditUtils> mCSSEditUtils;
+  UniquePtr<CSSEditUtils> mCSSEditUtils;
 
   // Used by GetFirstSelectedCell and GetNextSelectedCell
   int32_t  mSelectedCellIndex;
@@ -912,8 +919,6 @@ protected:
   nsCOMPtr<nsIDOMEventListener>  mMouseMotionListenerP;
   nsCOMPtr<nsISelectionListener> mSelectionListenerP;
   nsCOMPtr<nsIDOMEventListener>  mResizeEventListenerP;
-
-  nsTArray<OwningNonNull<nsIHTMLObjectResizeListener>> mObjectResizeEventListeners;
 
   int32_t mOriginalX;
   int32_t mOriginalY;
@@ -1008,6 +1013,8 @@ protected:
   void RemoveMouseClickListener(Element* aElement);
 
   nsCOMPtr<nsILinkHandler> mLinkHandler;
+
+  ParagraphSeparator mDefaultParagraphSeparator;
 
 public:
   friend class HTMLEditorEventListener;

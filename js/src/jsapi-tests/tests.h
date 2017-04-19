@@ -24,6 +24,7 @@
 /* Note: Aborts on OOM. */
 class JSAPITestString {
     js::Vector<char, 0, js::SystemAllocPolicy> chars;
+
   public:
     JSAPITestString() {}
     explicit JSAPITestString(const char* s) { *this += s; }
@@ -33,21 +34,34 @@ class JSAPITestString {
     const char* end() const { return chars.end(); }
     size_t length() const { return chars.length(); }
 
-    JSAPITestString & operator +=(const char* s) {
+    JSAPITestString& operator +=(const char* s) {
         if (!chars.append(s, strlen(s)))
             abort();
         return *this;
     }
 
-    JSAPITestString & operator +=(const JSAPITestString& s) {
+    JSAPITestString& operator +=(const JSAPITestString& s) {
         if (!chars.append(s.begin(), s.length()))
             abort();
         return *this;
     }
 };
 
-inline JSAPITestString operator+(JSAPITestString a, const char* b) { return a += b; }
-inline JSAPITestString operator+(JSAPITestString a, const JSAPITestString& b) { return a += b; }
+inline JSAPITestString
+operator+(const JSAPITestString& a, const char* b)
+{
+    JSAPITestString result = a;
+    result += b;
+    return result;
+}
+
+inline JSAPITestString
+operator+(const JSAPITestString& a, const JSAPITestString& b)
+{
+    JSAPITestString result = a;
+    result += b;
+    return result;
+}
 
 class JSAPITest
 {
@@ -206,7 +220,16 @@ class JSAPITest
             return fail(JSAPITestString("CHECK failed: " #expr), __FILE__, __LINE__); \
     } while (false)
 
-    bool fail(JSAPITestString msg = JSAPITestString(), const char* filename = "-", int lineno = 0) {
+    bool fail(const JSAPITestString& msg = JSAPITestString(),
+              const char* filename = "-",
+              int lineno = 0)
+    {
+        char location[256];
+        snprintf(location, mozilla::ArrayLength(location), "%s:%d:", filename, lineno);
+
+        JSAPITestString message(location);
+        message += msg;
+
         if (JS_IsExceptionPending(cx)) {
             js::gc::AutoSuppressGC gcoff(cx);
             JS::RootedValue v(cx);
@@ -216,11 +239,15 @@ class JSAPITest
             if (s) {
                 JSAutoByteString bytes(cx, s);
                 if (!!bytes)
-                    msg += bytes.ptr();
+                    message += bytes.ptr();
             }
         }
-        fprintf(stderr, "%s:%d:%.*s\n", filename, lineno, (int) msg.length(), msg.begin());
-        msgs += msg;
+
+        fprintf(stderr, "%.*s\n", int(message.length()), message.begin());
+
+        if (msgs.length() != 0)
+            msgs += " | ";
+        msgs += message;
         return false;
     }
 

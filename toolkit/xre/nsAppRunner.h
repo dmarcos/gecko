@@ -118,6 +118,9 @@ namespace mozilla {
 namespace startup {
 extern GeckoProcessType sChildProcessType;
 } // namespace startup
+
+const char* PlatformBuildID();
+
 } // namespace mozilla
 
 /**
@@ -132,5 +135,9 @@ void SetupErrorHandling(const char* progname);
  * represents not blocking.
  */
 uint32_t MultiprocessBlockPolicy();
+
+#ifdef MOZ_WIDGET_GTK
+const char* DetectDisplay();
+#endif
 
 #endif // nsAppRunner_h__

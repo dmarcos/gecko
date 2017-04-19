@@ -258,13 +258,14 @@ Site.prototype = {
         link.type == "history" &&
         link.baseDomain) {
       let placeholder = this._querySelector(".newtab-thumbnail.placeholder");
-      let hue = 0;
+      let charCodeSum = 0;
       for (let c of link.baseDomain) {
-        hue += c.charCodeAt(0);
+        charCodeSum += c.charCodeAt(0);
       }
-      hue %= 256;
-      placeholder.style.backgroundColor = "hsl(" + hue + ",50%,60%)";
-      placeholder.textContent = link.baseDomain.substr(0,1);
+      const COLORS = 16;
+      let hue = Math.round((charCodeSum % COLORS) / COLORS * 360);
+      placeholder.style.backgroundColor = "hsl(" + hue + ",80%,40%)";
+      placeholder.textContent = link.baseDomain.substr(0,1).toUpperCase();
     }
 
     if (link.enhancedImageURI) {
@@ -310,10 +311,21 @@ Site.prototype = {
   _speculativeConnect: function Site_speculativeConnect() {
     let sc = Services.io.QueryInterface(Ci.nsISpeculativeConnect);
     let uri = Services.io.newURI(this.url);
+
+    if (!uri.schemeIs("http") && !uri.schemeIs("https")) {
+      return;
+    }
+
     try {
       // This can throw for certain internal URLs, when they wind up in
       // about:newtab. Be sure not to propagate the error.
-      sc.speculativeConnect(uri, null);
+
+      // We use the URI's codebase principal here to open its speculative
+      // connection.
+      let originAttributes = document.docShell.getOriginAttributes();
+      let principal = Services.scriptSecurityManager
+                              .createCodebasePrincipal(uri, originAttributes);
+      sc.speculativeConnect2(uri, principal, null);
     } catch (e) {}
   },
 

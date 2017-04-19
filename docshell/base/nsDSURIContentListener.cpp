@@ -134,7 +134,7 @@ nsDSURIContentListener::DoContent(const nsACString& aContentType,
     mExistingJPEGRequest = baseChannel;
   }
 
-  if (rv == NS_ERROR_REMOTE_XUL) {
+  if (rv == NS_ERROR_REMOTE_XUL || rv == NS_ERROR_DOCSHELL_DYING) {
     aRequest->Cancel(rv);
     *aAbortProcess = true;
     return NS_OK;
@@ -428,8 +428,8 @@ nsDSURIContentListener::CheckFrameOptions(nsIRequest* aRequest)
   }
 
   nsAutoCString xfoHeaderCValue;
-  httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("X-Frame-Options"),
-                                 xfoHeaderCValue);
+  Unused << httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("X-Frame-Options"),
+                                           xfoHeaderCValue);
   NS_ConvertUTF8toUTF16 xfoHeaderValue(xfoHeaderCValue);
 
   // if no header value, there's nothing to do.

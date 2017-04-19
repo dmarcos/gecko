@@ -14,9 +14,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import buildconfig
 
 from mock import patch
 from mozpack.manifests import InstallManifest
+import mozpack.path as mozpath
 
 import symbolstore
 
@@ -29,21 +31,22 @@ def write_elf(filename):
 def write_macho(filename):
     open(filename, "wb").write(struct.pack("<I28x", 0xfeedface))
 
-def write_pdb(filename):
+def write_dll(filename):
     open(filename, "w").write("aaa")
-    # write out a fake DLL too
-    open(os.path.splitext(filename)[0] + ".dll", "w").write("aaa")
+    # write out a fake PDB too
+    open(os.path.splitext(filename)[0] + ".pdb", "w").write("aaa")
 
-writer = {'Windows': write_pdb,
-          'Microsoft': write_pdb,
+def target_platform():
+    return buildconfig.substs['OS_TARGET']
+
+writer = {'WINNT': write_dll,
           'Linux': write_elf,
           'Sunos5': write_elf,
-          'Darwin': write_macho}[platform.system()]
-extension = {'Windows': ".pdb",
-             'Microsoft': ".pdb",
+          'Darwin': write_macho}[target_platform()]
+extension = {'WINNT': ".dll",
              'Linux': ".so",
              'Sunos5': ".so",
-             'Darwin': ".dylib"}[platform.system()]
+             'Darwin': ".dylib"}[target_platform()]
 
 def add_extension(files):
     return [f + extension for f in files]
@@ -103,7 +106,6 @@ class TestSizeOrder(HelperMixin, unittest.TestCase):
         d.ShouldProcess = lambda f: True
         d.ProcessFiles = mock_process_file
         d.Process(self.test_dir)
-        d.Finish(stop_pool=False)
         self.assertEqual(processed, ['b/c/two', 'c/three', 'a/one'])
 
 
@@ -123,7 +125,6 @@ class TestExclude(HelperMixin, unittest.TestCase):
                                                   exclude=["*foo*"])
         d.ProcessFiles = mock_process_file
         d.Process(self.test_dir)
-        d.Finish(stop_pool=False)
         processed.sort()
         expected = add_extension(["bar", "abc/xyz", "def/asdf"])
         expected.sort()
@@ -145,7 +146,6 @@ class TestExclude(HelperMixin, unittest.TestCase):
                                                   exclude=add_extension(["foo"]))
         d.ProcessFiles = mock_process_file
         d.Process(self.test_dir)
-        d.Finish(stop_pool=False)
         processed.sort()
         expected = add_extension(["bar", "abc/bar", "def/bar"])
         expected.sort()
@@ -208,7 +208,6 @@ class TestCopyDebug(HelperMixin, unittest.TestCase):
                                                   archs="abc xyz")
         d.CopyDebug = mock_copy_debug
         d.Process(self.test_dir)
-        d.Finish(stop_pool=False)
         self.assertEqual(1, len(copied))
 
     @patch.dict('buildconfig.substs', {'MAKECAB': 'makecab'})
@@ -216,8 +215,8 @@ class TestCopyDebug(HelperMixin, unittest.TestCase):
         """
         Test that CopyDebug copies binaries as well on Windows.
         """
-        test_file = os.path.join(self.test_dir, 'foo.pdb')
-        write_pdb(test_file)
+        test_file = os.path.join(self.test_dir, 'foo.dll')
+        write_dll(test_file)
         code_file = 'foo.dll'
         code_id = 'abc123'
         self.stdouts.append(mock_dump_syms('X' * 33, 'foo.pdb',
@@ -232,7 +231,6 @@ class TestCopyDebug(HelperMixin, unittest.TestCase):
                                      copy_debug=True)
         d.FixFilenameCase = lambda f: f
         d.Process(self.test_dir)
-        d.Finish(stop_pool=False)
         self.assertTrue(os.path.isfile(os.path.join(self.symbol_dir, code_file, code_id, code_file[:-1] + '_')))
 
 class TestGetVCSFilename(HelperMixin, unittest.TestCase):
@@ -308,7 +306,7 @@ class TestRepoManifest(HelperMixin, unittest.TestCase):
         self.assertEqual("git:example.com/bar/something_else:src3.c:00000000",
                          symbolstore.GetVCSFilename(file3, d.srcdirs)[0])
 
-if platform.system() in ("Windows", "Microsoft"):
+if target_platform() == 'WINNT':
     class TestFixFilenameCase(HelperMixin, unittest.TestCase):
         def test_fix_filename_case(self):
             # self.test_dir is going to be 8.3 paths...
@@ -380,7 +378,6 @@ if platform.system() in ("Windows", "Microsoft"):
             # stub out CopyDebug
             d.CopyDebug = lambda *args: True
             d.Process(self.test_dir)
-            d.Finish(stop_pool=False)
             self.assertNotEqual(srcsrv_stream, None)
             hgserver = [x.rstrip() for x in srcsrv_stream.splitlines() if x.startswith("HGSERVER=")]
             self.assertEqual(len(hgserver), 1)
@@ -500,7 +497,6 @@ class TestFileMapping(HelperMixin, unittest.TestCase):
         f = os.path.join(self.objdir, 'somefile')
         open(f, 'wb').write('blah')
         d.Process(f)
-        d.Finish(stop_pool=False)
         expected_output = ''.join(mk_output(expected_files))
         symbol_file = os.path.join(self.symboldir,
                                    file_id[1], file_id[0], file_id[1] + '.sym')
@@ -516,7 +512,6 @@ class TestFunctional(HelperMixin, unittest.TestCase):
     '''
     def setUp(self):
         HelperMixin.setUp(self)
-        import buildconfig
         self.skip_test = False
         if buildconfig.substs['MOZ_BUILD_APP'] != 'browser':
             self.skip_test = True
@@ -524,7 +519,7 @@ class TestFunctional(HelperMixin, unittest.TestCase):
         self.script_path = os.path.join(self.topsrcdir, 'toolkit',
                                         'crashreporter', 'tools',
                                         'symbolstore.py')
-        if platform.system() in ("Windows", "Microsoft"):
+        if target_platform() == 'WINNT':
             if buildconfig.substs['MSVC_HAS_DIA_SDK']:
                 self.dump_syms = os.path.join(buildconfig.topobjdir,
                                               'dist', 'host', 'bin',
@@ -539,7 +534,7 @@ class TestFunctional(HelperMixin, unittest.TestCase):
             self.target_bin = os.path.join(buildconfig.topobjdir,
                                            'browser',
                                            'app',
-                                           'firefox.pdb')
+                                           'firefox.exe')
         else:
             self.dump_syms = os.path.join(buildconfig.topobjdir,
                                           'dist', 'host', 'bin',
@@ -572,13 +567,11 @@ class TestFunctional(HelperMixin, unittest.TestCase):
         self.assertTrue(len(file_lines) >= 1,
                          'should have nsBrowserApp.cpp FILE line')
         filename = file_lines[0].split(None, 2)[2]
-        self.assertEqual('hg:', filename[:3])
+
+        # Skip this check for local git repositories.
+        if os.path.isdir(mozpath.join(self.topsrcdir, '.hg')):
+            self.assertEqual('hg:', filename[:3])
 
 
 if __name__ == '__main__':
-    # use ThreadPoolExecutor to use threading instead of processes so
-    # that our mocking/module-patching works.
-    symbolstore.Dumper.GlobalInit(concurrent.futures.ThreadPoolExecutor)
-
     mozunit.main()
-

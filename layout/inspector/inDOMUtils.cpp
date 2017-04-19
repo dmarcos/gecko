@@ -52,6 +52,9 @@
 #include "mozilla/StyleSetHandleInlines.h"
 #include "nsStyleUtil.h"
 #include "nsQueryObject.h"
+#include "mozilla/ServoBindings.h"
+#include "mozilla/ServoCSSRuleList.h"
+#include "mozilla/ServoStyleRule.h"
 
 using namespace mozilla;
 using namespace mozilla::css;
@@ -232,31 +235,75 @@ inDOMUtils::GetCSSStyleRules(nsIDOMElement *aElement,
     pseudoElt = NS_Atomize(aPseudo);
   }
 
-  nsRuleNode* ruleNode = nullptr;
   nsCOMPtr<Element> element = do_QueryInterface(aElement);
   NS_ENSURE_STATE(element);
-  RefPtr<nsStyleContext> styleContext;
-  GetRuleNodeForElement(element, pseudoElt, getter_AddRefs(styleContext), &ruleNode);
-  if (!ruleNode) {
+  RefPtr<nsStyleContext> styleContext =
+    GetCleanStyleContextForElement(element, pseudoElt);
+  if (!styleContext) {
     // This can fail for elements that are not in the document or
     // if the document they're in doesn't have a presshell.  Bail out.
     return NS_OK;
   }
 
-  AutoTArray<nsRuleNode*, 16> ruleNodes;
-  while (!ruleNode->IsRoot()) {
-    ruleNodes.AppendElement(ruleNode);
-    ruleNode = ruleNode->GetParent();
+  NonOwningStyleContextSource source = styleContext->StyleSource();
+  if (source.IsNull()) {
+    return NS_OK;
   }
 
   nsCOMPtr<nsIMutableArray> rules = nsArray::Create();
-  for (nsRuleNode* ruleNode : Reversed(ruleNodes)) {
-    RefPtr<Declaration> decl = do_QueryObject(ruleNode->GetRule());
-    if (decl) {
-      css::Rule* owningRule = decl->GetOwningRule();
-      if (owningRule) {
-        rules->AppendElement(owningRule, /*weak =*/ false);
+  if (source.IsGeckoRuleNodeOrNull()) {
+    nsRuleNode* ruleNode = source.AsGeckoRuleNode();
+
+    AutoTArray<nsRuleNode*, 16> ruleNodes;
+    while (!ruleNode->IsRoot()) {
+      ruleNodes.AppendElement(ruleNode);
+      ruleNode = ruleNode->GetParent();
+    }
+
+    for (nsRuleNode* ruleNode : Reversed(ruleNodes)) {
+      RefPtr<Declaration> decl = do_QueryObject(ruleNode->GetRule());
+      if (decl) {
+        css::Rule* owningRule = decl->GetOwningRule();
+        if (owningRule) {
+          rules->AppendElement(owningRule, /*weak =*/ false);
+        }
       }
+    }
+  } else {
+    // It's a Servo source, so use some servo methods on the element to get
+    // the rule list.
+    nsTArray<const RawServoStyleRule*> rawRuleList;
+    Servo_Element_GetStyleRuleList(element, &rawRuleList);
+    size_t rawRuleCount = rawRuleList.Length();
+
+    // We have RawServoStyleRules, and now we'll map them to ServoStyleRules
+    // by looking them up in the ServoStyleSheets owned by this document.
+    ServoCSSRuleList::StyleRuleHashtable rawRulesToRules;
+
+    nsIDocument* document = element->GetOwnerDocument();
+    int32_t sheetCount = document->GetNumberOfStyleSheets();
+
+    for (int32_t i = 0; i < sheetCount; i++) {
+      StyleSheet* sheet = document->GetStyleSheetAt(i);
+      MOZ_ASSERT(sheet->IsServo());
+
+      ErrorResult ignored;
+      ServoCSSRuleList* ruleList = static_cast<ServoCSSRuleList*>(
+        sheet->GetCssRules(*nsContentUtils::SubjectPrincipal(), ignored));
+      if (ruleList) {
+        // Generate the map from raw rules to rules.
+        ruleList->FillStyleRuleHashtable(rawRulesToRules);
+      }
+    }
+
+    // Find matching rules in the table.
+    for (size_t j = 0; j < rawRuleCount; j++) {
+      const RawServoStyleRule* rawRule = rawRuleList.ElementAt(j);
+      ServoStyleRule* rule;
+      rawRulesToRules.Get(rawRule, &rule);
+      MOZ_ASSERT(rule, "We should always be able to map a raw rule to a rule.");
+      RefPtr<css::Rule> ruleObj(rule);
+      rules->AppendElement(ruleObj, false);
     }
   }
 
@@ -590,8 +637,15 @@ static void GetKeywordsForProperty(const nsCSSPropertyID aProperty,
   if (keywordTable) {
     for (size_t i = 0; keywordTable[i].mKeyword != eCSSKeyword_UNKNOWN; ++i) {
       nsCSSKeyword word = keywordTable[i].mKeyword;
-      InsertNoDuplicates(aArray,
-                         NS_ConvertASCIItoUTF16(nsCSSKeywords::GetStringValue(word)));
+
+      // These are extra -moz values which are added while rebuilding
+      // the properties db. These values are not relevant and are not
+      // documented on MDN, so filter these out
+      if (word != eCSSKeyword__moz_zoom_in && word != eCSSKeyword__moz_zoom_out &&
+          word != eCSSKeyword__moz_grab && word != eCSSKeyword__moz_grabbing) {
+          InsertNoDuplicates(aArray,
+                  NS_ConvertASCIItoUTF16(nsCSSKeywords::GetStringValue(word)));
+      }
     }
   }
 }
@@ -934,9 +988,7 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
     uint32_t propertyParserVariant = nsCSSProps::ParserVariant(propertyID);
     // Get colors first.
     GetColorsForProperty(propertyParserVariant, array);
-    if (propertyParserVariant & VARIANT_KEYWORD) {
-      GetKeywordsForProperty(propertyID, array);
-    }
+    GetKeywordsForProperty(propertyID, array);
     GetOtherValuesForProperty(propertyParserVariant, array);
   } else {
     // Property is shorthand.
@@ -952,9 +1004,7 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
     CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subproperty, propertyID,
                                          CSSEnabledState::eForAllContent) {
       uint32_t propertyParserVariant = nsCSSProps::ParserVariant(*subproperty);
-      if (propertyParserVariant & VARIANT_KEYWORD) {
-        GetKeywordsForProperty(*subproperty, array);
-      }
+      GetKeywordsForProperty(*subproperty, array);
       GetOtherValuesForProperty(propertyParserVariant, array);
     }
   }
@@ -1146,35 +1196,32 @@ inDOMUtils::GetContentState(nsIDOMElement* aElement,
   return NS_OK;
 }
 
-/* static */ nsresult
-inDOMUtils::GetRuleNodeForElement(dom::Element* aElement,
-                                  nsIAtom* aPseudo,
-                                  nsStyleContext** aStyleContext,
-                                  nsRuleNode** aRuleNode)
+/* static */ already_AddRefed<nsStyleContext>
+inDOMUtils::GetCleanStyleContextForElement(dom::Element* aElement,
+                                           nsIAtom* aPseudo)
 {
   MOZ_ASSERT(aElement);
 
-  *aRuleNode = nullptr;
-  *aStyleContext = nullptr;
-
   nsIDocument* doc = aElement->GetComposedDoc();
-  NS_ENSURE_TRUE(doc, NS_ERROR_UNEXPECTED);
+  if (!doc) {
+    return nullptr;
+  }
 
   nsIPresShell *presShell = doc->GetShell();
-  NS_ENSURE_TRUE(presShell, NS_ERROR_UNEXPECTED);
+  if (!presShell) {
+    return nullptr;
+  }
 
   nsPresContext *presContext = presShell->GetPresContext();
-  NS_ENSURE_TRUE(presContext, NS_ERROR_UNEXPECTED);
+  if (!presContext) {
+    return nullptr;
+  }
 
   presContext->EnsureSafeToHandOutCSSRules();
 
-  RefPtr<nsStyleContext> sContext =
-    nsComputedDOMStyle::GetStyleContextForElement(aElement, aPseudo, presShell);
-  if (sContext) {
-    *aRuleNode = sContext->RuleNode();
-    sContext.forget(aStyleContext);
-  }
-  return NS_OK;
+  RefPtr<nsStyleContext> styleContext =
+    nsComputedDOMStyle::GetStyleContext(aElement, aPseudo, presShell);
+  return styleContext.forget();
 }
 
 NS_IMETHODIMP

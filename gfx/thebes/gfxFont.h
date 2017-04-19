@@ -25,6 +25,8 @@
 #include "nsIObserver.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/TypedEnumBits.h"
+#include "MainThreadUtils.h"
 #include <algorithm>
 #include "DrawMode.h"
 #include "nsDataHashtable.h"
@@ -81,7 +83,7 @@ struct gfxFontStyle {
                  float aSizeAdjust, bool aSystemFont,
                  bool aPrinterFont,
                  bool aWeightSynthesis, bool aStyleSynthesis,
-                 const nsString& aLanguageOverride);
+                 uint32_t aLanguageOverride);
 
     // the language (may be an internal langGroup code rather than an actual
     // language code) specified in the document or element's lang property,
@@ -89,7 +91,7 @@ struct gfxFontStyle {
     RefPtr<nsIAtom> language;
 
     // Features are composed of (1) features from style rules (2) features
-    // from feature setttings rules and (3) family-specific features.  (1) and
+    // from feature settings rules and (3) family-specific features.  (1) and
     // (3) are guaranteed to be mutually exclusive
 
     // custom opentype feature settings
@@ -216,8 +218,6 @@ struct gfxFontStyle {
             (variationSettings == other.variationSettings) &&
             (languageOverride == other.languageOverride);
     }
-
-    static uint32_t ParseFontLanguageOverride(const nsString& aLangTag);
 };
 
 struct gfxTextRange {
@@ -285,7 +285,7 @@ public:
         SHAPED_WORD_TIMEOUT_SECONDS = 60
     };
 
-    gfxFontCache();
+    explicit gfxFontCache(nsIEventTarget* aEventTarget);
     ~gfxFontCache();
 
     /*
@@ -455,7 +455,8 @@ public:
 };
 
 class gfxTextRunFactory {
-    NS_INLINE_DECL_REFCOUNTING(gfxTextRunFactory)
+    // Used by stylo
+    NS_INLINE_DECL_THREADSAFE_REFCOUNTING(gfxTextRunFactory)
 
 public:
     typedef mozilla::gfx::DrawTarget DrawTarget;
@@ -594,7 +595,7 @@ public:
 
 protected:
     // Protected destructor, to discourage deletion outside of Release():
-    virtual ~gfxTextRunFactory() {}
+    virtual ~gfxTextRunFactory();
 };
 
 /**
@@ -620,6 +621,11 @@ public:
     typedef mozilla::gfx::DrawTarget DrawTarget;
     typedef mozilla::unicode::Script Script;
 
+    enum class RoundingFlags : uint8_t {
+        kRoundX = 0x01,
+        kRoundY = 0x02
+    };
+
     explicit gfxFontShaper(gfxFont *aFont)
         : mFont(aFont)
     {
@@ -637,6 +643,7 @@ public:
                            uint32_t        aLength,
                            Script          aScript,
                            bool            aVertical,
+                           RoundingFlags   aRounding,
                            gfxShapedText  *aShapedText) = 0;
 
     gfxFont *GetFont() const { return mFont; }
@@ -652,16 +659,13 @@ public:
                       void* aHandleFeatureData);
 
 protected:
-    // Work out whether cairo will snap inter-glyph spacing to pixels.
-    static void GetRoundOffsetsToPixels(DrawTarget* aDrawTarget,
-                                        bool* aRoundX, bool* aRoundY);
-
     // the font this shaper is working with. The font owns a UniquePtr reference
     // to this object, and will destroy it before it dies. Thus, mFont will always
     // be valid.
     gfxFont* MOZ_NON_OWNING_REF mFont;
 };
 
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(gfxFontShaper::RoundingFlags)
 
 /*
  * gfxShapedText is an abstract superclass for gfxShapedWord and gfxTextRun.
@@ -1339,6 +1343,8 @@ protected:
     typedef mozilla::unicode::Script Script;
     typedef mozilla::SVGContextPaint SVGContextPaint;
 
+    typedef gfxFontShaper::RoundingFlags RoundingFlags;
+
 public:
     nsrefcnt AddRef(void) {
         NS_PRECONDITION(int32_t(mRefCnt) >= 0, "illegal refcnt");
@@ -1387,7 +1393,8 @@ protected:
         }
     }
 
-    gfxFont(gfxFontEntry *aFontEntry, const gfxFontStyle *aFontStyle,
+    gfxFont(const RefPtr<mozilla::gfx::UnscaledFont>& aUnscaledFont,
+            gfxFontEntry *aFontEntry, const gfxFontStyle *aFontStyle,
             AntialiasOption anAAOption = kAntialiasDefault,
             cairo_scaled_font_t *aScaledFont = nullptr);
 
@@ -1513,6 +1520,10 @@ public:
 
     gfxFloat SynthesizeSpaceWidth(uint32_t aCh);
 
+    // Work out whether cairo will snap inter-glyph spacing to pixels
+    // when rendering to the given drawTarget.
+    RoundingFlags GetRoundOffsetsToPixels(DrawTarget* aDrawTarget);
+
     // Font metrics
     struct Metrics {
         gfxFloat capHeight;
@@ -1551,7 +1562,7 @@ public:
             return GetHorizontalMetrics();
         }
         if (!mVerticalMetrics) {
-            mVerticalMetrics.reset(CreateVerticalMetrics());
+            mVerticalMetrics = CreateVerticalMetrics();
         }
         return *mVerticalMetrics;
     }
@@ -1762,6 +1773,7 @@ public:
                                  bool aVertical,
                                  int32_t aAppUnitsPerDevUnit,
                                  uint32_t aFlags,
+                                 RoundingFlags aRounding,
                                  gfxTextPerfMetrics *aTextPerf);
 
     // Ensure the ShapedWord cache is initialized. This MUST be called before
@@ -1803,8 +1815,14 @@ public:
 
     virtual FontType GetType() const = 0;
 
+    const RefPtr<mozilla::gfx::UnscaledFont>& GetUnscaledFont() const {
+        return mUnscaledFont;
+    }
+
     virtual already_AddRefed<mozilla::gfx::ScaledFont> GetScaledFont(DrawTarget* aTarget)
-    { return gfxPlatform::GetPlatform()->GetScaledFontForFont(aTarget, this); }
+    {
+        return gfxPlatform::GetPlatform()->GetScaledFontForFont(aTarget, this);
+    }
 
     bool KerningDisabled() {
         return mKerningSet && !mKerningEnabled;
@@ -1868,7 +1886,7 @@ public:
 protected:
     virtual const Metrics& GetHorizontalMetrics() = 0;
 
-    const Metrics* CreateVerticalMetrics();
+    mozilla::UniquePtr<const Metrics> CreateVerticalMetrics();
 
     // Output a single glyph at *aPt, which is updated by the glyph's advance.
     // Normal glyphs are simply accumulated in aBuffer until it is full and
@@ -1935,6 +1953,7 @@ protected:
                    uint32_t       aLength,
                    Script         aScript,
                    bool           aVertical,
+                   RoundingFlags  aRounding,
                    gfxShapedText *aShapedText); // where to store the result
 
     // Call the appropriate shaper to generate glyphs for aText and store
@@ -1945,6 +1964,7 @@ protected:
                            uint32_t         aLength,
                            Script           aScript,
                            bool             aVertical,
+                           RoundingFlags    aRounding,
                            gfxShapedText   *aShapedText);
 
     // Helper to adjust for synthetic bold and set character-type flags
@@ -1971,6 +1991,7 @@ protected:
                                    uint32_t    aLength,
                                    Script      aScript,
                                    bool        aVertical,
+                                   RoundingFlags aRounding,
                                    gfxTextRun *aTextRun);
 
     // Shape a fragment of text (a run that is known to contain only
@@ -1985,6 +2006,7 @@ protected:
                                        uint32_t    aLength,
                                        Script      aScript,
                                        bool        aVertical,
+                                       RoundingFlags aRounding,
                                        gfxTextRun *aTextRun);
 
     void CheckForFeaturesInvolvingSpace();
@@ -2122,6 +2144,7 @@ protected:
     // ranges supported by font
     RefPtr<gfxCharacterMap> mUnicodeRangeMap;
 
+    RefPtr<mozilla::gfx::UnscaledFont> mUnscaledFont;
     RefPtr<mozilla::gfx::ScaledFont> mAzureScaledFont;
 
     // For vertical metrics, created on demand.

@@ -334,6 +334,8 @@ nsCopySupport::GetTransferableForNode(nsINode* aNode,
 {
   nsCOMPtr<nsISelection> selection;
   // Make a temporary selection with aNode in a single range.
+  // XXX We should try to get rid of the Selection object here.
+  // XXX bug 1245883
   nsresult rv = NS_NewDomSelection(getter_AddRefs(selection));
   NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsIDOMNode> node = do_QueryInterface(aNode);
@@ -341,7 +343,9 @@ nsCopySupport::GetTransferableForNode(nsINode* aNode,
   RefPtr<nsRange> range = new nsRange(aNode);
   rv = range->SelectNode(node);
   NS_ENSURE_SUCCESS(rv, rv);
-  rv = selection->AddRange(range);
+  ErrorResult result;
+  selection->AsSelection()->AddRangeInternal(*range, aDoc, result);
+  rv = result.StealNSResult();
   NS_ENSURE_SUCCESS(rv, rv);
   // It's not the primary selection - so don't skip invisible content.
   uint32_t flags = 0;
@@ -755,8 +759,13 @@ nsCopySupport::FireClipboardEvent(EventMessage aEventMessage,
     *aActionTaken = false;
   }
 
-  NS_ASSERTION(aEventMessage == eCut || aEventMessage == eCopy ||
-               aEventMessage == ePaste,
+  EventMessage originalEventMessage = aEventMessage;
+  if (originalEventMessage == ePasteNoFormatting) {
+    originalEventMessage = ePaste;
+  }
+
+  NS_ASSERTION(originalEventMessage == eCut || originalEventMessage == eCopy ||
+               originalEventMessage == ePaste,
                "Invalid clipboard event type");
 
   nsCOMPtr<nsIPresShell> presShell = aPresShell;
@@ -813,10 +822,10 @@ nsCopySupport::FireClipboardEvent(EventMessage aEventMessage,
   if (chromeShell || Preferences::GetBool("dom.event.clipboardevents.enabled", true)) {
     clipboardData =
       new DataTransfer(doc->GetScopeObject(), aEventMessage,
-                       aEventMessage == ePaste, aClipboardType);
+                       originalEventMessage == ePaste, aClipboardType);
 
     nsEventStatus status = nsEventStatus_eIgnore;
-    InternalClipboardEvent evt(true, aEventMessage);
+    InternalClipboardEvent evt(true, originalEventMessage);
     evt.mClipboardData = clipboardData;
     EventDispatcher::Dispatch(content, presShell->GetPresContext(), &evt,
                               nullptr, &status);
@@ -827,7 +836,7 @@ nsCopySupport::FireClipboardEvent(EventMessage aEventMessage,
   // No need to do anything special during a paste. Either an event listener
   // took care of it and cancelled the event, or the caller will handle it.
   // Return true to indicate that the event wasn't cancelled.
-  if (aEventMessage == ePaste) {
+  if (originalEventMessage == ePaste) {
     // Clear and mark the clipboardData as readonly. This prevents someone
     // from reading the clipboard contents after the paste event has fired.
     if (clipboardData) {
@@ -860,14 +869,14 @@ nsCopySupport::FireClipboardEvent(EventMessage aEventMessage,
     // check if we are looking at a password input
     nsCOMPtr<nsIFormControl> formControl = do_QueryInterface(srcNode);
     if (formControl) {
-      if (formControl->GetType() == NS_FORM_INPUT_PASSWORD) {
+      if (formControl->ControlType() == NS_FORM_INPUT_PASSWORD) {
         return false;
       }
     }
 
     // when cutting non-editable content, do nothing
     // XXX this is probably the wrong editable flag to check
-    if (aEventMessage != eCut || content->IsEditable()) {
+    if (originalEventMessage != eCut || content->IsEditable()) {
       // get the data from the selection if any
       bool isCollapsed;
       sel->GetIsCollapsed(&isCollapsed);

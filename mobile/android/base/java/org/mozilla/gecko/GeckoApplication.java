@@ -19,19 +19,19 @@ import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.LocalBrowserDB;
 import org.mozilla.gecko.distribution.Distribution;
-import org.mozilla.gecko.dlc.DownloadContentService;
 import org.mozilla.gecko.home.HomePanelsManager;
 import org.mozilla.gecko.lwt.LightweightTheme;
 import org.mozilla.gecko.mdns.MulticastDNSManager;
 import org.mozilla.gecko.media.AudioFocusAgent;
+import org.mozilla.gecko.media.RemoteManager;
 import org.mozilla.gecko.notifications.NotificationClient;
 import org.mozilla.gecko.notifications.NotificationHelper;
 import org.mozilla.gecko.preferences.DistroSharedPrefsImport;
 import org.mozilla.gecko.util.BundleEventListener;
-import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.HardwareUtils;
+import org.mozilla.gecko.util.PRNGFixes;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import java.io.File;
@@ -40,9 +40,11 @@ import java.lang.reflect.Method;
 public class GeckoApplication extends Application
     implements ContextGetter {
     private static final String LOG_TAG = "GeckoApplication";
+    private static final String MEDIA_DECODING_PROCESS_CRASH = "MEDIA_DECODING_PROCESS_CRASH";
 
     private boolean mInBackground;
     private boolean mPausedGecko;
+    private boolean mIsInitialResume;
 
     private LightweightTheme mLightweightTheme;
 
@@ -123,18 +125,22 @@ public class GeckoApplication extends Application
                     db.expireHistory(getContentResolver(), BrowserContract.ExpirePriority.NORMAL);
                 }
             });
+
+            GeckoNetworkManager.getInstance().stop();
         }
-        GeckoNetworkManager.getInstance().stop();
     }
 
     public void onActivityResume(GeckoActivityStatus activity) {
-        if (mPausedGecko) {
+        if (mIsInitialResume) {
+            GeckoBatteryManager.getInstance().start(this);
+            GeckoFontScaleListener.getInstance().initialize(this);
+            GeckoNetworkManager.getInstance().start(this);
+            mIsInitialResume = false;
+        } else if (mPausedGecko) {
             GeckoThread.onResume();
             mPausedGecko = false;
+            GeckoNetworkManager.getInstance().start(this);
         }
-
-        GeckoBatteryManager.getInstance().start(this);
-        GeckoNetworkManager.getInstance().start(this);
 
         mInBackground = false;
     }
@@ -142,6 +148,20 @@ public class GeckoApplication extends Application
     @Override
     public void onCreate() {
         Log.i(LOG_TAG, "zerdatime " + SystemClock.uptimeMillis() + " - Fennec application start");
+
+        // PRNG is a pseudorandom number generator.
+        // We need to apply PRNG Fixes before any use of Java Cryptography Architecture.
+        // We make use of various JCA methods in data providers for generating GUIDs, as part of FxA
+        // flow and during syncing. Note that this is a no-op for devices running API>18, and so we
+        // accept the performance penalty on older devices.
+        try {
+            PRNGFixes.apply();
+        } catch (Exception e) {
+            // Not much to be done here: it was weak before, so it's weak now.  Not worth aborting.
+            Log.e(LOG_TAG, "Got exception applying PRNGFixes! Cryptographic data produced on this device may be weak. Ignoring.", e);
+        }
+
+        mIsInitialResume = true;
 
         mRefWatcher = LeakCanary.install(this);
 
@@ -194,6 +214,12 @@ public class GeckoApplication extends Application
         GeckoAccessibility.setAccessibilityManagerListeners(this);
 
         AudioFocusAgent.getInstance().attachToContext(this);
+
+        RemoteManager.setCrashReporter(new RemoteManager.ICrashReporter() {
+            public void reportDecodingProcessCrash() {
+                Telemetry.addToHistogram(MEDIA_DECODING_PROCESS_CRASH, 1);
+            }
+        });
     }
 
     private class EventListener implements BundleEventListener

@@ -21,6 +21,7 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::image;
 
 //----------------------------------------------------------------------
 // Implementation helpers
@@ -369,7 +370,7 @@ nsSVGOuterSVGFrame::Reflow(nsPresContext*           aPresContext,
 
   NS_PRECONDITION(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
 
-  aStatus = NS_FRAME_COMPLETE;
+  aStatus.Reset();
 
   aDesiredSize.Width()  = aReflowInput.ComputedWidth() +
                           aReflowInput.ComputedPhysicalBorderPadding().LeftRight();
@@ -624,13 +625,16 @@ nsDisplayOuterSVG::Paint(nsDisplayListBuilder* aBuilder,
     nsLayoutUtils::PointToGfxPoint(viewportRect.TopLeft(), appUnitsPerDevPixel);
 
   aContext->ThebesContext()->Save();
+  uint32_t flags = aBuilder->ShouldSyncDecodeImages()
+                  ? imgIContainer::FLAG_SYNC_DECODE
+                  : imgIContainer::FLAG_SYNC_DECODE_IF_FAST;
   // We include the offset of our frame and a scale from device pixels to user
   // units (i.e. CSS px) in the matrix that we pass to our children):
-  gfxMatrix tm = nsSVGIntegrationUtils::GetCSSPxToDevPxMatrix(mFrame) *
+  gfxMatrix tm = nsSVGUtils::GetCSSPxToDevPxMatrix(mFrame) *
                    gfxMatrix::Translation(devPixelOffset);
   DrawResult result =
     nsSVGUtils::PaintFrameWithEffects(mFrame, *aContext->ThebesContext(), tm,
-                                      &contentAreaDirtyRect);
+                                      &contentAreaDirtyRect, flags);
   nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, result);
   aContext->ThebesContext()->Restore();
 
@@ -724,6 +728,32 @@ nsSVGOuterSVGFrame::AttributeChanged(int32_t  aNameSpaceID,
   }
 
   return NS_OK;
+}
+
+bool
+nsSVGOuterSVGFrame::IsSVGTransformed(Matrix* aOwnTransform,
+                                     Matrix* aFromParentTransform) const
+{
+  // Our anonymous child's HasChildrenOnlyTransform() implementation makes sure
+  // our children-only transforms are applied to our children.  We only care
+  // about transforms that transform our own frame here.
+
+  bool foundTransform = false;
+
+  SVGSVGElement *content = static_cast<SVGSVGElement*>(mContent);
+  nsSVGAnimatedTransformList* transformList =
+    content->GetAnimatedTransformList();
+  if ((transformList && transformList->HasTransform()) ||
+      content->GetAnimateMotionTransform()) {
+    if (aOwnTransform) {
+      *aOwnTransform = gfx::ToMatrix(
+                         content->PrependLocalTransformsTo(
+                           gfxMatrix(), eUserSpaceToParent));
+    }
+    foundTransform = true;
+  }
+
+  return foundTransform;
 }
 
 //----------------------------------------------------------------------
@@ -837,12 +867,13 @@ nsSVGOuterSVGFrame::NotifyViewportOrTransformChanged(uint32_t aFlags)
 }
 
 //----------------------------------------------------------------------
-// nsISVGChildFrame methods:
+// nsSVGDisplayableFrame methods:
 
 DrawResult
 nsSVGOuterSVGFrame::PaintSVG(gfxContext& aContext,
                              const gfxMatrix& aTransform,
-                             const nsIntRect* aDirtyRect)
+                             const nsIntRect* aDirtyRect,
+                             uint32_t aFlags)
 {
   NS_ASSERTION(PrincipalChildList().FirstChild()->GetType() ==
                  nsGkAtoms::svgOuterSVGAnonChildFrame &&
@@ -850,7 +881,7 @@ nsSVGOuterSVGFrame::PaintSVG(gfxContext& aContext,
                "We should have a single, anonymous, child");
   nsSVGOuterSVGAnonChildFrame *anonKid =
     static_cast<nsSVGOuterSVGAnonChildFrame*>(PrincipalChildList().FirstChild());
-  return anonKid->PaintSVG(aContext, aTransform, aDirtyRect);
+  return anonKid->PaintSVG(aContext, aTransform, aDirtyRect, aFlags);
 }
 
 SVGBBox
@@ -948,6 +979,16 @@ nsSVGOuterSVGFrame::VerticalScrollbarNotNeeded() const
   return height.IsPercentage() && height.GetBaseValInSpecifiedUnits() <= 100;
 }
 
+void
+nsSVGOuterSVGFrame::DoUpdateStyleOfOwnedAnonBoxes(
+  mozilla::ServoStyleSet& aStyleSet,
+  nsStyleChangeList& aChangeList,
+  nsChangeHint aHintForThisFrame)
+{
+  nsIFrame* anonKid = PrincipalChildList().FirstChild();
+  MOZ_ASSERT(anonKid->GetType() == nsGkAtoms::svgOuterSVGAnonChildFrame);
+  UpdateStyleOfChildAnonBox(anonKid, aStyleSet, aChangeList, aHintForThisFrame);
+}
 
 //----------------------------------------------------------------------
 // Implementation of nsSVGOuterSVGAnonChildFrame
@@ -980,21 +1021,47 @@ nsSVGOuterSVGAnonChildFrame::GetType() const
 }
 
 bool
-nsSVGOuterSVGAnonChildFrame::HasChildrenOnlyTransform(gfx::Matrix *aTransform) const
+nsSVGOuterSVGAnonChildFrame::IsSVGTransformed(Matrix* aOwnTransform,
+                                              Matrix* aFromParentTransform) const
 {
-  // We must claim our nsSVGOuterSVGFrame's children-only transforms as our own
-  // so that the children we are used to wrap are transformed properly.
+  // Our elements 'transform' attribute is applied to our nsSVGOuterSVGFrame
+  // parent, and the element's children-only transforms are applied to us, the
+  // anonymous child frame. Since we are the child frame, we apply the
+  // children-only transforms as if they are our own transform.
 
-  SVGSVGElement *content = static_cast<SVGSVGElement*>(mContent);
+  SVGSVGElement* content = static_cast<SVGSVGElement*>(mContent);
 
-  bool hasTransform = content->HasChildrenOnlyTransform();
-
-  if (hasTransform && aTransform) {
-    // Outer-<svg> doesn't use x/y, so we can pass eChildToUserSpace here.
-    gfxMatrix identity;
-    *aTransform = gfx::ToMatrix(
-      content->PrependLocalTransformsTo(identity, eChildToUserSpace));
+  if (!content->HasChildrenOnlyTransform()) {
+    return false;
   }
 
-  return hasTransform;
+  // Outer-<svg> doesn't use x/y, so we can pass eChildToUserSpace here.
+  gfxMatrix ownMatrix =
+    content->PrependLocalTransformsTo(gfxMatrix(), eChildToUserSpace);
+
+  if (ownMatrix.IsIdentity()) {
+    return false;
+  }
+
+  if (aOwnTransform) {
+    if (ownMatrix.HasNonTranslation()) {
+      // viewBox, currentScale and currentTranslate should only produce a
+      // rectilinear transform.
+      MOZ_ASSERT(ownMatrix.IsRectilinear(),
+                 "Non-rectilinear transform will break the following logic");
+
+      // The nsDisplayTransform code will apply this transform to our frame,
+      // including to our frame position.  We don't want our frame position to
+      // be scaled though, so we need to correct for that in the transform.
+      // XXX Yeah, this is a bit hacky.
+      CSSPoint pos = CSSPixel::FromAppUnits(GetPosition());
+      CSSPoint scaledPos = CSSPoint(ownMatrix._11 * pos.x, ownMatrix._22 * pos.y);
+      CSSPoint deltaPos = scaledPos - pos;
+      ownMatrix *= gfxMatrix::Translation(-deltaPos.x, -deltaPos.y);
+    }
+
+    *aOwnTransform = gfx::ToMatrix(ownMatrix);
+  }
+
+  return true;
 }

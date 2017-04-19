@@ -213,6 +213,7 @@ CSP_ContentTypeToDirective(nsContentPolicyType aType)
     case nsIContentPolicy::TYPE_SCRIPT:
     case nsIContentPolicy::TYPE_INTERNAL_SCRIPT:
     case nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD:
+    case nsIContentPolicy::TYPE_INTERNAL_WORKER_IMPORT_SCRIPTS:
       return nsIContentSecurityPolicy::SCRIPT_SRC_DIRECTIVE;
 
     case nsIContentPolicy::TYPE_STYLESHEET:
@@ -270,7 +271,7 @@ CSP_CreateHostSrcFromURI(nsIURI* aURI)
 {
   // Create the host first
   nsCString host;
-  aURI->GetHost(host);
+  aURI->GetAsciiHost(host);
   nsCSPHostSrc *hostsrc = new nsCSPHostSrc(NS_ConvertUTF8toUTF16(host));
 
   // Add the scheme.
@@ -642,7 +643,7 @@ nsCSPHostSrc::permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected
   // Before we can check if the host matches, we have to
   // extract the host part from aUri.
   nsAutoCString uriHost;
-  nsresult rv = aUri->GetHost(uriHost);
+  nsresult rv = aUri->GetAsciiHost(uriHost);
   NS_ENSURE_SUCCESS(rv, false);
 
   nsString decodedUriHost;
@@ -792,7 +793,6 @@ nsCSPKeywordSrc::allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce,
 {
   CSPUTILSLOG(("nsCSPKeywordSrc::allows, aKeyWord: %s, aHashOrNonce: %s, mInvalidated: %s",
               CSP_EnumToKeyword(aKeyword),
-              CSP_EnumToKeyword(mKeyword),
               NS_ConvertUTF16toUTF8(aHashOrNonce).get(),
               mInvalidated ? "yes" : "false"));
 

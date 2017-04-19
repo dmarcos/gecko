@@ -14,7 +14,7 @@ using namespace js;
 template <class Base>
 bool
 SecurityWrapper<Base>::enter(JSContext* cx, HandleObject wrapper, HandleId id,
-                             Wrapper::Action act, bool* bp) const
+                             Wrapper::Action act, bool mayThrow, bool* bp) const
 {
     ReportAccessDenied(cx);
     *bp = false;
@@ -88,9 +88,10 @@ SecurityWrapper<Base>::isArray(JSContext* cx, HandleObject obj, JS::IsArrayAnswe
 
 template <class Base>
 bool
-SecurityWrapper<Base>::regexp_toShared(JSContext* cx, HandleObject obj, RegExpGuard* g) const
+SecurityWrapper<Base>::regexp_toShared(JSContext* cx, HandleObject obj,
+                                       MutableHandle<RegExpShared*> shared) const
 {
-    return Base::regexp_toShared(cx, obj, g);
+    return Base::regexp_toShared(cx, obj, shared);
 }
 
 template <class Base>

@@ -1,6 +1,8 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
+/* eslint-env mozilla/frame-script */
+
 const {TabStateFlusher} = Cu.import("resource:///modules/sessionstore/TabStateFlusher.jsm", {});
 
 const DUMMY = "http://example.com/browser/browser/base/content/test/general/dummy_page.html";
@@ -42,7 +44,7 @@ var CrashObserver = {
     }
   }
 }
-Services.obs.addObserver(CrashObserver, "ipc:content-shutdown", false);
+Services.obs.addObserver(CrashObserver, "ipc:content-shutdown");
 
 registerCleanupFunction(() => {
   Services.obs.removeObserver(CrashObserver, "ipc:content-shutdown");

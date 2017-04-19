@@ -469,14 +469,7 @@ this.AddonRepository = {
    */
   get cacheEnabled() {
     let preference = PREF_GETADDONS_CACHE_ENABLED;
-    let enabled = false;
-    try {
-      enabled = Services.prefs.getBoolPref(preference);
-    } catch (e) {
-      logger.warn("cacheEnabled: Couldn't get pref: " + preference);
-    }
-
-    return enabled;
+    return Services.prefs.getBoolPref(preference, false);
   },
 
   // A cache of the add-ons stored in the database
@@ -525,10 +518,7 @@ this.AddonRepository = {
   metadataAge() {
     let now = Math.round(Date.now() / 1000);
 
-    let lastUpdate = 0;
-    try {
-      lastUpdate = Services.prefs.getIntPref(PREF_METADATA_LASTUPDATE);
-    } catch (e) {}
+    let lastUpdate = Services.prefs.getIntPref(PREF_METADATA_LASTUPDATE, 0);
 
     // Handle clock jumps
     if (now < lastUpdate) {
@@ -538,10 +528,7 @@ this.AddonRepository = {
   },
 
   isMetadataStale() {
-    let threshold = DEFAULT_METADATA_UPDATETHRESHOLD_SEC;
-    try {
-      threshold = Services.prefs.getIntPref(PREF_METADATA_UPDATETHRESHOLD_SEC);
-    } catch (e) {}
+    let threshold = Services.prefs.getIntPref(PREF_METADATA_UPDATETHRESHOLD_SEC, DEFAULT_METADATA_UPDATETHRESHOLD_SEC);
     return (this.metadataAge() > threshold);
   },
 
@@ -724,7 +711,7 @@ this.AddonRepository = {
    */
   getSearchURL(aSearchTerms) {
     let url = this._formatURLPref(PREF_GETADDONS_BROWSESEARCHRESULTS, {
-      TERMS : encodeURIComponent(aSearchTerms)
+      TERMS: encodeURIComponent(aSearchTerms)
     });
     return (url != null) ? url : "about:blank";
   },
@@ -774,7 +761,7 @@ this.AddonRepository = {
 
     let params = {
       API_VERSION,
-      IDS : ids.map(encodeURIComponent).join(",")
+      IDS: ids.map(encodeURIComponent).join(",")
     };
 
     let pref = PREF_GETADDONS_BYIDS;
@@ -886,7 +873,7 @@ this.AddonRepository = {
       API_VERSION,
 
       // Get twice as many results to account for potential filtering
-      MAX_RESULTS : 2 * aMaxResults
+      MAX_RESULTS: 2 * aMaxResults
     });
 
     let handleResults = (aElements, aTotalResults) => {
@@ -919,10 +906,10 @@ this.AddonRepository = {
 
     let substitutions = {
       API_VERSION,
-      TERMS : encodeURIComponent(aSearchTerms),
+      TERMS: encodeURIComponent(aSearchTerms),
       // Get twice as many results to account for potential filtering
-      MAX_RESULTS : 2 * aMaxResults,
-      COMPATIBILITY_MODE : compatMode,
+      MAX_RESULTS: 2 * aMaxResults,
+      COMPATIBILITY_MODE: compatMode,
     };
 
     let url = this._formatURLPref(PREF_GETADDONS_GETSEARCHRESULTS, substitutions);
@@ -1492,10 +1479,8 @@ this.AddonRepository = {
 
   // Create url from preference, returning null if preference does not exist
   _formatURLPref(aPreference, aSubstitutions) {
-    let url = null;
-    try {
-      url = Services.prefs.getCharPref(aPreference);
-    } catch (e) {
+    let url = Services.prefs.getCharPref(aPreference, "");
+    if (!url) {
       logger.warn("_formatURLPref: Couldn't get pref: " + aPreference);
       return null;
     }
@@ -1589,10 +1574,7 @@ var AddonDatabase = {
          // Create a blank addons.json file
          this._saveDBToDisk();
 
-         let dbSchema = 0;
-         try {
-           dbSchema = Services.prefs.getIntPref(PREF_GETADDONS_DB_SCHEMA);
-         } catch (e) {}
+         let dbSchema = Services.prefs.getIntPref(PREF_GETADDONS_DB_SCHEMA, 0);
 
          if (dbSchema < DB_MIN_JSON_SCHEMA) {
            let results = yield new Promise((resolve, reject) => {

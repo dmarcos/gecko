@@ -42,6 +42,7 @@
 // TODO : [nice to have] - Immediately save, buffer the actions in a local queue and send (so it works offline, works like our native extensions)
 
 /* eslint-disable no-shadow */
+/* eslint-env mozilla/browser-window */
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
@@ -396,12 +397,12 @@ var pktUI = (function() {
 
         pktUIMessaging.addMessageListener(iframe, "collapseSavePanel", function(panelId, data) {
             if (!pktApi.isPremiumUser() && !isInOverflowMenu())
-                resizePanel({width:savePanelWidth, height:savePanelHeights.collapsed});
+                resizePanel({width: savePanelWidth, height: savePanelHeights.collapsed});
         });
 
         pktUIMessaging.addMessageListener(iframe, "expandSavePanel", function(panelId, data) {
             if (!isInOverflowMenu())
-                resizePanel({width:savePanelWidth, height:savePanelHeights.expanded});
+                resizePanel({width: savePanelWidth, height: savePanelHeights.expanded});
         });
 
         // Ask for recently accessed/used tags for auto complete
@@ -569,10 +570,7 @@ var pktUI = (function() {
     }
 
     function getUILocale() {
-        var locale = Cc["@mozilla.org/chrome/chrome-registry;1"].
-             getService(Ci.nsIXULChromeRegistry).
-             getSelectedLocale("browser");
-        return locale;
+        return Services.locale.getAppLocaleAsLangTag();
     }
 
     /**

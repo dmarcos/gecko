@@ -21,10 +21,11 @@ namespace Common {
 bool
 IsExpiredVersion(const char* aExpiration)
 {
-  static mozilla::Version current_version = mozilla::Version(MOZ_APP_VERSION);
   MOZ_ASSERT(aExpiration);
+  // Note: We intentionally don't construct a static Version object here as we
+  // saw odd crashes around this (see bug 1334105).
   return strcmp(aExpiration, "never") && strcmp(aExpiration, "default") &&
-    (mozilla::Version(aExpiration) <= current_version);
+    (mozilla::Version(aExpiration) <= MOZ_APP_VERSION);
 }
 
 bool
@@ -63,6 +64,18 @@ CanRecordDataset(uint32_t aDataset, bool aCanRecordBase, bool aCanRecordExtended
   // We're not recording extended telemetry or this is not the base
   // dataset. Bail out.
   return false;
+}
+
+bool
+CanRecordInProcess(RecordedProcessType processes, GeckoProcessType processType)
+{
+  bool recordAllChild = !!(processes & RecordedProcessType::AllChilds);
+  // We can use (1 << ProcessType) due to the way RecordedProcessType is defined.
+  bool canRecordProcess =
+    !!(processes & static_cast<RecordedProcessType>(1 << processType));
+
+  return canRecordProcess ||
+         ((processType != GeckoProcessType_Default) && recordAllChild);
 }
 
 nsresult

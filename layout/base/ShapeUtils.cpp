@@ -9,6 +9,7 @@
 #include <cstdlib>
 
 #include "nsCSSRendering.h"
+#include "nsMargin.h"
 #include "nsRuleNode.h"
 #include "nsStyleCoord.h"
 #include "nsStyleStruct.h"
@@ -37,22 +38,29 @@ ShapeUtils::ComputeShapeRadius(const StyleShapeRadius aType,
 }
 
 nsPoint
-ShapeUtils::ComputeCircleOrEllipseCenter(StyleBasicShape* const aBasicShape,
+ShapeUtils::ComputeCircleOrEllipseCenter(const StyleBasicShape* aBasicShape,
                                          const nsRect& aRefBox)
 {
+  MOZ_ASSERT(aBasicShape->GetShapeType() == StyleBasicShapeType::Circle ||
+             aBasicShape->GetShapeType() == StyleBasicShapeType::Ellipse,
+             "The basic shape must be circle() or ellipse!");
+
   nsPoint topLeft, anchor;
   nsSize size(aRefBox.Size());
   nsImageRenderer::ComputeObjectAnchorPoint(aBasicShape->GetPosition(),
                                             size, size,
                                             &topLeft, &anchor);
-  return nsPoint(anchor.x + aRefBox.x, anchor.y + aRefBox.y);
+  return anchor + aRefBox.TopLeft();
 }
 
 nscoord
-ShapeUtils::ComputeCircleRadius(StyleBasicShape* const aBasicShape,
+ShapeUtils::ComputeCircleRadius(const StyleBasicShape* aBasicShape,
                                 const nsPoint& aCenter,
                                 const nsRect& aRefBox)
 {
+  MOZ_ASSERT(aBasicShape->GetShapeType() == StyleBasicShapeType::Circle,
+             "The basic shape must be circle()!");
+
   const nsTArray<nsStyleCoord>& coords = aBasicShape->Coordinates();
   MOZ_ASSERT(coords.Length() == 1, "wrong number of arguments");
   nscoord r = 0;
@@ -78,10 +86,13 @@ ShapeUtils::ComputeCircleRadius(StyleBasicShape* const aBasicShape,
 }
 
 nsSize
-ShapeUtils::ComputeEllipseRadii(StyleBasicShape* const aBasicShape,
+ShapeUtils::ComputeEllipseRadii(const StyleBasicShape* aBasicShape,
                                 const nsPoint& aCenter,
                                 const nsRect& aRefBox)
 {
+  MOZ_ASSERT(aBasicShape->GetShapeType() == StyleBasicShapeType::Ellipse,
+             "The basic shape must be ellipse()!");
+
   const nsTArray<nsStyleCoord>& coords = aBasicShape->Coordinates();
   MOZ_ASSERT(coords.Length() == 2, "wrong number of arguments");
   nsSize radii;
@@ -103,6 +114,60 @@ ShapeUtils::ComputeEllipseRadii(StyleBasicShape* const aBasicShape,
   }
 
   return radii;
+}
+
+/* static */ nsRect
+ShapeUtils::ComputeInsetRect(const StyleBasicShape* aBasicShape,
+                             const nsRect& aRefBox)
+{
+  MOZ_ASSERT(aBasicShape->GetShapeType() == StyleBasicShapeType::Inset,
+             "The basic shape must be inset()!");
+
+  const nsTArray<nsStyleCoord>& coords = aBasicShape->Coordinates();
+  MOZ_ASSERT(coords.Length() == 4, "wrong number of arguments");
+
+  nsMargin inset(nsRuleNode::ComputeCoordPercentCalc(coords[0], aRefBox.height),
+                 nsRuleNode::ComputeCoordPercentCalc(coords[1], aRefBox.width),
+                 nsRuleNode::ComputeCoordPercentCalc(coords[2], aRefBox.height),
+                 nsRuleNode::ComputeCoordPercentCalc(coords[3], aRefBox.width));
+
+  nsRect insetRect(aRefBox);
+  insetRect.Deflate(inset);
+
+  return insetRect;
+}
+
+/* static */ bool
+ShapeUtils::ComputeInsetRadii(const StyleBasicShape* aBasicShape,
+                              const nsRect& aInsetRect,
+                              const nsRect& aRefBox,
+                              nscoord aRadii[8])
+{
+  const nsStyleCorners& radius = aBasicShape->GetRadius();
+  return nsIFrame::ComputeBorderRadii(radius, aInsetRect.Size(), aRefBox.Size(),
+                                      Sides(), aRadii);
+
+}
+
+/* static */ nsTArray<nsPoint>
+ShapeUtils::ComputePolygonVertices(const StyleBasicShape* aBasicShape,
+                                   const nsRect& aRefBox)
+{
+  MOZ_ASSERT(aBasicShape->GetShapeType() == StyleBasicShapeType::Polygon,
+             "The basic shape must be polygon()!");
+
+  const nsTArray<nsStyleCoord>& coords = aBasicShape->Coordinates();
+  MOZ_ASSERT(coords.Length() % 2 == 0 &&
+             coords.Length() >= 2, "Wrong number of arguments!");
+
+  nsTArray<nsPoint> vertices(coords.Length() / 2);
+  for (size_t i = 0; i + 1 < coords.Length(); i += 2) {
+    vertices.AppendElement(
+      nsPoint(nsRuleNode::ComputeCoordPercentCalc(coords[i], aRefBox.width),
+              nsRuleNode::ComputeCoordPercentCalc(coords[i + 1], aRefBox.height))
+      + aRefBox.TopLeft());
+  }
+  return vertices;
 }
 
 } // namespace mozilla

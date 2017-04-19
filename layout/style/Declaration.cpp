@@ -8,10 +8,12 @@
  * stylesheet
  */
 
+#include "mozilla/css/Declaration.h"
+
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/ServoStyleSet.h"
 
-#include "mozilla/css/Declaration.h"
 #include "mozilla/css/Rule.h"
 #include "nsPrintfCString.h"
 #include "gfxFontConstants.h"
@@ -402,9 +404,9 @@ Declaration::GetImageLayerValue(
 
     StyleGeometryBox originDefaultValue =
       (aTable == nsStyleImageLayers::kBackgroundLayerTable)
-      ? StyleGeometryBox::Padding : StyleGeometryBox::Border;
+      ? StyleGeometryBox::PaddingBox : StyleGeometryBox::BorderBox;
     if (static_cast<StyleGeometryBox>(clip->mValue.GetIntValue()) !=
-        StyleGeometryBox::Border ||
+        StyleGeometryBox::BorderBox ||
         static_cast<StyleGeometryBox>(origin->mValue.GetIntValue()) !=
         originDefaultValue) {
 #ifdef DEBUG
@@ -861,8 +863,6 @@ Declaration::GetPropertyValueInternal(
         data->ValueFor(eCSSProperty_font_language_override);
       const nsCSSValue *fontKerning =
         data->ValueFor(eCSSProperty_font_kerning);
-      const nsCSSValue *fontSynthesis =
-        data->ValueFor(eCSSProperty_font_synthesis);
       const nsCSSValue *fontVariantAlternates =
         data->ValueFor(eCSSProperty_font_variant_alternates);
       const nsCSSValue *fontVariantCaps =
@@ -889,7 +889,6 @@ Declaration::GetPropertyValueInternal(
             featureSettings->GetUnit() != eCSSUnit_System_Font ||
             languageOverride->GetUnit() != eCSSUnit_System_Font ||
             fontKerning->GetUnit() != eCSSUnit_System_Font ||
-            fontSynthesis->GetUnit() != eCSSUnit_System_Font ||
             fontVariantAlternates->GetUnit() != eCSSUnit_System_Font ||
             fontVariantCaps->GetUnit() != eCSSUnit_System_Font ||
             fontVariantEastAsian->GetUnit() != eCSSUnit_System_Font ||
@@ -908,9 +907,6 @@ Declaration::GetPropertyValueInternal(
             featureSettings->GetUnit() != eCSSUnit_Normal ||
             languageOverride->GetUnit() != eCSSUnit_Normal ||
             fontKerning->GetIntValue() != NS_FONT_KERNING_AUTO ||
-            fontSynthesis->GetUnit() != eCSSUnit_Enumerated ||
-            fontSynthesis->GetIntValue() !=
-              (NS_FONT_SYNTHESIS_WEIGHT | NS_FONT_SYNTHESIS_STYLE) ||
             fontVariantAlternates->GetUnit() != eCSSUnit_Normal ||
             fontVariantEastAsian->GetUnit() != eCSSUnit_Normal ||
             fontVariantLigatures->GetUnit() != eCSSUnit_Normal ||
@@ -1701,9 +1697,9 @@ Declaration::AppendVariableAndValueToString(const nsAString& aName,
 void
 Declaration::ToString(nsAString& aString) const
 {
-  // Someone cares about this declaration's contents, so don't let it
-  // change from under them.  See e.g. bug 338679.
-  SetImmutable();
+  // Tell the static analysis not to worry about thread-unsafe things here
+  // because because this function isn't reached during parallel style traversal.
+  MOZ_ASSERT(!ServoStyleSet::IsInServoTraversal());
 
   nsCSSCompressedDataBlock *systemFontData =
     GetPropertyIsImportantByID(eCSSProperty__x_system_font) ? mImportantData

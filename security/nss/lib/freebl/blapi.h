@@ -1429,8 +1429,6 @@ extern SECStatus RNG_RandomUpdate(const void *data, size_t bytes);
 */
 extern SECStatus RNG_GenerateGlobalRandomBytes(void *dest, size_t len);
 
-extern SECStatus RNG_ResetForFuzzing(void);
-
 /* Destroy the global RNG context.  After a call to RNG_RNGShutdown()
 ** a call to RNG_RNGInit() is required in order to use the generator again,
 ** along with seed data (see the comment above RNG_RNGInit()).
@@ -1468,6 +1466,12 @@ extern SECStatus
 FIPS186Change_ReduceModQForDSA(const unsigned char *w,
                                const unsigned char *q,
                                unsigned char *xj);
+
+/* To allow NIST KAT tests */
+extern SECStatus
+PRNGTEST_Instantiate_Kat(const PRUint8 *entropy, unsigned int entropy_len,
+                         const PRUint8 *nonce, unsigned int nonce_len,
+                         const PRUint8 *personal_string, unsigned int ps_len);
 
 /*
  * The following functions are for FIPS poweron self test and FIPS algorithm
@@ -1599,7 +1603,6 @@ extern const SECHashObject *HASH_GetRawHashObject(HASH_HashType hashType);
 
 extern void BL_SetForkState(PRBool forked);
 
-#ifndef NSS_DISABLE_ECC
 /*
 ** pepare an ECParam structure from DEREncoded params
  */
@@ -1609,7 +1612,11 @@ extern SECStatus EC_DecodeParams(const SECItem *encodedParams,
                                  ECParams **ecparams);
 extern SECStatus EC_CopyParams(PLArenaPool *arena, ECParams *dstParams,
                                const ECParams *srcParams);
-#endif
+
+/*
+ * use the internal table to get the size in bytes of a single EC point
+ */
+extern int EC_GetPointSize(const ECParams *params);
 
 SEC_END_PROTOS
 

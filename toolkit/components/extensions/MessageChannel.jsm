@@ -159,7 +159,7 @@ class FilteringMessageManager {
    * passes the result to our message callback.
    */
   receiveMessage({data, target}) {
-    let handlers = Array.from(this.getHandlers(data.messageName, data.sender, data.recipient));
+    let handlers = Array.from(this.getHandlers(data.messageName, data.sender || null, data.recipient));
 
     data.target = target;
     this.callback(handlers, data);
@@ -280,8 +280,8 @@ const MESSAGE_RESPONSE = "MessageChannel:Response";
 
 this.MessageChannel = {
   init() {
-    Services.obs.addObserver(this, "message-manager-close", false);
-    Services.obs.addObserver(this, "message-manager-disconnect", false);
+    Services.obs.addObserver(this, "message-manager-close");
+    Services.obs.addObserver(this, "message-manager-disconnect");
 
     this.messageManagers = new FilteringMessageManagerMap(
       MESSAGE_MESSAGE, this._handleMessage.bind(this));
@@ -294,6 +294,12 @@ this.MessageChannel = {
      * received or waiting to be sent. @see _addPendingResponse
      */
     this.pendingResponses = new Set();
+
+    /**
+     * Contains the message name of a limited number of aborted response
+     * handlers, the responses for which will be ignored.
+     */
+    this.abortedResponses = new ExtensionUtils.LimitedSet(30);
   },
 
   RESULT_SUCCESS: 0,
@@ -304,7 +310,7 @@ this.MessageChannel = {
   RESULT_NO_RESPONSE: 5,
 
   REASON_DISCONNECTED: {
-    result: this.RESULT_DISCONNECTED,
+    result: 1, // this.RESULT_DISCONNECTED
     message: "Message manager disconnected",
   },
 
@@ -373,7 +379,7 @@ this.MessageChannel = {
    *    The filter object to match against.
    * @param {object} data
    *    The data object being matched.
-   * @param {boolean} [strict=false]
+   * @param {boolean} [strict=true]
    *    If true, all properties in the `filter` object have a
    *    corresponding property in `data` with the same value. If
    *    false, properties present in both objects must have the same
@@ -529,6 +535,7 @@ this.MessageChannel = {
     let deferred = PromiseUtils.defer();
     deferred.sender = recipient;
     deferred.messageManager = target;
+    deferred.channelId = channelId;
 
     this._addPendingResponse(deferred);
 
@@ -630,6 +637,7 @@ this.MessageChannel = {
     let deferred = {
       sender: data.sender,
       messageManager: target,
+      channelId: data.channelId,
     };
     deferred.promise = new Promise((resolve, reject) => {
       deferred.reject = reject;
@@ -647,6 +655,16 @@ this.MessageChannel = {
         target.sendAsyncMessage(MESSAGE_RESPONSE, response);
       },
       error => {
+        if (target.isDisconnected) {
+          // Target is disconnected. We can't send an error response, so
+          // don't even try.
+          if (error.result !== this.RESULT_DISCONNECTED &&
+              error.result !== this.RESULT_NO_RESPONSE) {
+            Cu.reportError(Cu.getClassName(error, false) === "Object" ? error.message : error);
+          }
+          return;
+        }
+
         let response = {
           result: this.RESULT_ERROR,
           messageName: data.channelId,
@@ -692,7 +710,12 @@ this.MessageChannel = {
     // If we have an error at this point, we have handler to report it to,
     // so just log it.
     if (handlers.length == 0) {
-      Cu.reportError(`No matching message response handler for ${data.messageName}`);
+      if (this.abortedResponses.has(data.messageName)) {
+        this.abortedResponses.delete(data.messageName);
+        Services.console.logStringMessage(`Ignoring response to aborted listener for ${data.messageName}`);
+      } else {
+        Cu.reportError(`No matching message response handler for ${data.messageName}`);
+      }
     } else if (handlers.length > 1) {
       Cu.reportError(`Multiple matching response handlers for ${data.messageName}`);
     } else if (data.result === this.RESULT_SUCCESS) {
@@ -753,6 +776,7 @@ this.MessageChannel = {
   abortResponses(sender, reason = this.REASON_DISCONNECTED) {
     for (let response of this.pendingResponses) {
       if (this.matchesFilter(sender, response.sender)) {
+        this.abortedResponses.add(response.channelId);
         response.reject(reason);
       }
     }
@@ -772,6 +796,7 @@ this.MessageChannel = {
   abortMessageManager(target, reason) {
     for (let response of this.pendingResponses) {
       if (MessageManagerProxy.matches(response.messageManager, target)) {
+        this.abortedResponses.add(response.channelId);
         response.reject(reason);
       }
     }

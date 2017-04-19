@@ -5,7 +5,7 @@
 from marionette_driver.by import By
 from marionette_driver.errors import (
     ElementNotAccessibleException,
-    ElementNotVisibleException
+    ElementNotInteractableException
 )
 
 from marionette_harness import MarionetteTestCase
@@ -47,7 +47,7 @@ class TestAccessibility(MarionetteTestCase):
         # Button5 does not have a correct accessibility role and may not be
         # manipulated via the accessibility API
         "button5",
-        # Button6 is missing an accesible name
+        # Button6 is missing an accessible name
         "button6",
         # Button7 is not currently visible via the accessibility API and may
         # not be manipulated by it
@@ -114,7 +114,7 @@ class TestAccessibility(MarionetteTestCase):
                               lambda button: self.assertRaises(ElementNotAccessibleException,
                                                                button.tap))
         self.run_element_test(self.falsy_elements,
-                              lambda button: self.assertRaises(ElementNotVisibleException,
+                              lambda button: self.assertRaises(ElementNotInteractableException,
                                                                button.tap))
 
     def test_single_tap_raises_no_exceptions(self):
@@ -123,7 +123,7 @@ class TestAccessibility(MarionetteTestCase):
         self.run_element_test(self.invalid_elementIDs, lambda button: button.tap())
         # Elements are invisible
         self.run_element_test(self.falsy_elements,
-                              lambda button: self.assertRaises(ElementNotVisibleException,
+                              lambda button: self.assertRaises(ElementNotInteractableException,
                                                                button.tap))
 
     def test_valid_click(self):
@@ -137,7 +137,7 @@ class TestAccessibility(MarionetteTestCase):
                               lambda button: self.assertRaises(ElementNotAccessibleException,
                                                                button.click))
         self.run_element_test(self.falsy_elements,
-                              lambda button: self.assertRaises(ElementNotVisibleException,
+                              lambda button: self.assertRaises(ElementNotInteractableException,
                                                                button.click))
 
     def test_click_raises_no_exceptions(self):
@@ -146,7 +146,7 @@ class TestAccessibility(MarionetteTestCase):
         self.run_element_test(self.invalid_elementIDs, lambda button: button.click())
         # Elements are invisible
         self.run_element_test(self.falsy_elements,
-                              lambda button: self.assertRaises(ElementNotVisibleException,
+                              lambda button: self.assertRaises(ElementNotInteractableException,
                                                                button.click))
 
     def test_element_visible_but_not_visible_to_accessbility(self):

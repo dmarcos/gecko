@@ -9,6 +9,10 @@ var StarUI = {
   _isNewBookmark: false,
   _isComposing: false,
   _autoCloseTimer: 0,
+  // The autoclose timer is diasbled if the user interacts with the
+  // popup, such as making a change through typing or clicking on
+  // the popup.
+  _autoCloseTimerEnabled: true,
 
   _element(aID) {
     return document.getElementById(aID);
@@ -22,6 +26,7 @@ var StarUI = {
     // to avoid impacting startup / new window performance
     element.hidden = false;
     element.addEventListener("keypress", this);
+    element.addEventListener("mousedown", this);
     element.addEventListener("mouseout", this);
     element.addEventListener("mousemove", this);
     element.addEventListener("compositionstart", this);
@@ -66,6 +71,8 @@ var StarUI = {
     switch (aEvent.type) {
       case "mousemove":
         clearTimeout(this._autoCloseTimer);
+        // The autoclose timer is not disabled on generic mouseout
+        // because the user may not have actually interacted with the popup.
         break;
       case "popuphidden":
         clearTimeout(this._autoCloseTimer);
@@ -109,6 +116,7 @@ var StarUI = {
         break;
       case "keypress":
         clearTimeout(this._autoCloseTimer);
+        this._autoCloseTimerEnabled = false;
 
         if (aEvent.defaultPrevented) {
           // The event has already been consumed inside of the panel.
@@ -139,26 +147,32 @@ var StarUI = {
             break;
         }
         break;
-      case "compositionstart":
-        if (aEvent.defaultPrevented) {
-          // If the composition was canceled, nothing to do here.
-          break;
-        }
-        // During composition, panel shouldn't be hidden automatically.
-        clearTimeout(this._autoCloseTimer);
-        this._isComposing = true;
-        break;
       case "compositionend":
         // After composition is committed, "mouseout" or something can set
         // auto close timer.
         this._isComposing = false;
         break;
+      case "compositionstart":
+        if (aEvent.defaultPrevented) {
+          // If the composition was canceled, nothing to do here.
+          break;
+        }
+        this._isComposing = true;
+        // Explicit fall-through, during composition, panel shouldn't be
+        // hidden automatically.
       case "input":
-        // Might be edited some text without keyboard events nor composition
-        // events. Let's cancel auto close in such case.
+        // Might have edited some text without keyboard events nor composition
+        // events. Fall-through to cancel auto close in such case.
+      case "mousedown":
         clearTimeout(this._autoCloseTimer);
+        this._autoCloseTimerEnabled = false;
         break;
       case "mouseout":
+        if (!this._autoCloseTimerEnabled) {
+          // Don't autoclose the popup if the user has made a selection
+          // or keypress and then subsequently mouseout.
+          break;
+        }
         // Explicit fall-through
       case "popupshown":
         // Don't handle events for descendent elements.
@@ -175,8 +189,11 @@ var StarUI = {
           }
           clearTimeout(this._autoCloseTimer);
           this._autoCloseTimer = setTimeout(() => {
-            this.panel.hidePopup();
+            if (!this.panel.mozMatchesSelector(":hover")) {
+              this.panel.hidePopup();
+            }
           }, delay);
+          this._autoCloseTimerEnabled = true;
         }
         break;
     }
@@ -281,24 +298,23 @@ var StarUI = {
         parent.setAttribute("open", "true");
       }
     }
-    let panel = this.panel;
-    let target = panel;
-    if (target.parentNode) {
-      // By targeting the panel's parent and using a capturing listener, we
-      // can have our listener called before others waiting for the panel to
-      // be shown (which probably expect the panel to be fully initialized)
-      target = target.parentNode;
-    }
-    target.addEventListener("popupshown", function shownListener(event) {
-      if (event.target == panel) {
-        target.removeEventListener("popupshown", shownListener, true);
-
-        gEditItemOverlay.initPanel({ node: aNode
-                                   , hiddenRows: ["description", "location",
-                                                  "loadInSidebar", "keyword"]
-                                   , focusedElement: "preferred"});
+    let onPanelReady = fn => {
+      let target = this.panel;
+      if (target.parentNode) {
+        // By targeting the panel's parent and using a capturing listener, we
+        // can have our listener called before others waiting for the panel to
+        // be shown (which probably expect the panel to be fully initialized)
+        target = target.parentNode;
       }
-    }, true);
+      target.addEventListener("popupshown", function(event) {
+        fn();
+      }, {"capture": true, "once": true});
+    };
+    gEditItemOverlay.initPanel({ node: aNode
+                               , onPanelReady
+                               , hiddenRows: ["description", "location",
+                                              "loadInSidebar", "keyword"]
+                               , focusedElement: "preferred"});
 
     this.panel.openPopup(aAnchorElement, aPosition);
   }),
@@ -729,7 +745,7 @@ HistoryMenu.prototype = {
 
     // remove existing menu items
     while (undoPopup.hasChildNodes())
-      undoPopup.removeChild(undoPopup.firstChild);
+      undoPopup.firstChild.remove();
 
     // no restorable tabs, so make sure menu is disabled, and return
     if (this._getClosedTabCount() == 0) {
@@ -765,7 +781,7 @@ HistoryMenu.prototype = {
 
     // remove existing menu items
     while (undoPopup.hasChildNodes())
-      undoPopup.removeChild(undoPopup.firstChild);
+      undoPopup.firstChild.remove();
 
     // no restorable windows, so make sure menu is disabled, and return
     if (SessionStore.getClosedWindowCount() == 0) {
@@ -1469,7 +1485,7 @@ var BookmarkingUI = {
       }
     };
 
-    Services.prefs.addObserver(this.RECENTLY_BOOKMARKED_PREF, prefObserver, false);
+    Services.prefs.addObserver(this.RECENTLY_BOOKMARKED_PREF, prefObserver);
     PlacesUtils.bookmarks.addObserver(this._recentlyBookmarkedObserver, true);
 
     // The context menu doesn't exist in non-browser windows on Mac
@@ -1998,7 +2014,7 @@ var BookmarkingUI = {
 
 var AutoShowBookmarksToolbar = {
   init() {
-    Services.obs.addObserver(this, "autoshow-bookmarks-toolbar", false);
+    Services.obs.addObserver(this, "autoshow-bookmarks-toolbar");
   },
 
   uninit() {

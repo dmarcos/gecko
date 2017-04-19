@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 include GraphicsMessages;
+include ProfilerTypes;
 include MemoryReportTypes;
 include protocol PCompositorBridge;
 include protocol PImageBridge;
@@ -15,12 +16,14 @@ include protocol PVideoDecoderManager;
 using base::ProcessId from "base/process.h";
 using mozilla::TimeDuration from "mozilla/TimeStamp.h";
 using mozilla::CSSToLayoutDeviceScale from "Units.h";
+using mozilla::dom::NativeThreadId from "mozilla/dom/TabMessageUtils.h";
 using mozilla::gfx::IntSize from "mozilla/gfx/2D.h";
 using mozilla::layers::CompositorOptions from "mozilla/layers/CompositorOptions.h";
 using mozilla::Telemetry::Accumulation from "mozilla/TelemetryComms.h";
 using mozilla::Telemetry::KeyedAccumulation from "mozilla/TelemetryComms.h";
 using mozilla::Telemetry::ScalarAction from "mozilla/TelemetryComms.h";
 using mozilla::Telemetry::KeyedScalarAction from "mozilla/TelemetryComms.h";
+using mozilla::Telemetry::ChildEventData from "mozilla/TelemetryComms.h";
 
 namespace mozilla {
 namespace gfx {
@@ -49,7 +52,8 @@ parent:
   // Sent by the UI process to initiate core settings.
   async Init(GfxPrefSetting[] prefs,
              GfxVarUpdate[] vars,
-             DevicePrefs devicePrefs);
+             DevicePrefs devicePrefs,
+             LayerTreeIdMapping[] mapping);
 
   async InitVsyncBridge(Endpoint<PVsyncBridgeParent> endpoint);
   async InitImageBridge(Endpoint<PImageBridgeParent> endpoint);
@@ -75,7 +79,7 @@ parent:
   async NewContentVideoDecoderManager(Endpoint<PVideoDecoderManagerParent> endpoint);
 
   // Called to notify the GPU process of who owns a layersId.
-  sync AddLayerTreeIdMapping(LayerTreeIdMapping[] mapping);
+  sync AddLayerTreeIdMapping(LayerTreeIdMapping mapping);
   async RemoveLayerTreeIdMapping(LayerTreeIdMapping mapping);
 
   // Request the current DeviceStatus from the GPU process. This blocks until
@@ -85,6 +89,12 @@ parent:
   // Have a message be broadcasted to the GPU process by the GPU process
   // observer service.
   async NotifyGpuObservers(nsCString aTopic);
+
+  // Control the Gecko Profiler in the GPU process.
+  async StartProfiler(ProfilerInitParams params);
+  async StopProfiler();
+  async PauseProfiler(bool aPause);
+  async GatherProfile();
 
   async RequestMemoryReport(uint32_t generation,
                             bool anonymize,
@@ -102,20 +112,23 @@ child:
   // Graphics errors, analogous to PContent::GraphicsError
   async GraphicsError(nsCString aError);
 
-  async InitCrashReporter(Shmem shmem);
+  async InitCrashReporter(Shmem shmem, NativeThreadId threadId);
 
   // Have a message be broadcasted to the UI process by the UI process
   // observer service.
   async NotifyUiObservers(nsCString aTopic);
 
   // Messages for reporting telemetry to the UI process.
-  async AccumulateChildHistogram(Accumulation[] accumulations);
-  async AccumulateChildKeyedHistogram(KeyedAccumulation[] accumulations);
+  async AccumulateChildHistograms(Accumulation[] accumulations);
+  async AccumulateChildKeyedHistograms(KeyedAccumulation[] accumulations);
   async UpdateChildScalars(ScalarAction[] actions);
   async UpdateChildKeyedScalars(KeyedScalarAction[] actions);
+  async RecordChildEvents(ChildEventData[] events);
 
-  async NotifyDeviceReset();
+  async NotifyDeviceReset(GPUDeviceData status);
 
+  // Called in response to GatherProfile.
+  async Profile(nsCString aProfile, bool aIsExitProfile);
   async AddMemoryReport(MemoryReport aReport);
   async FinishMemoryReport(uint32_t aGeneration);
 };

@@ -166,8 +166,8 @@ this.LogManager = {
 
 var PrefObserver = {
   init() {
-    Services.prefs.addObserver(PREF_LOGGING_ENABLED, this, false);
-    Services.obs.addObserver(this, "xpcom-shutdown", false);
+    Services.prefs.addObserver(PREF_LOGGING_ENABLED, this);
+    Services.obs.addObserver(this, "xpcom-shutdown");
     this.observe(null, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID, PREF_LOGGING_ENABLED);
   },
 
@@ -176,11 +176,7 @@ var PrefObserver = {
       Services.prefs.removeObserver(PREF_LOGGING_ENABLED, this);
       Services.obs.removeObserver(this, "xpcom-shutdown");
     } else if (aTopic == NS_PREFBRANCH_PREFCHANGE_TOPIC_ID) {
-      try {
-        gDebugLogEnabled = Services.prefs.getBoolPref(PREF_LOGGING_ENABLED);
-      } catch (e) {
-        gDebugLogEnabled = false;
-      }
+      gDebugLogEnabled = Services.prefs.getBoolPref(PREF_LOGGING_ENABLED, false);
     }
   }
 };

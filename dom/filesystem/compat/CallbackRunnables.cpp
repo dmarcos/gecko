@@ -12,17 +12,22 @@
 #include "mozilla/dom/FileBinding.h"
 #include "mozilla/dom/FileSystemDirectoryReaderBinding.h"
 #include "mozilla/dom/FileSystemFileEntry.h"
+#include "mozilla/dom/FileSystemUtils.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/Unused.h"
 #include "nsIGlobalObject.h"
+#include "nsIFile.h"
 #include "nsPIDOMWindow.h"
+
+#include "../GetFileOrDirectoryTask.h"
 
 namespace mozilla {
 namespace dom {
 
 EntryCallbackRunnable::EntryCallbackRunnable(FileSystemEntryCallback* aCallback,
                                              FileSystemEntry* aEntry)
-  : mCallback(aCallback)
+  : Runnable("EntryCallbackRunnable")
+  , mCallback(aCallback)
   , mEntry(aEntry)
 {
   MOZ_ASSERT(aCallback);
@@ -39,7 +44,8 @@ EntryCallbackRunnable::Run()
 ErrorCallbackRunnable::ErrorCallbackRunnable(nsIGlobalObject* aGlobalObject,
                                              ErrorCallback* aCallback,
                                              nsresult aError)
-  : mGlobal(aGlobalObject)
+  : Runnable("ErrorCallbackRunnable")
+  , mGlobal(aGlobalObject)
   , mCallback(aCallback)
   , mError(aError)
 {
@@ -51,18 +57,14 @@ ErrorCallbackRunnable::ErrorCallbackRunnable(nsIGlobalObject* aGlobalObject,
 NS_IMETHODIMP
 ErrorCallbackRunnable::Run()
 {
-  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(mGlobal);
-  if (NS_WARN_IF(!window)) {
-    return NS_ERROR_FAILURE;
-  }
-
   RefPtr<DOMException> exception = DOMException::Create(mError);
   mCallback->HandleEvent(*exception);
   return NS_OK;
 }
 
 EmptyEntriesCallbackRunnable::EmptyEntriesCallbackRunnable(FileSystemEntriesCallback* aCallback)
-  : mCallback(aCallback)
+  : Runnable("EmptyEntriesCallbackRunnable")
+  , mCallback(aCallback)
 {
   MOZ_ASSERT(aCallback);
 }
@@ -100,18 +102,72 @@ GetEntryHelper::GetEntryHelper(FileSystemDirectoryEntry* aParentEntry,
 GetEntryHelper::~GetEntryHelper()
 {}
 
+namespace {
+
+nsresult
+DOMPathToRealPath(Directory* aDirectory, const nsAString& aPath,
+                  nsIFile** aFile)
+{
+  nsString relativePath;
+  relativePath = aPath;
+
+  // Trim white spaces.
+  static const char kWhitespace[] = "\b\t\r\n ";
+  relativePath.Trim(kWhitespace);
+
+  nsTArray<nsString> parts;
+  if (!FileSystemUtils::IsValidRelativeDOMPath(relativePath, parts)) {
+    return NS_ERROR_DOM_FILESYSTEM_INVALID_PATH_ERR;
+  }
+
+  nsCOMPtr<nsIFile> file;
+  nsresult rv = aDirectory->GetInternalNsIFile()->Clone(getter_AddRefs(file));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  for (uint32_t i = 0; i < parts.Length(); ++i) {
+    rv = file->AppendRelativePath(parts[i]);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  }
+
+  file.forget(aFile);
+  return NS_OK;
+}
+
+} // anonymous
+
 void
 GetEntryHelper::Run()
 {
   MOZ_ASSERT(!mParts.IsEmpty());
 
+  nsCOMPtr<nsIFile> realPath;
+  nsresult error = DOMPathToRealPath(mDirectory, mParts[0],
+                                     getter_AddRefs(realPath));
+
   ErrorResult rv;
-  RefPtr<Promise> promise = mDirectory->Get(mParts[0], rv);
+  RefPtr<FileSystemBase> fs = mDirectory->GetFileSystem(rv);
   if (NS_WARN_IF(rv.Failed())) {
     rv.SuppressException();
     Error(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
+
+  RefPtr<GetFileOrDirectoryTaskChild> task =
+    GetFileOrDirectoryTaskChild::Create(fs, realPath, rv);
+  if (NS_WARN_IF(rv.Failed())) {
+    rv.SuppressException();
+    Error(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return;
+  }
+
+  task->SetError(error);
+  task->Start();
+
+  RefPtr<Promise> promise = task->GetPromise();
 
   mParts.RemoveElementAt(0);
   promise->AppendNativeHandler(this);
@@ -205,25 +261,27 @@ GetEntryHelper::Error(nsresult aError)
     RefPtr<ErrorCallbackRunnable> runnable =
       new ErrorCallbackRunnable(mParentEntry->GetParentObject(),
                                 mErrorCallback, aError);
-    DebugOnly<nsresult> rv = NS_DispatchToMainThread(runnable);
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "NS_DispatchToMainThread failed");
+
+    FileSystemUtils::DispatchRunnable(mParentEntry->GetParentObject(),
+                                      runnable.forget());
   }
 }
 
 NS_IMPL_ISUPPORTS0(GetEntryHelper);
 
 /* static */ void
-FileSystemEntryCallbackHelper::Call(const Optional<OwningNonNull<FileSystemEntryCallback>>& aEntryCallback,
+FileSystemEntryCallbackHelper::Call(nsIGlobalObject* aGlobalObject,
+                                    const Optional<OwningNonNull<FileSystemEntryCallback>>& aEntryCallback,
                                     FileSystemEntry* aEntry)
 {
+  MOZ_ASSERT(aGlobalObject);
   MOZ_ASSERT(aEntry);
 
   if (aEntryCallback.WasPassed()) {
     RefPtr<EntryCallbackRunnable> runnable =
       new EntryCallbackRunnable(&aEntryCallback.Value(), aEntry);
 
-    DebugOnly<nsresult> rv = NS_DispatchToMainThread(runnable);
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "NS_DispatchToMainThread failed");
+    FileSystemUtils::DispatchRunnable(aGlobalObject, runnable.forget());
   }
 }
 
@@ -238,8 +296,8 @@ ErrorCallbackHelper::Call(nsIGlobalObject* aGlobal,
   if (aErrorCallback.WasPassed()) {
     RefPtr<ErrorCallbackRunnable> runnable =
       new ErrorCallbackRunnable(aGlobal, &aErrorCallback.Value(), aError);
-    DebugOnly<nsresult> rv = NS_DispatchToMainThread(runnable);
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "NS_DispatchToMainThread failed");
+
+    FileSystemUtils::DispatchRunnable(aGlobal, runnable.forget());
   }
 }
 

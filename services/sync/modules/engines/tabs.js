@@ -7,12 +7,10 @@ this.EXPORTED_SYMBOLS = ["TabEngine", "TabSetRecord"];
 var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 const TABS_TTL = 1814400;          // 21 days.
-const TAB_ENTRIES_LIMIT = 25;      // How many URLs to include in tab history.
+const TAB_ENTRIES_LIMIT = 5;      // How many URLs to include in tab history.
 
-Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://services-sync/engines.js");
-Cu.import("resource://services-sync/engines/clients.js");
 Cu.import("resource://services-sync/record.js");
 Cu.import("resource://services-sync/util.js");
 Cu.import("resource://services-sync/constants.js");
@@ -209,11 +207,12 @@ TabStore.prototype = {
       return b.lastUsed - a.lastUsed;
     });
 
-    // Figure out how many tabs we can pack into a payload. Starting with a 28KB
-    // payload, we can estimate various overheads from encryption/JSON/WBO.
-    let size = JSON.stringify(tabs).length;
+    // Figure out how many tabs we can pack into a payload.
+    // We use byteLength here because the data is not encrypted in ascii yet.
+    let size = new TextEncoder("utf-8").encode(JSON.stringify(tabs)).byteLength;
     let origLength = tabs.length;
-    const MAX_TAB_SIZE = 20000;
+    // See bug 535326 comment 8 for an explanation of the estimation
+    const MAX_TAB_SIZE = this.engine.maxRecordPayloadBytes / 4 * 3 - 1500;
     if (size > MAX_TAB_SIZE) {
       // Estimate a little more than the direct fraction to maximize packing
       let cutoff = Math.ceil(tabs.length * MAX_TAB_SIZE / size);

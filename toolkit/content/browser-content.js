@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* eslint-env mozilla/frame-script */
+
 var Cc = Components.classes;
 var Ci = Components.interfaces;
 var Cu = Components.utils;
@@ -443,7 +445,7 @@ var Printing = {
     let data = message.data;
     switch (message.name) {
       case "Printing:Preview:Enter": {
-        this.enterPrintPreview(Services.wm.getOuterWindowWithId(data.windowID), data.simplifiedMode);
+        this.enterPrintPreview(Services.wm.getOuterWindowWithId(data.windowID), data.simplifiedMode, data.defaultPrinterName);
         break;
       }
 
@@ -468,20 +470,20 @@ var Printing = {
       }
 
       case "Printing:Print": {
-        this.print(Services.wm.getOuterWindowWithId(data.windowID), data.simplifiedMode);
+        this.print(Services.wm.getOuterWindowWithId(data.windowID), data.simplifiedMode, data.defaultPrinterName);
         break;
       }
     }
   },
 
-  getPrintSettings() {
+  getPrintSettings(defaultPrinterName) {
     try {
       let PSSVC = Cc["@mozilla.org/gfx/printsettings-service;1"]
                     .getService(Ci.nsIPrintSettingsService);
 
       let printSettings = PSSVC.globalPrintSettings;
       if (!printSettings.printerName) {
-        printSettings.printerName = PSSVC.defaultPrinterName;
+        printSettings.printerName = defaultPrinterName;
       }
       // First get any defaults from the printer
       PSSVC.initPrintSettingsFromPrinter(printSettings.printerName,
@@ -620,7 +622,7 @@ var Printing = {
     });
   },
 
-  enterPrintPreview(contentWindow, simplifiedMode) {
+  enterPrintPreview(contentWindow, simplifiedMode, defaultPrinterName) {
     // We'll call this whenever we've finished reflowing the document, or if
     // we errored out while attempting to print preview (in which case, we'll
     // notify the parent that we've failed).
@@ -643,7 +645,7 @@ var Printing = {
     addEventListener("printPreviewUpdate", onPrintPreviewReady);
 
     try {
-      let printSettings = this.getPrintSettings();
+      let printSettings = this.getPrintSettings(defaultPrinterName);
 
       // If we happen to be on simplified mode, we need to set docURL in order
       // to generate header/footer content correctly, since simplified tab has
@@ -651,7 +653,19 @@ var Printing = {
       if (printSettings && simplifiedMode)
         printSettings.docURL = contentWindow.document.baseURI;
 
-      docShell.printPreview.printPreview(printSettings, contentWindow, this);
+      // The print preview docshell will be in a different TabGroup,
+      // so we run it in a separate runnable to avoid touching a
+      // different TabGroup in our own runnable.
+      Services.tm.dispatchToMainThread(() => {
+        try {
+          docShell.printPreview.printPreview(printSettings, contentWindow, this);
+        } catch (error) {
+          // This might fail if we, for example, attempt to print a XUL document.
+          // In that case, we inform the parent to bail out of print preview.
+          Components.utils.reportError(error);
+          notifyEntered(error);
+        }
+      });
     } catch (error) {
       // This might fail if we, for example, attempt to print a XUL document.
       // In that case, we inform the parent to bail out of print preview.
@@ -664,8 +678,8 @@ var Printing = {
     docShell.printPreview.exitPrintPreview();
   },
 
-  print(contentWindow, simplifiedMode) {
-    let printSettings = this.getPrintSettings();
+  print(contentWindow, simplifiedMode, defaultPrinterName) {
+    let printSettings = this.getPrintSettings(defaultPrinterName);
 
     // If we happen to be on simplified mode, we need to set docURL in order
     // to generate header/footer content correctly, since simplified tab has
@@ -956,9 +970,7 @@ var AudioPlaybackListener = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
 
   init() {
-    Services.obs.addObserver(this, "audio-playback", false);
-    Services.obs.addObserver(this, "AudioFocusChanged", false);
-    Services.obs.addObserver(this, "MediaControl", false);
+    Services.obs.addObserver(this, "audio-playback");
 
     addMessageListener("AudioPlayback", this);
     addEventListener("unload", () => {
@@ -968,8 +980,6 @@ var AudioPlaybackListener = {
 
   uninit() {
     Services.obs.removeObserver(this, "audio-playback");
-    Services.obs.removeObserver(this, "AudioFocusChanged");
-    Services.obs.removeObserver(this, "MediaControl");
 
     removeMessageListener("AudioPlayback", this);
   },
@@ -1016,15 +1026,15 @@ var AudioPlaybackListener = {
     if (topic === "audio-playback") {
       if (subject && subject.top == global.content) {
         let name = "AudioPlayback:";
-        if (data === "block") {
-          name += "Block";
+        if (data === "blockStart") {
+          name += "BlockStart";
+        } else if (data === "blockStop") {
+          name += "BlockStop";
         } else {
           name += (data === "active") ? "Start" : "Stop";
         }
         sendAsyncMessage(name);
       }
-    } else if (topic == "AudioFocusChanged" || topic == "MediaControl") {
-      this.handleMediaControlMessage(data);
     }
   },
 
@@ -1761,74 +1771,6 @@ let DateTimePickerListener = {
 
 DateTimePickerListener.init();
 
-/*
- * Telemetry probe to track the amount of scrolling a user does up and down the root frame
- * of a page, and also the maximum distance a user scrolls down the root frame of a page.
- * This doesn't include scrolling sub frames, but does include scrolling from JavaScript.
- * See bug 1312881 and bug 1297867 for more details.
- */
-let TelemetryScrollTracker = {
-  init() {
-    this._ignore = false;
-    this._prevScrollY = 0;
-    this._maxScrollY = 0;
-    this._amountHistogram = Services.telemetry.getHistogramById("TOTAL_SCROLL_Y");
-    this._maxHistogram = Services.telemetry.getHistogramById("PAGE_MAX_SCROLL_Y");
-
-    addEventListener("DOMWindowCreated", this, { passive: true });
-    addEventListener("pageshow", this, { passive: true });
-    addEventListener("scroll", this, { passive: true });
-    addEventListener("pagehide", this, { passive: true });
-  },
-
-  handleEvent(aEvent) {
-    if (aEvent.target !== content.document) {
-      return;
-    }
-
-    switch (aEvent.type) {
-      case "DOMWindowCreated": {
-        this._ignore = this.shouldIgnorePage();
-        this._prevScrollY = 0;
-        this._maxScrollY = 0;
-        break;
-      }
-      case "pageshow": {
-        this._ignore = this.shouldIgnorePage();
-        this._prevScrollY = content.scrollY;
-        this._maxScrollY = content.scrollY;
-        break;
-      }
-      case "scroll": {
-        if (this._ignore) {
-          return;
-        }
-
-        let amount = Math.abs(content.scrollY - this._prevScrollY);
-        this._amountHistogram.add(amount);
-        this._prevScrollY = content.scrollY;
-        this._maxScrollY = Math.max(content.scrollY, this._maxScrollY);
-        break;
-      }
-      case "pagehide": {
-        if (this._ignore) {
-          return;
-        }
-
-        this._maxHistogram.add(this._maxScrollY);
-        break;
-      }
-    }
-  },
-
-  shouldIgnorePage() {
-    return content.location == "" ||
-           content.location.protocol === "about:";
-  }
-};
-
-TelemetryScrollTracker.init();
-
 addEventListener("mozshowdropdown", event => {
   if (!event.isTrusted)
     return;
@@ -1846,4 +1788,3 @@ addEventListener("mozshowdropdown-sourcetouch", event => {
     new SelectContentHelper(event.target, {isOpenedViaTouch: true}, this);
   }
 });
-

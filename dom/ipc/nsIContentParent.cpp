@@ -14,11 +14,14 @@
 #include "mozilla/dom/PermissionMessageUtils.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/dom/ipc/BlobParent.h"
+#include "mozilla/dom/ipc/MemoryStreamParent.h"
 #include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 #include "mozilla/ipc/FileDescriptorSetParent.h"
 #include "mozilla/ipc/PFileDescriptorSetParent.h"
-#include "mozilla/ipc/SendStreamAlloc.h"
+#include "mozilla/ipc/IPCStreamAlloc.h"
+#include "mozilla/ipc/IPCStreamDestination.h"
+#include "mozilla/ipc/IPCStreamSource.h"
 #include "mozilla/Unused.h"
 
 #include "nsFrameMessageManager.h"
@@ -118,11 +121,14 @@ nsIContentParent::CanOpenBrowser(const IPCTabContext& aContext)
 
 PBrowserParent*
 nsIContentParent::AllocPBrowserParent(const TabId& aTabId,
+                                      const TabId& aSameTabGroupAs,
                                       const IPCTabContext& aContext,
                                       const uint32_t& aChromeFlags,
                                       const ContentParentId& aCpId,
                                       const bool& aIsForBrowser)
 {
+  MOZ_ASSERT(!aSameTabGroupAs);
+
   Unused << aCpId;
   Unused << aIsForBrowser;
 
@@ -185,6 +191,19 @@ nsIContentParent::DeallocPBlobParent(PBlobParent* aActor)
   return true;
 }
 
+PMemoryStreamParent*
+nsIContentParent::AllocPMemoryStreamParent(const uint64_t& aSize)
+{
+  return new MemoryStreamParent(aSize);
+}
+
+bool
+nsIContentParent::DeallocPMemoryStreamParent(PMemoryStreamParent* aActor)
+{
+  delete aActor;
+  return true;
+}
+
 BlobParent*
 nsIContentParent::GetOrCreateActorForBlob(Blob* aBlob)
 {
@@ -216,6 +235,11 @@ nsIContentParent::RecvSyncMessage(const nsString& aMsg,
                                   const IPC::Principal& aPrincipal,
                                   nsTArray<ipc::StructuredCloneData>* aRetvals)
 {
+  NS_LossyConvertUTF16toASCII messageNameCStr(aMsg);
+  PROFILER_LABEL_DYNAMIC("nsIContentParent", "RecvSyncMessage",
+                         js::ProfileEntry::Category::EVENTS,
+                         messageNameCStr.get());
+
   CrossProcessCpowHolder cpows(this, aCpows);
   RefPtr<nsFrameMessageManager> ppm = mMessageManager;
   if (ppm) {
@@ -235,6 +259,11 @@ nsIContentParent::RecvRpcMessage(const nsString& aMsg,
                                  const IPC::Principal& aPrincipal,
                                  nsTArray<ipc::StructuredCloneData>* aRetvals)
 {
+  NS_LossyConvertUTF16toASCII messageNameCStr(aMsg);
+  PROFILER_LABEL_DYNAMIC("nsIContentParent", "RecvRpcMessage",
+                         js::ProfileEntry::Category::EVENTS,
+                         messageNameCStr.get());
+
   CrossProcessCpowHolder cpows(this, aCpows);
   RefPtr<nsFrameMessageManager> ppm = mMessageManager;
   if (ppm) {
@@ -260,14 +289,27 @@ nsIContentParent::DeallocPFileDescriptorSetParent(PFileDescriptorSetParent* aAct
   return true;
 }
 
-PSendStreamParent*
-nsIContentParent::AllocPSendStreamParent()
+PChildToParentStreamParent*
+nsIContentParent::AllocPChildToParentStreamParent()
 {
-  return mozilla::ipc::AllocPSendStreamParent();
+  return mozilla::ipc::AllocPChildToParentStreamParent();
 }
 
 bool
-nsIContentParent::DeallocPSendStreamParent(PSendStreamParent* aActor)
+nsIContentParent::DeallocPChildToParentStreamParent(PChildToParentStreamParent* aActor)
+{
+  delete aActor;
+  return true;
+}
+
+PParentToChildStreamParent*
+nsIContentParent::AllocPParentToChildStreamParent()
+{
+  MOZ_CRASH("PParentToChildStreamChild actors should be manually constructed!");
+}
+
+bool
+nsIContentParent::DeallocPParentToChildStreamParent(PParentToChildStreamParent* aActor)
 {
   delete aActor;
   return true;
@@ -279,6 +321,11 @@ nsIContentParent::RecvAsyncMessage(const nsString& aMsg,
                                    const IPC::Principal& aPrincipal,
                                    const ClonedMessageData& aData)
 {
+  NS_LossyConvertUTF16toASCII messageNameCStr(aMsg);
+  PROFILER_LABEL_DYNAMIC("nsIContentParent", "RecvAsyncMessage",
+                          js::ProfileEntry::Category::EVENTS,
+                          messageNameCStr.get());
+
   CrossProcessCpowHolder cpows(this, aCpows);
   RefPtr<nsFrameMessageManager> ppm = mMessageManager;
   if (ppm) {

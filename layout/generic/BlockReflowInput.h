@@ -102,6 +102,9 @@ class BlockReflowInput {
 
     // Set when the pref layout.float-fragments-inside-column.enabled is true.
     bool mFloatFragmentsInsideColumnEnabled : 1;
+
+    // Set when we need text-overflow processing.
+    bool mCanHaveTextOverflow : 1;
   };
 
 public:
@@ -158,6 +161,13 @@ public:
   nscoord ClearFloats(nscoord aBCoord, mozilla::StyleClear aBreakType,
                       nsIFrame *aReplacedBlock = nullptr,
                       uint32_t aFlags = 0);
+
+  nsFloatManager* FloatManager() const {
+    MOZ_ASSERT(mReflowInput.mFloatManager,
+               "Float manager should be valid during the lifetime of "
+               "BlockReflowInput!");
+    return mReflowInput.mFloatManager;
+  }
 
   // Advances to the next band, i.e., the next horizontal stripe in
   // which there is a different set of floats.
@@ -239,8 +249,6 @@ public:
   nsPresContext* mPresContext;
 
   const ReflowInput& mReflowInput;
-
-  nsFloatManager* mFloatManager;
 
   // The coordinates within the float manager where the block is being
   // placed <b>after</b> taking into account the blocks border and

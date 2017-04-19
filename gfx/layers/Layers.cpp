@@ -22,19 +22,19 @@
 #include "gfxUtils.h"                   // for gfxUtils, etc
 #include "gfx2DGlue.h"
 #include "mozilla/DebugOnly.h"          // for DebugOnly
+#include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Telemetry.h"          // for Accumulate
 #include "mozilla/ToString.h"
-#include "mozilla/dom/Animation.h"      // for ComputedTimingFunction
 #include "mozilla/gfx/2D.h"             // for DrawTarget
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
 #include "mozilla/gfx/Polygon.h"        // for Polygon
+#include "mozilla/layers/AnimationHelper.h"
 #include "mozilla/layers/AsyncCanvasRenderer.h"
 #include "mozilla/layers/BSPTree.h"     // for BSPTree
 #include "mozilla/layers/CompositableClient.h"  // for CompositableClient
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/CompositorTypes.h"
-#include "mozilla/layers/LayerAnimationUtils.h"  // for TimingFunctionToComputedTimingFunction
 #include "mozilla/layers/LayerManagerComposite.h"  // for LayerComposite
 #include "mozilla/layers/LayerMetricsWrapper.h" // for LayerMetricsWrapper
 #include "mozilla/layers/LayersMessages.h"  // for TransformFunction, etc
@@ -43,13 +43,14 @@
 #include "mozilla/layers/ShadowLayers.h"  // for ShadowableLayer
 #include "nsAString.h"
 #include "nsCSSValue.h"                 // for nsCSSValue::Array, etc
+#include "nsDisplayList.h"              // for nsDisplayItem
 #include "nsPrintfCString.h"            // for nsPrintfCString
 #include "nsStyleStruct.h"              // for nsTimingFunction, etc
 #include "protobuf/LayerScopePacket.pb.h"
 #include "mozilla/Compression.h"
 #include "TreeTraversal.h"              // for ForEachNode
 
-#include <deque>
+#include <list>
 #include <set>
 
 uint8_t gLayerManagerLayerBuilder;
@@ -191,6 +192,7 @@ Layer::Layer(LayerManager* aManager, void* aImplData) :
   mNextSibling(nullptr),
   mPrevSibling(nullptr),
   mImplData(aImplData),
+  mCompositorAnimationsId(0),
   mUseTileSourceRect(false),
 #ifdef DEBUG
   mDebugColorIndex(0),
@@ -206,7 +208,14 @@ Layer::~Layer()
 Animation*
 Layer::AddAnimation()
 {
-  MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) AddAnimation", this));
+  // Here generates a new id when the first animation is added and
+  // this id is used to represent the animations in this layer.
+  if (!mCompositorAnimationsId) {
+    mCompositorAnimationsId = AnimationHelper::GetNextCompositorAnimationsId();
+  }
+
+  MOZ_LAYERS_LOG_IF_SHADOWABLE(
+    this, ("Layer::Mutated(%p) AddAnimation with id=%" PRIu64, this, mCompositorAnimationsId));
 
   MOZ_ASSERT(!mPendingAnimations, "should have called ClearAnimations first");
 
@@ -227,6 +236,7 @@ Layer::ClearAnimations()
 
   MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) ClearAnimations", this));
   mAnimations.Clear();
+  mCompositorAnimationsId = 0;
   mAnimationData.Clear();
   Mutated();
 }
@@ -253,229 +263,18 @@ Layer::ClearAnimationsForNextTransaction()
   mPendingAnimations->Clear();
 }
 
-static inline void
-SetCSSAngle(const CSSAngle& aAngle, nsCSSValue& aValue)
-{
-  aValue.SetFloatValue(aAngle.value(), nsCSSUnit(aAngle.unit()));
-}
-
-static nsCSSValueSharedList*
-CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
-{
-  nsAutoPtr<nsCSSValueList> result;
-  nsCSSValueList** resultTail = getter_Transfers(result);
-  for (uint32_t i = 0; i < aFunctions.Length(); i++) {
-    RefPtr<nsCSSValue::Array> arr;
-    switch (aFunctions[i].type()) {
-      case TransformFunction::TRotationX:
-      {
-        const CSSAngle& angle = aFunctions[i].get_RotationX().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatex,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
-        break;
-      }
-      case TransformFunction::TRotationY:
-      {
-        const CSSAngle& angle = aFunctions[i].get_RotationY().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatey,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
-        break;
-      }
-      case TransformFunction::TRotationZ:
-      {
-        const CSSAngle& angle = aFunctions[i].get_RotationZ().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotatez,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
-        break;
-      }
-      case TransformFunction::TRotation:
-      {
-        const CSSAngle& angle = aFunctions[i].get_Rotation().angle();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotate,
-                                                           resultTail);
-        SetCSSAngle(angle, arr->Item(1));
-        break;
-      }
-      case TransformFunction::TRotation3D:
-      {
-        float x = aFunctions[i].get_Rotation3D().x();
-        float y = aFunctions[i].get_Rotation3D().y();
-        float z = aFunctions[i].get_Rotation3D().z();
-        const CSSAngle& angle = aFunctions[i].get_Rotation3D().angle();
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_rotate3d,
-                                                       resultTail);
-        arr->Item(1).SetFloatValue(x, eCSSUnit_Number);
-        arr->Item(2).SetFloatValue(y, eCSSUnit_Number);
-        arr->Item(3).SetFloatValue(z, eCSSUnit_Number);
-        SetCSSAngle(angle, arr->Item(4));
-        break;
-      }
-      case TransformFunction::TScale:
-      {
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_scale3d,
-                                                       resultTail);
-        arr->Item(1).SetFloatValue(aFunctions[i].get_Scale().x(), eCSSUnit_Number);
-        arr->Item(2).SetFloatValue(aFunctions[i].get_Scale().y(), eCSSUnit_Number);
-        arr->Item(3).SetFloatValue(aFunctions[i].get_Scale().z(), eCSSUnit_Number);
-        break;
-      }
-      case TransformFunction::TTranslation:
-      {
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_translate3d,
-                                                       resultTail);
-        arr->Item(1).SetFloatValue(aFunctions[i].get_Translation().x(), eCSSUnit_Pixel);
-        arr->Item(2).SetFloatValue(aFunctions[i].get_Translation().y(), eCSSUnit_Pixel);
-        arr->Item(3).SetFloatValue(aFunctions[i].get_Translation().z(), eCSSUnit_Pixel);
-        break;
-      }
-      case TransformFunction::TSkewX:
-      {
-        const CSSAngle& x = aFunctions[i].get_SkewX().x();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skewx,
-                                                           resultTail);
-        SetCSSAngle(x, arr->Item(1));
-        break;
-      }
-      case TransformFunction::TSkewY:
-      {
-        const CSSAngle& y = aFunctions[i].get_SkewY().y();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skewy,
-                                                           resultTail);
-        SetCSSAngle(y, arr->Item(1));
-        break;
-      }
-      case TransformFunction::TSkew:
-      {
-        const CSSAngle& x = aFunctions[i].get_Skew().x();
-        const CSSAngle& y = aFunctions[i].get_Skew().y();
-        arr = StyleAnimationValue::AppendTransformFunction(eCSSKeyword_skew,
-                                                           resultTail);
-        SetCSSAngle(x, arr->Item(1));
-        SetCSSAngle(y, arr->Item(2));
-        break;
-      }
-      case TransformFunction::TTransformMatrix:
-      {
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_matrix3d,
-                                                       resultTail);
-        const gfx::Matrix4x4& matrix = aFunctions[i].get_TransformMatrix().value();
-        arr->Item(1).SetFloatValue(matrix._11, eCSSUnit_Number);
-        arr->Item(2).SetFloatValue(matrix._12, eCSSUnit_Number);
-        arr->Item(3).SetFloatValue(matrix._13, eCSSUnit_Number);
-        arr->Item(4).SetFloatValue(matrix._14, eCSSUnit_Number);
-        arr->Item(5).SetFloatValue(matrix._21, eCSSUnit_Number);
-        arr->Item(6).SetFloatValue(matrix._22, eCSSUnit_Number);
-        arr->Item(7).SetFloatValue(matrix._23, eCSSUnit_Number);
-        arr->Item(8).SetFloatValue(matrix._24, eCSSUnit_Number);
-        arr->Item(9).SetFloatValue(matrix._31, eCSSUnit_Number);
-        arr->Item(10).SetFloatValue(matrix._32, eCSSUnit_Number);
-        arr->Item(11).SetFloatValue(matrix._33, eCSSUnit_Number);
-        arr->Item(12).SetFloatValue(matrix._34, eCSSUnit_Number);
-        arr->Item(13).SetFloatValue(matrix._41, eCSSUnit_Number);
-        arr->Item(14).SetFloatValue(matrix._42, eCSSUnit_Number);
-        arr->Item(15).SetFloatValue(matrix._43, eCSSUnit_Number);
-        arr->Item(16).SetFloatValue(matrix._44, eCSSUnit_Number);
-        break;
-      }
-      case TransformFunction::TPerspective:
-      {
-        float perspective = aFunctions[i].get_Perspective().value();
-        arr =
-          StyleAnimationValue::AppendTransformFunction(eCSSKeyword_perspective,
-                                                       resultTail);
-        arr->Item(1).SetFloatValue(perspective, eCSSUnit_Pixel);
-        break;
-      }
-      default:
-        NS_ASSERTION(false, "All functions should be implemented?");
-    }
-  }
-  if (aFunctions.Length() == 0) {
-    result = new nsCSSValueList();
-    result->mValue.SetNoneValue();
-  }
-  return new nsCSSValueSharedList(result.forget());
-}
-
-static StyleAnimationValue
-ToStyleAnimationValue(const Animatable& aAnimatable)
-{
-  StyleAnimationValue result;
-
-  switch (aAnimatable.type()) {
-    case Animatable::Tnull_t:
-      break;
-    case Animatable::TArrayOfTransformFunction: {
-      const InfallibleTArray<TransformFunction>& transforms =
-        aAnimatable.get_ArrayOfTransformFunction();
-      result.SetTransformValue(CreateCSSValueList(transforms));
-      break;
-    }
-    case Animatable::Tfloat:
-      result.SetFloatValue(aAnimatable.get_float());
-      break;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unsupported type");
-  }
-
-  return result;
-}
-
 void
-Layer::SetAnimations(const AnimationArray& aAnimations)
+Layer::SetCompositorAnimations(const CompositorAnimations& aCompositorAnimations)
 {
-  MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) SetAnimations", this));
+  MOZ_LAYERS_LOG_IF_SHADOWABLE(
+    this, ("Layer::Mutated(%p) SetCompositorAnimations with id=%" PRIu64, this, mCompositorAnimationsId));
 
-  mAnimations = aAnimations;
+  mAnimations = aCompositorAnimations.animations();
+  mCompositorAnimationsId = aCompositorAnimations.id();
   mAnimationData.Clear();
-  for (uint32_t i = 0; i < mAnimations.Length(); i++) {
-    Animation& animation = mAnimations[i];
-    // Adjust fill mode to fill forwards so that if the main thread is delayed
-    // in clearing this animation we don't introduce flicker by jumping back to
-    // the old underlying value
-    switch (static_cast<dom::FillMode>(animation.fillMode())) {
-      case dom::FillMode::None:
-        animation.fillMode() = static_cast<uint8_t>(dom::FillMode::Forwards);
-        break;
-      case dom::FillMode::Backwards:
-        animation.fillMode() = static_cast<uint8_t>(dom::FillMode::Both);
-        break;
-      default:
-        break;
-    }
-
-    if (animation.baseStyle().type() != Animatable::Tnull_t) {
-      mBaseAnimationStyle = ToStyleAnimationValue(animation.baseStyle());
-    }
-
-    AnimData* data = mAnimationData.AppendElement();
-    InfallibleTArray<Maybe<ComputedTimingFunction>>& functions =
-      data->mFunctions;
-    const InfallibleTArray<AnimationSegment>& segments = animation.segments();
-    for (uint32_t j = 0; j < segments.Length(); j++) {
-      TimingFunction tf = segments.ElementAt(j).sampleFn();
-
-      Maybe<ComputedTimingFunction> ctf =
-        AnimationUtils::TimingFunctionToComputedTimingFunction(tf);
-      functions.AppendElement(ctf);
-    }
-
-    // Precompute the StyleAnimationValues that we need if this is a transform
-    // animation.
-    InfallibleTArray<StyleAnimationValue>& startValues = data->mStartValues;
-    InfallibleTArray<StyleAnimationValue>& endValues = data->mEndValues;
-    for (const AnimationSegment& segment : segments) {
-      startValues.AppendElement(ToStyleAnimationValue(segment.startState()));
-      endValues.AppendElement(ToStyleAnimationValue(segment.endState()));
-    }
-  }
+  AnimationHelper::SetAnimations(mAnimations,
+                                 mAnimationData,
+                                 mBaseAnimationStyle);
 
   Mutated();
 }
@@ -884,10 +683,10 @@ Layer::GetTransformTyped() const
 Matrix4x4
 Layer::GetLocalTransform()
 {
-  if (HostLayer* shadow = AsHostLayer())
+  if (HostLayer* shadow = AsHostLayer()) {
     return shadow->GetShadowTransform();
-  else
-    return GetTransform();
+  }
+  return GetTransform();
 }
 
 const LayerToParentLayerMatrix4x4
@@ -1350,10 +1149,8 @@ ContainerLayer::Collect3DContextLeaves(nsTArray<Layer*>& aToSort)
             !container->UseIntermediateSurface())) {
           return TraversalFlag::Continue;
         }
-        else {
-          aToSort.AppendElement(layer);
-          return TraversalFlag::Skip;
-        }
+        aToSort.AppendElement(layer);
+        return TraversalFlag::Skip;
       }
   );
 }
@@ -1361,8 +1158,7 @@ ContainerLayer::Collect3DContextLeaves(nsTArray<Layer*>& aToSort)
 static nsTArray<LayerPolygon>
 SortLayersWithBSPTree(nsTArray<Layer*>& aArray)
 {
-  std::deque<LayerPolygon> inputLayers;
-  nsTArray<LayerPolygon> orderedLayers;
+  std::list<LayerPolygon> inputLayers;
 
   // Build a list of polygons to be sorted.
   for (Layer* layer : aArray) {
@@ -1373,7 +1169,13 @@ SortLayersWithBSPTree(nsTArray<Layer*>& aArray)
 
     const gfx::IntRect& bounds =
       layer->GetLocalVisibleRegion().ToUnknownRegion().GetBounds();
+
     const gfx::Matrix4x4& transform = layer->GetEffectiveTransform();
+
+    if (transform.IsSingular()) {
+      // Transform cannot be inverted.
+      continue;
+    }
 
     gfx::Polygon polygon = gfx::Polygon::FromRect(gfx::Rect(bounds));
 
@@ -1386,12 +1188,13 @@ SortLayersWithBSPTree(nsTArray<Layer*>& aArray)
   }
 
   if (inputLayers.empty()) {
-    return orderedLayers;
+    return nsTArray<LayerPolygon>();
   }
 
   // Build a BSP tree from the list of polygons.
   BSPTree tree(inputLayers);
-  orderedLayers = Move(tree.GetDrawOrder());
+
+  nsTArray<LayerPolygon> orderedLayers(tree.GetDrawOrder());
 
   // Transform the polygons back to layer space.
   for (LayerPolygon& layerPolygon : orderedLayers) {
@@ -1686,7 +1489,7 @@ RefLayer::FillSpecificAttributes(SpecificLayerAttributes& aAttrs)
  * to get valid results (because the cyclic buffer was overwritten since that call).
  *
  * To determine availability of the data upon StopFrameTimeRecording:
- * - mRecording.mNextIndex increases on each PostPresent, and never resets.
+ * - mRecording.mNextIndex increases on each RecordFrame, and never resets.
  * - Cyclic buffer position is realized as mNextIndex % bufferSize.
  * - StartFrameTimeRecording returns mNextIndex. When StopFrameTimeRecording is called,
  *   the required start index is passed as an arg, and we're able to calculate the required
@@ -1742,16 +1545,6 @@ LayerManager::RecordFrame()
 }
 
 void
-LayerManager::PostPresent()
-{
-  if (!mTabSwitchStart.IsNull()) {
-    Telemetry::Accumulate(Telemetry::FX_TAB_SWITCH_TOTAL_MS,
-                          uint32_t((TimeStamp::Now() - mTabSwitchStart).ToMilliseconds()));
-    mTabSwitchStart = TimeStamp();
-  }
-}
-
-void
 LayerManager::StopFrameTimeRecording(uint32_t         aStartIndex,
                                      nsTArray<float>& aFrameIntervals)
 {
@@ -1777,12 +1570,6 @@ LayerManager::StopFrameTimeRecording(uint32_t         aStartIndex,
     }
     aFrameIntervals[i] = mRecording.mIntervals[cyclicPos];
   }
-}
-
-void
-LayerManager::BeginTabSwitch()
-{
-  mTabSwitchStart = TimeStamp::Now();
 }
 
 static void PrintInfo(std::stringstream& aStream, HostLayer* aLayerComposite);
@@ -2088,20 +1875,20 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
     aStream << " [scrollbar]";
   }
   if (GetScrollbarDirection() == ScrollDirection::VERTICAL) {
-    aStream << nsPrintfCString(" [vscrollbar=%lld]", GetScrollbarTargetContainerId()).get();
+    aStream << nsPrintfCString(" [vscrollbar=%" PRIu64 "]", GetScrollbarTargetContainerId()).get();
   }
   if (GetScrollbarDirection() == ScrollDirection::HORIZONTAL) {
-    aStream << nsPrintfCString(" [hscrollbar=%lld]", GetScrollbarTargetContainerId()).get();
+    aStream << nsPrintfCString(" [hscrollbar=%" PRIu64 "]", GetScrollbarTargetContainerId()).get();
   }
   if (GetIsFixedPosition()) {
     LayerPoint anchor = GetFixedPositionAnchor();
-    aStream << nsPrintfCString(" [isFixedPosition scrollId=%lld sides=0x%x anchor=%s]",
+    aStream << nsPrintfCString(" [isFixedPosition scrollId=%" PRIu64 " sides=0x%x anchor=%s]",
                      GetFixedPositionScrollContainerId(),
                      GetFixedPositionSides(),
                      ToString(anchor).c_str()).get();
   }
   if (GetIsStickyPosition()) {
-    aStream << nsPrintfCString(" [isStickyPosition scrollId=%d outer=(%.3f,%.3f)-(%.3f,%.3f) "
+    aStream << nsPrintfCString(" [isStickyPosition scrollId=%" PRIu64 " outer=(%.3f,%.3f)-(%.3f,%.3f) "
                      "inner=(%.3f,%.3f)-(%.3f,%.3f)]",
                      GetStickyScrollContainerId(),
                      GetStickyScrollRangeOuter().x,
@@ -2123,7 +1910,9 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
     }
   }
   if (!mAnimations.IsEmpty()) {
-    aStream << nsPrintfCString(" [%d animations]", (int) mAnimations.Length()).get();
+    aStream << nsPrintfCString(" [%d animations with id=%" PRIu64 " ]",
+                               (int) mAnimations.Length(),
+                               mCompositorAnimationsId).get();
   }
 }
 
@@ -2333,6 +2122,34 @@ ContainerLayer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParen
   using namespace layerscope;
   LayersPacket::Layer* layer = aPacket->mutable_layer(aPacket->layer_size()-1);
   layer->set_type(LayersPacket::Layer::ContainerLayer);
+}
+
+void
+DisplayItemLayer::EndTransaction() {
+  mItem = nullptr;
+  mBuilder = nullptr;
+}
+
+void
+DisplayItemLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
+{
+  Layer::PrintInfo(aStream, aPrefix);
+  const char* type = "TYPE_UNKNOWN";
+  if (mItem) {
+    type = mItem->Name();
+  }
+
+  aStream << " [itype type=" << type << "]";
+}
+
+void
+DisplayItemLayer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
+{
+  Layer::DumpPacket(aPacket, aParent);
+  // Get this layer data
+  using namespace layerscope;
+  LayersPacket::Layer* layer = aPacket->mutable_layer(aPacket->layer_size()-1);
+  layer->set_type(LayersPacket::Layer::DisplayItemLayer);
 }
 
 void
@@ -2609,6 +2426,22 @@ LayerManager::DumpPacket(layerscope::LayersPacket* aPacket)
   layer->set_ptr(reinterpret_cast<uint64_t>(this));
   // Layer Tree Root
   layer->set_parentptr(0);
+}
+
+void
+LayerManager::TrackDisplayItemLayer(RefPtr<DisplayItemLayer> aLayer)
+{
+  mDisplayItemLayers.AppendElement(aLayer);
+}
+
+void
+LayerManager::ClearDisplayItemLayers()
+{
+  for (uint32_t i = 0; i < mDisplayItemLayers.Length(); i++) {
+    mDisplayItemLayers[i]->EndTransaction();
+  }
+
+  mDisplayItemLayers.Clear();
 }
 
 /*static*/ bool

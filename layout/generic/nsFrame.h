@@ -24,6 +24,9 @@
  * PRLogModuleInfo.level field to be a bitfield.  Each bit controls a
  * specific type of logging. Each logging operation has associated
  * inline methods defined below.
+ *
+ * Due to the redefinition of the level field we cannot use MOZ_LOG directly
+ * as that will cause assertions due to invalid log levels.
  */
 #define NS_FRAME_TRACE_CALLS        0x1
 #define NS_FRAME_TRACE_PUSH_PULL    0x2
@@ -36,7 +39,7 @@
 #define NS_FRAME_LOG(_bit,_args)                                \
   PR_BEGIN_MACRO                                                \
     if (NS_FRAME_LOG_TEST(nsFrame::sFrameLogModule,_bit)) {  \
-      PR_LogPrint _args;                                        \
+      printf_stderr _args; \
     }                                                           \
   PR_END_MACRO
 #else
@@ -479,7 +482,7 @@ public:
    */
   void Trace(const char* aMethod, bool aEnter);
   void Trace(const char* aMethod, bool aEnter, nsReflowStatus aStatus);
-  void TraceMsg(const char* fmt, ...);
+  void TraceMsg(const char* fmt, ...) MOZ_FORMAT_PRINTF(2, 3);
 
   // Helper function that verifies that each frame in the list has the
   // NS_FRAME_IS_DIRTY bit set
@@ -507,11 +510,11 @@ public:
                                           const char* aType);
   static void* DisplayIntrinsicSizeEnter(nsIFrame* aFrame,
                                          const char* aType);
-  static void DisplayReflowExit(nsPresContext*      aPresContext,
-                                 nsIFrame*            aFrame,
-                                 ReflowOutput& aMetrics,
-                                 uint32_t             aStatus,
-                                 void*                aFrameTreeNode);
+  static void DisplayReflowExit(nsPresContext* aPresContext,
+                                nsIFrame* aFrame,
+                                ReflowOutput& aMetrics,
+                                const nsReflowStatus& aStatus,
+                                void* aFrameTreeNode);
   static void DisplayLayoutExit(nsIFrame* aFrame,
                                  void* aFrameTreeNode);
   static void DisplayIntrinsicISizeExit(nsIFrame* aFrame,
@@ -595,6 +598,12 @@ protected:
   void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
 
 public:
+  /**
+   * Helper method to create a view for a frame.  Only used by a few sub-classes
+   * that need a view.
+   */
+  void CreateView();
+
   //given a frame five me the first/last leaf available
   //XXX Robert O'Callahan wants to move these elsewhere
   static void GetLastLeaf(nsPresContext* aPresContext, nsIFrame **aFrame);
@@ -688,7 +697,12 @@ protected:
   // Fire DOM event. If no aContent argument use frame's mContent.
   void FireDOMEvent(const nsAString& aDOMEventName, nsIContent *aContent = nullptr);
 
-  mozilla::WritingMode GetWritingModeDeferringToRootElem() const;
+  // A helper for implementing UpdateStyleOfOwnedAnonBoxes for the specific case
+  // of the owned anon box being a child of this frame.
+  void UpdateStyleOfChildAnonBox(nsIFrame* aChildFrame,
+                                 mozilla::ServoStyleSet& aStyleSet,
+                                 nsStyleChangeList& aChangeList,
+                                 nsChangeHint aHintForThisFrame);
 
 private:
   void BoxReflow(nsBoxLayoutState& aState,

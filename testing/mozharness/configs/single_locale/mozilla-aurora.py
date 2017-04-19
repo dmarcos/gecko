@@ -5,7 +5,6 @@ config = {
     "branch": "mozilla-aurora",
     "en_us_binary_url": "http://ftp.mozilla.org/pub/mozilla.org/firefox/nightly/latest-mozilla-aurora/",
     "update_channel": "aurora",
-    "latest_mar_dir": '/pub/mozilla.org/firefox/nightly/latest-mozilla-aurora-l10n',
 
     # l10n
     "hg_l10n_base": "https://hg.mozilla.org/releases/l10n/mozilla-aurora",
@@ -29,6 +28,7 @@ config = {
         "repo": "https://hg.mozilla.org/releases/mozilla-aurora",
         "branch": "default",
         "dest": "mozilla-aurora",
+        "clone_upstream_url": "https://hg.mozilla.org/mozilla-unified",
     }],
     # purge options
     'is_automation': True,

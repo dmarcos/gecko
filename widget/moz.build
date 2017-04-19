@@ -4,6 +4,30 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files("**"):
+    BUG_COMPONENT = ("Core", "Widget")
+
+with Files("crashtests/*1128214*"):
+    BUG_COMPONENT = ("Core", "Layout")
+
+with Files("crashtests/*303901*"):
+    BUG_COMPONENT = ("Core", "Graphics")
+
+with Files("crashtests/*380359*"):
+    BUG_COMPONENT = ("Core", "Widget")
+
+with Files("reftests/**"):
+    BUG_COMPONENT = ("Core", "Widget: Cocoa")
+
+with Files("reftests/*fallback*"):
+    BUG_COMPONENT = ("Core", "Layout: Form Controls")
+
+with Files("*CompositorWidget*"):
+    BUG_COMPONENT = ("Core", "Graphics")
+
+with Files("*FontRange*"):
+    BUG_COMPONENT = ("Core", "Widget: Cocoa")
+
 toolkit = CONFIG['MOZ_WIDGET_TOOLKIT']
 
 if toolkit in ('cocoa', 'android', 'gonk', 'uikit'):
@@ -42,6 +66,8 @@ elif toolkit == 'cocoa':
 
 TEST_DIRS += ['tests']
 
+DIRS += ['headless']
+
 # Don't build the DSO under the 'build' directory as windows does.
 #
 # The DSOs get built in the toolkit dir itself.  Do this so that
@@ -64,7 +90,6 @@ XPIDL_SOURCES += [
     'nsIClipboardHelper.idl',
     'nsIClipboardOwner.idl',
     'nsIColorPicker.idl',
-    'nsIDatePicker.idl',
     'nsIDisplayInfo.idl',
     'nsIDragService.idl',
     'nsIDragSession.idl',
@@ -101,7 +126,6 @@ EXPORTS += [
     'nsIWidgetListener.h',
     'nsWidgetInitData.h',
     'nsWidgetsCID.h',
-    'PluginWidgetProxy.h',
     'PuppetWidget.h',
 ]
 
@@ -130,7 +154,10 @@ EXPORTS.mozilla.widget += [
     'CompositorWidget.h',
     'IMEData.h',
     'InProcessCompositorWidget.h',
+    'nsAutoRollup.h',
     'PuppetBidiKeyboard.h',
+    'Screen.h',
+    'ScreenManager.h',
     'WidgetMessageUtils.h',
     'WindowSurface.h'
 ]
@@ -144,13 +171,13 @@ UNIFIED_SOURCES += [
     'GfxInfoWebGL.cpp',
     'InProcessCompositorWidget.cpp',
     'InputData.cpp',
+    'nsAutoRollup.cpp',
     'nsBaseAppShell.cpp',
     'nsBaseScreen.cpp',
     'nsClipboardHelper.cpp',
     'nsClipboardProxy.cpp',
     'nsColorPickerProxy.cpp',
     'nsContentProcessWidgetFactory.cpp',
-    'nsDatePickerProxy.cpp',
     'nsDragServiceProxy.cpp',
     'nsFilePickerProxy.cpp',
     'nsHTMLFormatConverter.cpp',
@@ -158,12 +185,12 @@ UNIFIED_SOURCES += [
     'nsIWidgetListener.cpp',
     'nsPrimitiveHelpers.cpp',
     'nsPrintSettingsImpl.cpp',
-    'nsScreenManagerProxy.cpp',
     'nsTransferable.cpp',
     'nsXPLookAndFeel.cpp',
     'PuppetBidiKeyboard.cpp',
     'PuppetWidget.cpp',
-    'ScreenProxy.cpp',
+    'Screen.cpp',
+    'ScreenManager.cpp',
     'SharedWidgetUtils.cpp',
     'TextEventDispatcher.cpp',
     'VsyncDispatcher.cpp',
@@ -192,12 +219,9 @@ if CONFIG['MOZ_XUL'] and CONFIG['NS_PRINTING']:
 
 # nsBaseWidget.cpp needs to be built separately because of name clashes in the OS X headers
 # nsBaseDragService.cpp moved out of UNIFIED to fix xgill crash (bug 1259850) after moving widget/ContentHelper -> apz/util/TouchActionHelper
-# PluginWidgetProxy includes MacOS system headers which define a Point struct
-# that conflicts with mozilla::gfx::Point
 SOURCES += [
     'nsBaseDragService.cpp',
     'nsBaseWidget.cpp',
-    'PluginWidgetProxy.cpp',
 ]
 
 if CONFIG['MOZ_INSTRUMENT_EVENT_LOOP']:
@@ -215,6 +239,14 @@ if CONFIG['MOZ_X11']:
     SOURCES += [
         'nsShmImage.cpp',
         'WindowSurfaceX11SHM.cpp',
+    ]
+
+if toolkit == 'windows':
+    EXPORTS += [
+        'PluginWidgetProxy.h',
+    ]
+    SOURCES += [
+        'PluginWidgetProxy.cpp',
     ]
 
 if toolkit in ('cocoa', 'windows'):
@@ -252,6 +284,7 @@ LOCAL_INCLUDES += [
     '/layout/xul',
     '/view',
     '/widget',
+    '/widget/headless',
 ]
 
 if toolkit == 'windows':

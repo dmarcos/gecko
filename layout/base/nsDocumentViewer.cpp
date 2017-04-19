@@ -455,7 +455,7 @@ class nsDocumentShownDispatcher : public Runnable
 {
 public:
   explicit nsDocumentShownDispatcher(nsCOMPtr<nsIDocument> aDocument)
-  : mDocument(aDocument) {}
+    : Runnable("nsDocumentShownDispatcher"), mDocument(aDocument) {}
 
   NS_IMETHOD Run() override;
 
@@ -626,8 +626,7 @@ nsDocumentViewer::SyncParentSubDocMap()
   if (mDocument &&
       parent_doc->GetSubDocumentFor(element) != mDocument &&
       parent_doc->EventHandlingSuppressed()) {
-    mDocument->SuppressEventHandling(nsIDocument::eEvents,
-                                     parent_doc->EventHandlingSuppressed());
+    mDocument->SuppressEventHandling(parent_doc->EventHandlingSuppressed());
   }
   return parent_doc->SetSubDocumentFor(element, mDocument);
 }
@@ -1085,6 +1084,10 @@ nsDocumentViewer::LoadComplete(nsresult aStatus)
 
   nsJSContext::LoadEnd();
 
+  // It's probably a good idea to GC soon since we have finished loading.
+  nsJSContext::PokeGC(JS::gcreason::LOAD_END,
+                      mDocument ? mDocument->GetWrapperPreserveColor() : nullptr);
+
 #ifdef NS_PRINTING
   // Check to see if someone tried to print during the load
   if (mPrintIsPending) {
@@ -1103,6 +1106,13 @@ NS_IMETHODIMP
 nsDocumentViewer::GetLoadCompleted(bool *aOutLoadCompleted)
 {
   *aOutLoadCompleted = mLoaded;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocumentViewer::GetIsStopped(bool* aOutIsStopped)
+{
+  *aOutIsStopped = mStopped;
   return NS_OK;
 }
 
@@ -1184,11 +1194,8 @@ nsDocumentViewer::PermitUnloadInternal(bool *aShouldPrompt,
     nsIDocument::PageUnloadingEventTimeStamp timestamp(mDocument);
 
     mInPermitUnload = true;
-    {
-      Telemetry::AutoTimer<Telemetry::HANDLE_BEFOREUNLOAD_MS> telemetryTimer;
-      EventDispatcher::DispatchDOMEvent(window, nullptr, event, mPresContext,
-                                        nullptr);
-    }
+    EventDispatcher::DispatchDOMEvent(window, nullptr, event, mPresContext,
+                                      nullptr);
     mInPermitUnload = false;
   }
 
@@ -1334,6 +1341,13 @@ nsDocumentViewer::PageHide(bool aIsUnload)
     return NS_ERROR_NULL_POINTER;
   }
 
+  if (aIsUnload) {
+    // Poke the GC. The window might be collectable garbage now.
+    nsJSContext::PokeGC(JS::gcreason::PAGE_HIDE,
+                        mDocument->GetWrapperPreserveColor(),
+                        NS_GC_DELAY * 2);
+  }
+
   mDocument->OnPageHide(!aIsUnload, nullptr);
 
   // inform the window so that the focus state is reset.
@@ -1343,9 +1357,6 @@ nsDocumentViewer::PageHide(bool aIsUnload)
     window->PageHidden();
 
   if (aIsUnload) {
-    // Poke the GC. The window might be collectable garbage now.
-    nsJSContext::PokeGC(JS::gcreason::PAGE_HIDE, NS_GC_DELAY * 2);
-
     // if Destroy() was called during OnPageHide(), mDocument is nullptr.
     NS_ENSURE_STATE(mDocument);
 
@@ -1371,10 +1382,7 @@ nsDocumentViewer::PageHide(bool aIsUnload)
 
     nsIDocument::PageUnloadingEventTimeStamp timestamp(mDocument);
 
-    {
-      Telemetry::AutoTimer<Telemetry::HANDLE_UNLOAD_MS> telemetryTimer;
-      EventDispatcher::Dispatch(window, mPresContext, &event, nullptr, &status);
-    }
+    EventDispatcher::Dispatch(window, mPresContext, &event, nullptr, &status);
   }
 
 #ifdef MOZ_XUL
@@ -2134,7 +2142,11 @@ nsDocumentViewer::Show(void)
 
   // Notify observers that a new page has been shown. This will get run
   // from the event loop after we actually draw the page.
-  NS_DispatchToMainThread(new nsDocumentShownDispatcher(mDocument));
+  RefPtr<nsDocumentShownDispatcher> event =
+    new nsDocumentShownDispatcher(mDocument);
+  mDocument->Dispatch("nsDocumentShownDispatcher",
+                      TaskCategory::Other,
+                      event.forget());
 
   return NS_OK;
 }
@@ -2293,8 +2305,8 @@ nsDocumentViewer::CreateStyleSet(nsIDocument* aDocument)
       nsAutoString sheets;
       elt->GetAttribute(NS_LITERAL_STRING("usechromesheets"), sheets);
       if (!sheets.IsEmpty() && baseURI) {
-        RefPtr<mozilla::css::Loader> cssLoader =
-          new mozilla::css::Loader(backendType);
+        RefPtr<css::Loader> cssLoader =
+          new css::Loader(backendType, aDocument->GetDocGroup());
 
         char *str = ToNewCString(sheets);
         char *newStr = str;
@@ -2395,19 +2407,15 @@ nsDocumentViewer::CreateStyleSet(nsIDocument* aDocument)
     }
   }
 
-  if (styleSet->IsGecko()) {
-    nsStyleSheetService* sheetService = nsStyleSheetService::GetInstance();
-    if (sheetService) {
-      for (StyleSheet* sheet : *sheetService->AgentStyleSheets()) {
-        styleSet->AppendStyleSheet(SheetType::Agent, sheet);
-      }
-      for (StyleSheet* sheet : Reversed(*sheetService->UserStyleSheets())) {
-        styleSet->PrependStyleSheet(SheetType::User, sheet);
-      }
+  nsStyleSheetService* sheetService = nsStyleSheetService::GetInstance();
+  if (sheetService) {
+    for (StyleSheet* sheet : *sheetService->AgentStyleSheets(backendType)) {
+      styleSet->AppendStyleSheet(SheetType::Agent, sheet);
     }
-  } else {
-    NS_WARNING("stylo: Not yet checking nsStyleSheetService for Servo-backed "
-               "documents. See bug 1290224");
+    for (StyleSheet* sheet :
+           Reversed(*sheetService->UserStyleSheets(backendType))) {
+      styleSet->PrependStyleSheet(SheetType::User, sheet);
+    }
   }
 
   // Caller will handle calling EndUpdate, per contract.
@@ -2417,6 +2425,12 @@ nsDocumentViewer::CreateStyleSet(nsIDocument* aDocument)
 NS_IMETHODIMP
 nsDocumentViewer::ClearHistoryEntry()
 {
+  if (mDocument) {
+    nsJSContext::PokeGC(JS::gcreason::PAGE_HIDE,
+                        mDocument->GetWrapperPreserveColor(),
+                        NS_GC_DELAY * 2);
+  }
+
   mSHEntry = nullptr;
   return NS_OK;
 }
@@ -3006,6 +3020,15 @@ nsDocumentViewer::GetTextZoom(float* aTextZoom)
   NS_ENSURE_ARG_POINTER(aTextZoom);
   nsPresContext* pc = GetPresContext();
   *aTextZoom = pc ? pc->TextZoom() : 1.0f;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDocumentViewer::GetEffectiveTextZoom(float* aEffectiveTextZoom)
+{
+  NS_ENSURE_ARG_POINTER(aEffectiveTextZoom);
+  nsPresContext* pc = GetPresContext();
+  *aEffectiveTextZoom = pc ? pc->EffectiveTextZoom() : 1.0f;
   return NS_OK;
 }
 
@@ -4624,4 +4647,3 @@ nsDocumentShownDispatcher::Run()
   }
   return NS_OK;
 }
-

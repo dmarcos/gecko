@@ -14,8 +14,6 @@
 namespace mozilla {
 namespace dom {
 
-#define TABLE_ATTRS_DIRTY ((nsMappedAttributes*)0x1)
-
 class TableRowsCollection;
 
 class HTMLTableElement final : public nsGenericHTMLElement
@@ -36,7 +34,8 @@ public:
   {
     DeleteCaption();
     if (aCaption) {
-      nsINode::AppendChild(*aCaption, aError);
+      nsCOMPtr<nsINode> firstChild = nsINode::GetFirstChild();
+      nsINode::InsertBefore(*aCaption, firstChild, aError);
     }
   }
 
@@ -59,7 +58,18 @@ public:
 
     DeleteTHead();
     if (aTHead) {
-      nsCOMPtr<nsINode> refNode = nsINode::GetFirstChild();
+
+      nsCOMPtr<nsIContent> refNode = nullptr;
+      for (refNode = nsINode::GetFirstChild();
+           refNode;
+           refNode = refNode->GetNextSibling()) {
+        if (refNode->IsHTMLElement() &&
+            !refNode->IsHTMLElement(nsGkAtoms::caption) &&
+            !refNode->IsHTMLElement(nsGkAtoms::colgroup)) {
+          break;
+        }
+      }
+
       nsINode::InsertBefore(*aTHead, refNode, aError);
     }
   }
@@ -190,7 +200,7 @@ public:
    * Called when an attribute is about to be changed
    */
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 nsAttrValueOrString* aValue,
+                                 const nsAttrValueOrString* aValue,
                                  bool aNotify) override;
   /**
    * Called when an attribute has just been changed
@@ -220,15 +230,13 @@ protected:
 
   RefPtr<nsContentList> mTBodies;
   RefPtr<TableRowsCollection> mRows;
-  // Sentinel value of TABLE_ATTRS_DIRTY indicates that this is dirty and needs
-  // to be recalculated.
   nsMappedAttributes *mTableInheritedAttributes;
   void BuildInheritedAttributes();
   void ReleaseInheritedAttributes();
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
-                                    nsRuleData* aData);
+                                    GenericSpecifiedValues* aGenericData);
 };
 
 } // namespace dom

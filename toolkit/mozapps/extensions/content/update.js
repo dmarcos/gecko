@@ -445,11 +445,11 @@ var gFoundPage = {
 };
 
 var gInstallingPage = {
-  _installs         : [],
-  _errors           : [],
-  _strings          : null,
-  _currentInstall   : -1,
-  _installing       : false,
+  _installs: [],
+  _errors: [],
+  _strings: null,
+  _currentInstall: -1,
+  _installing: false,
 
   // Initialize fields we need for installing and tracking progress,
   // and start iterating through the installations
@@ -496,7 +496,7 @@ var gInstallingPage = {
     this._currentInstall++;
 
     if (this._installs.length == this._currentInstall) {
-      Services.obs.notifyObservers(null, "TEST:all-updates-done", null);
+      Services.obs.notifyObservers(null, "TEST:all-updates-done");
       AddonManagerPrivate.recordSimpleMeasure("appUpdate_upgraded",
           gUpdateWizard.upgraded);
       AddonManagerPrivate.recordSimpleMeasure("appUpdate_upgradeFailed",

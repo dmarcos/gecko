@@ -89,15 +89,28 @@ option(env='OLD_CONFIGURE', nargs=1, help='Path to the old configure script')
 option(env='MOZ_CURRENT_PROJECT', nargs=1, help='Current build project')
 option(env='MOZCONFIG', nargs=1, help='Mozconfig location')
 
+option('--with-external-source-dir', env='EXTERNAL_SOURCE_DIR', nargs=1,
+       help='External directory containing additional build files')
+
+@depends('--with-external-source-dir')
+def external_source_dir(value):
+    if value:
+        return value[0]
+
+set_config('EXTERNAL_SOURCE_DIR', external_source_dir)
+add_old_configure_assignment('EXTERNAL_SOURCE_DIR', external_source_dir)
+
 # Read user mozconfig
 # ==============================================================
 # Note: the dependency on --help is only there to always read the mozconfig,
 # even when --help is passed. Without this dependency, the function wouldn't
 # be called when --help is passed, and the mozconfig wouldn't be read.
 @depends('MOZ_CURRENT_PROJECT', 'MOZCONFIG', 'OLD_CONFIGURE',
-         check_build_environment, '--help')
+         check_build_environment, '--with-external-source-dir',
+         '--help')
 @imports(_from='mozbuild.mozconfig', _import='MozconfigLoader')
-def mozconfig(current_project, mozconfig, old_configure, build_env, help):
+def mozconfig(current_project, mozconfig, old_configure, build_env,
+              external_source_dir, help):
     if not old_configure:
         die('The OLD_CONFIGURE environment variable must be set')
 
@@ -120,7 +133,10 @@ def mozconfig(current_project, mozconfig, old_configure, build_env, help):
     if os.path.dirname(os.path.abspath(old_configure[0])).endswith('/js/src'):
         return {'path': None}
 
-    loader = MozconfigLoader(build_env.topsrcdir)
+    topsrcdir = build_env.topsrcdir
+    if external_source_dir:
+        topsrcdir = external_source_dir[0]
+    loader = MozconfigLoader(topsrcdir)
     current_project = current_project[0] if current_project else None
     mozconfig = mozconfig[0] if mozconfig else None
     mozconfig = loader.find_mozconfig(env={'MOZCONFIG': mozconfig})
@@ -352,6 +368,8 @@ def split_triplet(triplet):
         canonical_os = canonical_kernel = 'NetBSD'
     elif os.startswith('openbsd'):
         canonical_os = canonical_kernel = 'OpenBSD'
+    elif os.startswith('solaris'):
+        canonical_os = canonical_kernel = 'SunOS'
     else:
         die('Unknown OS: %s' % os)
 
@@ -610,6 +628,13 @@ def target_is_linux(target):
 
 set_define('XP_LINUX', target_is_linux)
 
+@depends(target)
+def target_is_solaris(target):
+    if target.kernel == 'SunOS':
+        return True
+
+set_define('XP_SOLARIS', target_is_solaris)
+
 # The application/project to build
 # ==============================================================
 option('--enable-application', nargs=1, env='MOZ_BUILD_APP',
@@ -632,9 +657,6 @@ def default_project(build_env, help):
 option('--enable-project', nargs=1, default=default_project,
        help='Project to build')
 
-option('--with-external-source-dir', env='EXTERNAL_SOURCE_DIR', nargs=1,
-       help='External directory containing additional build files')
-
 @depends('--enable-project', '--with-external-source-dir',
          check_build_environment, '--help')
 @imports(_from='os.path', _import='exists')
@@ -650,14 +672,6 @@ def include_project_configure(project, external_source_dir, build_env, help):
     if not exists(path):
         die('Cannot find project %s', project[0])
     return path
-
-@depends('--with-external-source-dir')
-def external_source_dir(value):
-    if value:
-        return value[0]
-
-set_config('EXTERNAL_SOURCE_DIR', external_source_dir)
-add_old_configure_assignment('EXTERNAL_SOURCE_DIR', external_source_dir)
 
 
 @depends(include_project_configure, check_build_environment, '--help')

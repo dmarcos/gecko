@@ -5,7 +5,7 @@
 </head>
 <body>
 <pre id="test">
-<script type="application/javascript;version=1.8">
+<script type="application/javascript">
   createHTML({
     bug: "1244913",
     title: "Scale resolution down on a PeerConnection",
@@ -77,8 +77,13 @@
     .catch(generateErrorCallback());
   }
 
-  runNetworkTest(() => testScale("VP8").then(() => testScale("H264"))
-                 .then(networkTestFinished));
+  if (!navigator.appVersion.includes("Android")) {
+    runNetworkTest(() => testScale("VP8").then(() => testScale("H264"))
+                   .then(networkTestFinished));
+  } else {
+    // No support for H.264 on Android in automation, see Bug 1355786
+    runNetworkTest(() => testScale("VP8").then(networkTestFinished));
+  }
 </script>
 </pre>
 </body>

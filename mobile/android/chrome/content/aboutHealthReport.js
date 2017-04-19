@@ -39,8 +39,8 @@ var healthReportWrapper = {
     iframe.src = report.spec;
     console.log("AboutHealthReport: loading content from " + report.spec);
 
-    sharedPrefs.addObserver(PREF_UPLOAD_ENABLED, this, false);
-    Services.obs.addObserver(this, EVENT_HEALTH_RESPONSE, false);
+    sharedPrefs.addObserver(PREF_UPLOAD_ENABLED, this);
+    Services.obs.addObserver(this, EVENT_HEALTH_RESPONSE);
   },
 
   observe: function (subject, topic, data) {
@@ -90,7 +90,7 @@ var healthReportWrapper = {
 
   refreshPayload: function () {
     console.log("AboutHealthReport: page requested fresh payload.");
-    Messaging.sendRequest({
+    EventDispatcher.instance.sendRequest({
       type: EVENT_HEALTH_REQUEST,
     });
   },

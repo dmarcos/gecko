@@ -50,11 +50,12 @@
 #include "nsIEditor.h"
 #include "nsIMozBrowserFrame.h"
 #include "nsISHistory.h"
-#include "nsNullPrincipal.h"
+#include "NullPrincipal.h"
 #include "nsIScriptError.h"
 #include "nsGlobalWindow.h"
 #include "nsPIWindowRoot.h"
 #include "nsLayoutUtils.h"
+#include "nsMappedAttributes.h"
 #include "nsView.h"
 #include "GroupedSHistory.h"
 #include "PartialSHistory.h"
@@ -76,8 +77,6 @@
 
 #include "ContentParent.h"
 #include "TabParent.h"
-#include "mozilla/plugins/PPluginWidgetParent.h"
-#include "../plugins/ipc/PluginWidgetParent.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/GuardObjects.h"
@@ -100,7 +99,12 @@
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
 
-#include "nsPrincipal.h"
+#include "ContentPrincipal.h"
+
+#ifdef XP_WIN
+#include "mozilla/plugins/PPluginWidgetParent.h"
+#include "../plugins/ipc/PluginWidgetParent.h"
+#endif
 
 #ifdef MOZ_XUL
 #include "nsXULPopupManager.h"
@@ -174,17 +178,10 @@ nsFrameLoader::nsFrameLoader(Element* aOwner, nsPIDOMWindowOuter* aOpener, bool 
   , mClampScrollPosition(true)
   , mObservingOwnerContent(false)
   , mVisible(true)
-  , mFreshProcess(false)
 {
   mRemoteFrame = ShouldUseRemoteProcess();
   MOZ_ASSERT(!mRemoteFrame || !aOpener,
              "Cannot pass aOpener for a remote frame!");
-
-  // Check if we are supposed to load into a fresh process
-  mFreshProcess = mOwnerContent->AttrValueIs(kNameSpaceID_None,
-                                             nsGkAtoms::freshProcess,
-                                             nsGkAtoms::_true,
-                                             eCaseMatters);
 }
 
 nsFrameLoader::~nsFrameLoader()
@@ -835,7 +832,7 @@ nsFrameLoader::ReallyStartLoadingInternal()
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  // Use referrer as long as it is not an nsNullPrincipalURI.
+  // Use referrer as long as it is not an NullPrincipalURI.
   // We could add a method such as GetReferrerURI to principals to make this
   // cleaner, but given that we need to start using Source Browsing Context for
   // referrer (see Bug 960639) this may be wasted effort at this stage.
@@ -1207,11 +1204,27 @@ nsFrameLoader::MarginsChanged(uint32_t aMarginWidth,
   mDocShell->SetMarginWidth(aMarginWidth);
   mDocShell->SetMarginHeight(aMarginHeight);
 
+  // There's a cached property declaration block
+  // that needs to be updated
+  if (nsIDocument* doc = mDocShell->GetDocument()) {
+    // We don't need to do anything for Gecko here because
+    // we plan to RebuildAllStyleData anyway.
+    if (doc->GetStyleBackendType() == StyleBackendType::Servo) {
+      for (nsINode* cur = doc; cur; cur = cur->GetNextNode()) {
+        if (cur->IsHTMLElement(nsGkAtoms::body)) {
+          static_cast<HTMLBodyElement*>(cur)->ClearMappedServoStyle();
+        }
+      }
+    }
+  }
+
   // Trigger a restyle if there's a prescontext
   // FIXME: This could do something much less expensive.
   RefPtr<nsPresContext> presContext;
   mDocShell->GetPresContext(getter_AddRefs(presContext));
   if (presContext)
+    // rebuild, because now the same nsMappedAttributes* will produce
+    // a different style
     presContext->RebuildAllStyleData(nsChangeHint(0), eRestyle_Subtree);
 }
 
@@ -1348,15 +1361,6 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  // Remote types must match to swap loaders.
-  const nsAString& currentRemoteType =
-    mRemoteBrowser->Manager()->AsContentParent()->GetRemoteType();
-  const nsAString& newRemoteType =
-    aOther->mRemoteBrowser->Manager()->AsContentParent()->GetRemoteType();
-  if (!currentRemoteType.Equals(newRemoteType)) {
-    return NS_ERROR_NOT_IMPLEMENTED;
-  }
-
   if (mRemoteBrowser->IsIsolatedMozBrowserElement() !=
       aOther->mRemoteBrowser->IsIsolatedMozBrowserElement()) {
     return NS_ERROR_NOT_IMPLEMENTED;
@@ -1440,6 +1444,7 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
   aOther->mRemoteBrowser->SetBrowserDOMWindow(browserDOMWindow);
   mRemoteBrowser->SetBrowserDOMWindow(otherBrowserDOMWindow);
 
+#ifdef XP_WIN
   // Native plugin windows used by this remote content need to be reparented.
   if (nsPIDOMWindowOuter* newWin = ourDoc->GetWindow()) {
     RefPtr<nsIWidget> newParent = nsGlobalWindow::Cast(newWin)->GetMainWidget();
@@ -1449,6 +1454,7 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
       static_cast<mozilla::plugins::PluginWidgetParent*>(iter.Get()->GetKey())->SetParent(newParent);
     }
   }
+#endif // XP_WIN
 
   MaybeUpdatePrimaryTabParent(eTabParentRemoved);
   aOther->MaybeUpdatePrimaryTabParent(eTabParentRemoved);
@@ -1505,6 +1511,20 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+
+  // Swap the remoteType property as the frameloaders are being swapped
+  nsAutoString ourRemoteType;
+  if (!ourContent->GetAttr(kNameSpaceID_None, nsGkAtoms::RemoteType,
+                           ourRemoteType)) {
+    ourRemoteType.AssignLiteral(DEFAULT_REMOTE_TYPE);
+  }
+  nsAutoString otherRemoteType;
+  if (!otherContent->GetAttr(kNameSpaceID_None, nsGkAtoms::RemoteType,
+                             otherRemoteType)) {
+    otherRemoteType.AssignLiteral(DEFAULT_REMOTE_TYPE);
+  }
+  ourContent->SetAttr(kNameSpaceID_None, nsGkAtoms::RemoteType, otherRemoteType, false);
+  otherContent->SetAttr(kNameSpaceID_None, nsGkAtoms::RemoteType, ourRemoteType, false);
 
   Unused << mRemoteBrowser->SendSwappedWithOtherRemoteLoader(
     ourContext.AsIPCTabContext());
@@ -2433,10 +2453,7 @@ nsFrameLoader::MaybeCreateDocShell()
     OriginAttributes oa = doc->NodePrincipal()->OriginAttributesRef();
 
     // Assert on the firstPartyDomain from top-level docshell should be empty
-    if (mIsTopLevelContent) {
-      MOZ_ASSERT(attrs.mFirstPartyDomain.IsEmpty(),
-                 "top-level docshell shouldn't have firstPartyDomain attribute.");
-    }
+    MOZ_ASSERT_IF(mIsTopLevelContent, attrs.mFirstPartyDomain.IsEmpty());
 
     // So far we want to make sure Inherit doesn't override any other origin
     // attribute than firstPartyDomain.
@@ -2449,7 +2466,7 @@ nsFrameLoader::MaybeCreateDocShell()
     MOZ_ASSERT(attrs.mPrivateBrowsingId == oa.mPrivateBrowsingId,
               "docshell and document should have the same privateBrowsingId attribute.");
 
-    attrs.Inherit(oa);
+    attrs = oa;
   }
 
   if (OwnerIsMozBrowserFrame()) {
@@ -2696,7 +2713,7 @@ nsFrameLoader::UpdateBaseWindowPositionAndSize(nsSubDocumentFrame *aIFrame)
     int32_t x = 0;
     int32_t y = 0;
 
-    nsWeakFrame weakFrame(aIFrame);
+    AutoWeakFrame weakFrame(aIFrame);
 
     baseWindow->GetPosition(&x, &y);
 
@@ -2816,31 +2833,30 @@ nsFrameLoader::SetClampScrollPosition(bool aClamp)
 }
 
 static
-ContentParent*
+Tuple<ContentParent*, TabParent*>
 GetContentParent(Element* aBrowser)
 {
+  using ReturnTuple = Tuple<ContentParent*, TabParent*>;
+
   nsCOMPtr<nsIBrowser> browser = do_QueryInterface(aBrowser);
   if (!browser) {
-    return nullptr;
+    return ReturnTuple(nullptr, nullptr);
   }
 
-  nsCOMPtr<nsIDOMElement> related;
-  browser->GetRelatedBrowser(getter_AddRefs(related));
-
-  nsCOMPtr<nsIFrameLoaderOwner> otherOwner = do_QueryInterface(related);
-  if (!otherOwner) {
-    return nullptr;
+  nsCOMPtr<nsIFrameLoader> otherLoader;
+  browser->GetSameProcessAsFrameLoader(getter_AddRefs(otherLoader));
+  if (!otherLoader) {
+    return ReturnTuple(nullptr, nullptr);
   }
 
-  nsCOMPtr<nsIFrameLoader> otherLoader = otherOwner->GetFrameLoader();
   TabParent* tabParent = TabParent::GetFrom(otherLoader);
   if (tabParent &&
       tabParent->Manager() &&
       tabParent->Manager()->IsContentParent()) {
-    return tabParent->Manager()->AsContentParent();
+    return MakeTuple(tabParent->Manager()->AsContentParent(), tabParent);
   }
 
-  return nullptr;
+  return ReturnTuple(nullptr, nullptr);
 }
 
 bool
@@ -2875,7 +2891,8 @@ nsFrameLoader::TryRemoteBrowser()
   }
 
   TabParent* openingTab = TabParent::GetFrom(parentDocShell->GetOpener());
-  ContentParent* openerContentParent = nullptr;
+  RefPtr<ContentParent> openerContentParent;
+  RefPtr<TabParent> sameTabGroupAs;
 
   if (openingTab &&
       openingTab->Manager() &&
@@ -2919,7 +2936,7 @@ nsFrameLoader::TryRemoteBrowser()
     }
 
     // Try to get the related content parent from our browser element.
-    openerContentParent = GetContentParent(mOwnerContent);
+    Tie(openerContentParent, sameTabGroupAs) = GetContentParent(mOwnerContent);
   }
 
   uint32_t chromeFlags = 0;
@@ -2941,8 +2958,8 @@ nsFrameLoader::TryRemoteBrowser()
   NS_ENSURE_SUCCESS(rv, false);
 
   nsCOMPtr<Element> ownerElement = mOwnerContent;
-  mRemoteBrowser = ContentParent::CreateBrowser(context, ownerElement, openerContentParent,
-                                                mFreshProcess);
+  mRemoteBrowser = ContentParent::CreateBrowser(context, ownerElement,
+                                                openerContentParent, sameTabGroupAs);
   if (!mRemoteBrowser) {
     return false;
   }
@@ -3486,7 +3503,8 @@ NS_IMETHODIMP
 nsFrameLoader::GetLoadContext(nsILoadContext** aLoadContext)
 {
   nsCOMPtr<nsILoadContext> loadContext;
-  if (mRemoteBrowser) {
+  if (IsRemoteFrame() &&
+      (mRemoteBrowser || TryRemoteBrowser())) {
     loadContext = mRemoteBrowser->GetLoadContext();
   } else {
     nsCOMPtr<nsIDocShell> docShell;
@@ -3676,13 +3694,6 @@ NS_IMETHODIMP
 nsFrameLoader::GetIsDead(bool* aIsDead)
 {
   *aIsDead = mDestroyCalled;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsFrameLoader::GetIsFreshProcess(bool* aIsFreshProcess)
-{
-  *aIsFreshProcess = mFreshProcess;
   return NS_OK;
 }
 

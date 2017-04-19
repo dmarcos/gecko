@@ -12,7 +12,9 @@
 #include "mozilla/DeclarationBlock.h"
 #include "mozilla/DeclarationBlockInlines.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/InternalMutationEvent.h"
 #include "mozilla/ServoDeclarationBlock.h"
+#include "nsContentUtils.h"
 #include "nsIDocument.h"
 #include "nsIDOMMutationEvent.h"
 #include "nsIURI.h"
@@ -119,6 +121,15 @@ nsDOMCSSAttributeDeclaration::GetCSSDeclaration(Operation aOperation)
   }
 
   if (declaration) {
+    if (aOperation != eOperation_Read &&
+        nsContentUtils::HasMutationListeners(
+          mElement, NS_EVENT_BITS_MUTATION_ATTRMODIFIED, mElement)) {
+      // If there is any mutation listener on the element, we need to
+      // ensure that any change would create a new declaration so that
+      // nsStyledElement::SetInlineStyleDeclaration can generate the
+      // correct old value.
+      declaration->SetImmutable();
+    }
     return declaration;
   }
 
@@ -157,9 +168,15 @@ nsDOMCSSAttributeDeclaration::GetCSSParsingEnvironment(CSSParsingEnvironment& aC
 
   nsIDocument* doc = mElement->OwnerDoc();
   aCSSParseEnv.mSheetURI = doc->GetDocumentURI();
-  aCSSParseEnv.mBaseURI = mElement->GetBaseURI();
+  aCSSParseEnv.mBaseURI = mElement->GetBaseURIForStyleAttr();
   aCSSParseEnv.mPrincipal = mElement->NodePrincipal();
   aCSSParseEnv.mCSSLoader = doc->CSSLoader();
+}
+
+URLExtraData*
+nsDOMCSSAttributeDeclaration::GetURLData() const
+{
+  return mElement->GetURLDataForStyleAttr();
 }
 
 NS_IMETHODIMP

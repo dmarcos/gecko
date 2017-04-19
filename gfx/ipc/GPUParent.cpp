@@ -7,6 +7,7 @@
 #include "WMF.h"
 #endif
 #include "GPUParent.h"
+#include "GeckoProfiler.h"
 #include "gfxConfig.h"
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
@@ -28,6 +29,7 @@
 #include "mozilla/layers/ImageBridgeParent.h"
 #include "mozilla/layers/LayerTreeOwnerTracker.h"
 #include "mozilla/layers/UiCompositorControllerParent.h"
+#include "mozilla/webrender/RenderThread.h"
 #include "nsDebugImpl.h"
 #include "nsExceptionHandler.h"
 #include "nsThreadManager.h"
@@ -37,7 +39,6 @@
 #include "VRManagerParent.h"
 #include "VsyncBridgeParent.h"
 #if defined(XP_WIN)
-# include "DeviceManagerD3D9.h"
 # include "mozilla/gfx/DeviceManagerDx.h"
 # include <process.h>
 #endif
@@ -102,7 +103,6 @@ GPUParent::Init(base::ProcessId aParentPid,
   gfxPlatform::InitMoz2DLogging();
 #if defined(XP_WIN)
   DeviceManagerDx::Init();
-  DeviceManagerD3D9::Init();
 #endif
 
   if (NS_FAILED(NS_InitMinimalXPCOM())) {
@@ -141,13 +141,16 @@ GPUParent::NotifyDeviceReset()
 
   // Notify the main process that there's been a device reset
   // and that they should reset their compositors and repaint
-  Unused << SendNotifyDeviceReset();
+  GPUDeviceData data;
+  RecvGetDeviceStatus(&data);
+  Unused << SendNotifyDeviceReset(data);
 }
 
 mozilla::ipc::IPCResult
 GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
                     nsTArray<GfxVarUpdate>&& vars,
-                    const DevicePrefs& devicePrefs)
+                    const DevicePrefs& devicePrefs,
+                    nsTArray<LayerTreeIdMapping>&& aMappings)
 {
   const nsTArray<gfxPrefs::Pref*>& globalPrefs = gfxPrefs::all();
   for (auto& setting : prefs) {
@@ -161,9 +164,12 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
   // Inherit device preferences.
   gfxConfig::Inherit(Feature::HW_COMPOSITING, devicePrefs.hwCompositing());
   gfxConfig::Inherit(Feature::D3D11_COMPOSITING, devicePrefs.d3d11Compositing());
-  gfxConfig::Inherit(Feature::D3D9_COMPOSITING, devicePrefs.d3d9Compositing());
   gfxConfig::Inherit(Feature::OPENGL_COMPOSITING, devicePrefs.oglCompositing());
   gfxConfig::Inherit(Feature::DIRECT2D, devicePrefs.useD2D1());
+
+  for (const LayerTreeIdMapping& map : aMappings) {
+    LayerTreeOwnerTracker::Get()->Map(map.layersId(), map.ownerId());
+  }
 
 #if defined(XP_WIN)
   if (gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
@@ -190,6 +196,11 @@ GPUParent::RecvInit(nsTArray<GfxPrefSetting>&& prefs,
     gtk_init(nullptr, nullptr);
   }
 #endif
+
+  // Make sure to do this *after* we update gfxVars above.
+  if (gfxVars::UseWebRender()) {
+    wr::RenderThread::Start();
+  }
 
   VRManager::ManagerInit();
   // Send a message to the UI process that we're done.
@@ -269,7 +280,6 @@ mozilla::ipc::IPCResult
 GPUParent::RecvGetDeviceStatus(GPUDeviceData* aOut)
 {
   CopyFeatureChange(Feature::D3D11_COMPOSITING, &aOut->d3d11Compositing());
-  CopyFeatureChange(Feature::D3D9_COMPOSITING, &aOut->d3d9Compositing());
   CopyFeatureChange(Feature::OPENGL_COMPOSITING, &aOut->oglCompositing());
 
 #if defined(XP_WIN)
@@ -347,11 +357,9 @@ GPUParent::RecvNewContentVideoDecoderManager(Endpoint<PVideoDecoderManagerParent
 }
 
 mozilla::ipc::IPCResult
-GPUParent::RecvAddLayerTreeIdMapping(nsTArray<LayerTreeIdMapping>&& aMappings)
+GPUParent::RecvAddLayerTreeIdMapping(const LayerTreeIdMapping& aMapping)
 {
-  for (const LayerTreeIdMapping& map : aMappings) {
-    LayerTreeOwnerTracker::Get()->Map(map.layersId(), map.ownerId());
-  }
+  LayerTreeOwnerTracker::Get()->Map(aMapping.layersId(), aMapping.ownerId());
   return IPC_OK();
 }
 
@@ -371,6 +379,58 @@ GPUParent::RecvNotifyGpuObservers(const nsCString& aTopic)
   if (obsSvc) {
     obsSvc->NotifyObservers(nullptr, aTopic.get(), nullptr);
   }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+GPUParent::RecvStartProfiler(const ProfilerInitParams& params)
+{
+  nsTArray<const char*> featureArray;
+  for (size_t i = 0; i < params.features().Length(); ++i) {
+    featureArray.AppendElement(params.features()[i].get());
+  }
+
+  nsTArray<const char*> threadNameFilterArray;
+  for (size_t i = 0; i < params.threadFilters().Length(); ++i) {
+    threadNameFilterArray.AppendElement(params.threadFilters()[i].get());
+  }
+  profiler_start(params.entries(), params.interval(),
+                 featureArray.Elements(), featureArray.Length(),
+                 threadNameFilterArray.Elements(),
+                 threadNameFilterArray.Length());
+
+ return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+GPUParent::RecvStopProfiler()
+{
+  profiler_stop();
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+GPUParent::RecvPauseProfiler(const bool& aPause)
+{
+  if (aPause) {
+    profiler_pause();
+  } else {
+    profiler_resume();
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+GPUParent::RecvGatherProfile()
+{
+  nsCString profileCString;
+  UniquePtr<char[]> profile = profiler_get_profile();
+  if (profile) {
+    profileCString = nsDependentCString(profile.get());
+  }
+
+  Unused << SendProfile(profileCString, false /* aIsExitProfile */);
   return IPC_OK();
 }
 
@@ -411,10 +471,12 @@ GPUParent::ActorDestroy(ActorDestroyReason aWhy)
   }
   dom::VideoDecoderManagerParent::ShutdownVideoBridge();
   CompositorThreadHolder::Shutdown();
+  if (gfxVars::UseWebRender()) {
+    wr::RenderThread::ShutDown();
+  }
   Factory::ShutDown();
 #if defined(XP_WIN)
   DeviceManagerDx::Shutdown();
-  DeviceManagerD3D9::Shutdown();
 #endif
   LayerTreeOwnerTracker::Shutdown();
   gfxVars::Shutdown();

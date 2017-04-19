@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* globals StopIteration */
-
 "use strict";
 
 const {Cc, Ci, Cu, CC} = require("chrome");
@@ -183,7 +181,7 @@ StorageActors.defaults = function (typeName, observationTopics) {
       this.populateStoresForHosts();
       if (observationTopics) {
         observationTopics.forEach((observationTopic) => {
-          Services.obs.addObserver(this, observationTopic, false);
+          Services.obs.addObserver(this, observationTopic);
         });
       }
       this.onWindowReady = this.onWindowReady.bind(this);
@@ -494,7 +492,7 @@ StorageActors.createActor({
       return host == null;
     }
 
-    host = trimHttpHttps(host);
+    host = trimHttpHttpsPort(host);
 
     if (cookie.host.startsWith(".")) {
       return ("." + host).endsWith(cookie.host);
@@ -744,7 +742,7 @@ var cookieHelpers = {
       host = "";
     }
 
-    host = trimHttpHttps(host);
+    host = trimHttpHttpsPort(host);
 
     let cookies = Services.cookies.getCookiesFromHost(host, originAttributes);
     let store = [];
@@ -880,7 +878,7 @@ var cookieHelpers = {
       opts.path = split[2];
     }
 
-    host = trimHttpHttps(host);
+    host = trimHttpHttpsPort(host);
 
     function hostMatches(cookieHost, matchHost) {
       if (cookieHost == null) {
@@ -923,7 +921,7 @@ var cookieHelpers = {
   },
 
   addCookieObservers() {
-    Services.obs.addObserver(cookieHelpers, "cookie-changed", false);
+    Services.obs.addObserver(cookieHelpers, "cookie-changed");
     return null;
   },
 
@@ -1219,8 +1217,12 @@ StorageActors.createActor({
 }, {
   getCachesForHost: Task.async(function* (host) {
     let uri = Services.io.newURI(host);
+    let attrs = this.storageActor
+                    .document
+                    .nodePrincipal
+                    .originAttributes;
     let principal =
-      Services.scriptSecurityManager.getNoAppCodebasePrincipal(uri);
+      Services.scriptSecurityManager.createCodebasePrincipal(uri, attrs);
 
     // The first argument tells if you want to get |content| cache or |chrome|
     // cache.
@@ -1664,11 +1666,11 @@ StorageActors.createActor({
 
   populateStoresForHost: Task.async(function* (host) {
     let storeMap = new Map();
-    let {names} = yield this.getDBNamesForHost(host);
 
     let win = this.storageActor.getWindowFromHost(host);
     if (win) {
       let principal = win.document.nodePrincipal;
+      let {names} = yield this.getDBNamesForHost(host, principal);
 
       for (let {name, storage} of names) {
         let metadata = yield this.getDBMetaData(host, principal, name, storage);
@@ -1762,7 +1764,9 @@ StorageActors.createActor({
     if (!DebuggerServer.isInChildProcess) {
       this.backToChild = (func, rv) => rv;
       this.clearDBStore = indexedDBHelpers.clearDBStore;
-      this.gatherFilesOrFolders = indexedDBHelpers.gatherFilesOrFolders;
+      this.findIDBPathsForHost = indexedDBHelpers.findIDBPathsForHost;
+      this.findSqlitePathsForHost = indexedDBHelpers.findSqlitePathsForHost;
+      this.findStorageTypePaths = indexedDBHelpers.findStorageTypePaths;
       this.getDBMetaData = indexedDBHelpers.getDBMetaData;
       this.getDBNamesForHost = indexedDBHelpers.getDBNamesForHost;
       this.getNameFromDatabaseFile = indexedDBHelpers.getNameFromDatabaseFile;
@@ -2025,8 +2029,8 @@ var indexedDBHelpers = {
   /**
    * Fetches all the databases and their metadata for the given `host`.
    */
-  getDBNamesForHost: Task.async(function* (host) {
-    let sanitizedHost = this.getSanitizedHost(host);
+  getDBNamesForHost: Task.async(function* (host, principal) {
+    let sanitizedHost = this.getSanitizedHost(host) + principal.originSuffix;
     let profileDir = OS.Constants.Path.profileDir;
     let files = [];
     let names = [];
@@ -2039,35 +2043,23 @@ var indexedDBHelpers = {
     //   idb/1556056096MeysDaabta.sqlite
     // - PathToProfileDir/storage/temporary/http+++www.example.com/
     //   idb/1556056096MeysDaabta.sqlite
-    //
     // The subdirectory inside the storage folder is determined by the storage
     // type:
     // - default:   { storage: "default" } or not specified.
     // - permanent: { storage: "persistent" }.
     // - temporary: { storage: "temporary" }.
-    let sqliteFiles = yield this.gatherFilesOrFolders(storagePath, path => {
-      if (path.endsWith(".sqlite")) {
-        let { components } = OS.Path.split(path);
-        let isIDB = components[components.length - 2] === "idb";
-
-        return isIDB;
-      }
-      return false;
-    });
+    let sqliteFiles = yield this.findSqlitePathsForHost(storagePath, sanitizedHost);
 
     for (let file of sqliteFiles) {
       let splitPath = OS.Path.split(file).components;
       let idbIndex = splitPath.indexOf("idb");
-      let name = splitPath[idbIndex - 1];
       let storage = splitPath[idbIndex - 2];
       let relative = file.substr(profileDir.length + 1);
 
-      if (name.startsWith(sanitizedHost)) {
-        files.push({
-          file: relative,
-          storage: storage === "permanent" ? "persistent" : storage
-        });
-      }
+      files.push({
+        file: relative,
+        storage: storage === "permanent" ? "persistent" : storage
+      });
     }
 
     if (files.length > 0) {
@@ -2086,48 +2078,55 @@ var indexedDBHelpers = {
   }),
 
   /**
-   * Gather together all of the files in path and pass each path through a
-   * validation function.
-   *
-   * @param {String}
-   *        Path in which to begin searching.
-   * @param {Function}
-   *        Validation function, which checks each file path. If this function
-   *        Returns true the file path is kept.
-   *
-   * @returns {Array}
-   *          An array of file paths.
+   * Find all SQLite files that hold IndexedDB data for a host, such as:
+   *   storage/temporary/http+++www.example.com/idb/1556056096MeysDaabta.sqlite
    */
-  gatherFilesOrFolders: Task.async(function* (path, validationFunc) {
-    let files = [];
-    let iterator;
-    let paths = [path];
-
-    while (paths.length > 0) {
-      try {
-        iterator = new OS.File.DirectoryIterator(paths.pop());
-
-        for (let child in iterator) {
-          child = yield child;
-
-          path = child.path;
-
-          if (child.isDir) {
-            paths.push(path);
-          } else if (validationFunc(path)) {
-            files.push(path);
-          }
+  findSqlitePathsForHost: Task.async(function* (storagePath, sanitizedHost) {
+    let sqlitePaths = [];
+    let idbPaths = yield this.findIDBPathsForHost(storagePath, sanitizedHost);
+    for (let idbPath of idbPaths) {
+      let iterator = new OS.File.DirectoryIterator(idbPath);
+      yield iterator.forEach(entry => {
+        if (!entry.isDir && entry.path.endsWith(".sqlite")) {
+          sqlitePaths.push(entry.path);
         }
-      } catch (ex) {
-        // Ignore StopIteration to prevent exiting the loop.
-        if (ex != StopIteration) {
-          throw ex;
-        }
+      });
+      iterator.close();
+    }
+    return sqlitePaths;
+  }),
+
+  /**
+   * Find all paths that hold IndexedDB data for a host, such as:
+   *   storage/temporary/http+++www.example.com/idb
+   */
+  findIDBPathsForHost: Task.async(function* (storagePath, sanitizedHost) {
+    let idbPaths = [];
+    let typePaths = yield this.findStorageTypePaths(storagePath);
+    for (let typePath of typePaths) {
+      let idbPath = OS.Path.join(typePath, sanitizedHost, "idb");
+      if (yield OS.File.exists(idbPath)) {
+        idbPaths.push(idbPath);
       }
     }
-    iterator.close();
+    return idbPaths;
+  }),
 
-    return files;
+  /**
+   * Find all the storage types, such as "default", "permanent", or "temporary".
+   * These names have changed over time, so it seems simpler to look through all types
+   * that currently exist in the profile.
+   */
+  findStorageTypePaths: Task.async(function* (storagePath) {
+    let iterator = new OS.File.DirectoryIterator(storagePath);
+    let typePaths = [];
+    yield iterator.forEach(entry => {
+      if (entry.isDir) {
+        typePaths.push(entry.path);
+      }
+    });
+    iterator.close();
+    return typePaths;
   }),
 
   /**
@@ -2363,8 +2362,8 @@ var indexedDBHelpers = {
         return indexedDBHelpers.splitNameAndStorage(name);
       }
       case "getDBNamesForHost": {
-        let [host] = args;
-        return indexedDBHelpers.getDBNamesForHost(host);
+        let [host, principal] = args;
+        return indexedDBHelpers.getDBNamesForHost(host, principal);
       }
       case "getValuesForHost": {
         let [host, name, options, hostVsStores, principal] = args;
@@ -2419,7 +2418,12 @@ exports.setupParentProcessForIndexedDB = function ({ mm, prefix }) {
 /**
  * General helpers
  */
-function trimHttpHttps(url) {
+function trimHttpHttpsPort(url) {
+  let match = url.match(/(.+):\d+$/);
+
+  if (match) {
+    url = match[1];
+  }
   if (url.startsWith("http://")) {
     return url.substr(7);
   }
@@ -2465,8 +2469,8 @@ let StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
 
     // Notifications that help us keep track of newly added windows and windows
     // that got removed
-    Services.obs.addObserver(this, "content-document-global-created", false);
-    Services.obs.addObserver(this, "inner-window-destroyed", false);
+    Services.obs.addObserver(this, "content-document-global-created");
+    Services.obs.addObserver(this, "inner-window-destroyed");
     this.onPageChange = this.onPageChange.bind(this);
 
     let handler = tabActor.chromeEventHandler;

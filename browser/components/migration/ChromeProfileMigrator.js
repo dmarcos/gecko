@@ -69,16 +69,28 @@ function chromeTimeToDate(aTime) {
 }
 
 /**
- * Insert bookmark items into specific folder.
+ * Convert Date object to Chrome time format
  *
- * @param   parentGuid
- *          GUID of the folder where items will be inserted
+ * @param   aDate
+ *          Date object or integer equivalent
+ * @return  Chrome time
+ * @note    For details on Chrome time, see chromeTimeToDate.
+ */
+function dateToChromeTime(aDate) {
+  return (aDate * 10000 + S100NS_FROM1601TO1970) / S100NS_PER_MS;
+}
+
+/**
+ * Converts an array of chrome bookmark objects into one our own places code
+ * understands.
+ *
  * @param   items
- *          bookmark items to be inserted
+ *          bookmark items to be inserted on this parent
  * @param   errorAccumulator
  *          function that gets called with any errors thrown so we don't drop them on the floor.
  */
-function* insertBookmarkItems(parentGuid, items, errorAccumulator) {
+function convertBookmarks(items, errorAccumulator) {
+  let itemsToInsert = [];
   for (let item of items) {
     try {
       if (item.type == "url") {
@@ -87,21 +99,18 @@ function* insertBookmarkItems(parentGuid, items, errorAccumulator) {
           // messages to the console, so we avoid doing that.
           continue;
         }
-        yield MigrationUtils.insertBookmarkWrapper({
-          parentGuid, url: item.url, title: item.name
-        });
+        itemsToInsert.push({url: item.url, title: item.name});
       } else if (item.type == "folder") {
-        let newFolderGuid = (yield MigrationUtils.insertBookmarkWrapper({
-          parentGuid, type: PlacesUtils.bookmarks.TYPE_FOLDER, title: item.name
-        })).guid;
-
-        yield insertBookmarkItems(newFolderGuid, item.children, errorAccumulator);
+        let folderItem = {type: PlacesUtils.bookmarks.TYPE_FOLDER, title: item.name};
+        folderItem.children = convertBookmarks(item.children, errorAccumulator);
+        itemsToInsert.push(folderItem);
       }
-    } catch (e) {
-      Cu.reportError(e);
-      errorAccumulator(e);
+    } catch (ex) {
+      Cu.reportError(ex);
+      errorAccumulator(ex);
     }
   }
+  return itemsToInsert;
 }
 
 function ChromeProfileMigrator() {
@@ -248,23 +257,8 @@ function GetBookmarksResource(aProfileFolder) {
       return Task.spawn(function* () {
         let gotErrors = false;
         let errorGatherer = function() { gotErrors = true };
-        let jsonStream = yield new Promise((resolve, reject) => {
-          let options = {
-            uri: NetUtil.newURI(bookmarksFile),
-            loadUsingSystemPrincipal: true
-          };
-          NetUtil.asyncFetch(options, (inputStream, resultCode) => {
-            if (Components.isSuccessCode(resultCode)) {
-              resolve(inputStream);
-            } else {
-              reject(new Error("Could not read Bookmarks file"));
-            }
-          });
-        });
-
         // Parse Chrome bookmark file that is JSON format
-        let bookmarkJSON = NetUtil.readInputStreamToString(
-          jsonStream, jsonStream.available(), { charset : "UTF-8" });
+        let bookmarkJSON = yield OS.File.read(bookmarksFile.path, {encoding: "UTF-8"});
         let roots = JSON.parse(bookmarkJSON).roots;
 
         // Importing bookmark bar items
@@ -272,11 +266,12 @@ function GetBookmarksResource(aProfileFolder) {
             roots.bookmark_bar.children.length > 0) {
           // Toolbar
           let parentGuid = PlacesUtils.bookmarks.toolbarGuid;
+          let bookmarks = convertBookmarks(roots.bookmark_bar.children, errorGatherer);
           if (!MigrationUtils.isStartupMigration) {
             parentGuid =
               yield MigrationUtils.createImportedBookmarksFolder("Chrome", parentGuid);
           }
-          yield insertBookmarkItems(parentGuid, roots.bookmark_bar.children, errorGatherer);
+          yield MigrationUtils.insertManyBookmarksWrapper(bookmarks, parentGuid);
         }
 
         // Importing bookmark menu items
@@ -284,11 +279,12 @@ function GetBookmarksResource(aProfileFolder) {
             roots.other.children.length > 0) {
           // Bookmark menu
           let parentGuid = PlacesUtils.bookmarks.menuGuid;
+          let bookmarks = convertBookmarks(roots.other.children, errorGatherer);
           if (!MigrationUtils.isStartupMigration) {
-            parentGuid =
-              yield MigrationUtils.createImportedBookmarksFolder("Chrome", parentGuid);
+            parentGuid
+              = yield MigrationUtils.createImportedBookmarksFolder("Chrome", parentGuid);
           }
-          yield insertBookmarkItems(parentGuid, roots.other.children, errorGatherer);
+          yield MigrationUtils.insertManyBookmarksWrapper(bookmarks, parentGuid);
         }
         if (gotErrors) {
           throw new Error("The migration included errors.");
@@ -310,8 +306,20 @@ function GetHistoryResource(aProfileFolder) {
 
     migrate(aCallback) {
       Task.spawn(function* () {
-        let rows = yield MigrationUtils.getRowsFromDBWithoutLocks(historyFile.path, "Chrome history",
-          `SELECT url, title, last_visit_time, typed_count FROM urls WHERE hidden = 0`);
+        const MAX_AGE_IN_DAYS = Services.prefs.getIntPref("browser.migrate.chrome.history.maxAgeInDays");
+        const LIMIT = Services.prefs.getIntPref("browser.migrate.chrome.history.limit");
+
+        let query = "SELECT url, title, last_visit_time, typed_count FROM urls WHERE hidden = 0";
+        if (MAX_AGE_IN_DAYS) {
+          let maxAge = dateToChromeTime(Date.now() - MAX_AGE_IN_DAYS * 24 * 60 * 60 * 1000);
+          query += " AND last_visit_time > " + maxAge;
+        }
+        if (LIMIT) {
+          query += " ORDER BY last_visit_time DESC LIMIT " + LIMIT;
+        }
+
+        let rows =
+          yield MigrationUtils.getRowsFromDBWithoutLocks(historyFile.path, "Chrome history", query);
         let places = [];
         for (let row of rows) {
           try {
@@ -338,14 +346,10 @@ function GetHistoryResource(aProfileFolder) {
         if (places.length > 0) {
           yield new Promise((resolve, reject) => {
             MigrationUtils.insertVisitsWrapper(places, {
-              _success: false,
-              handleResult() {
-                // Importing any entry is considered a successful import.
-                this._success = true;
-              },
-              handleError() {},
-              handleCompletion() {
-                if (this._success) {
+              ignoreErrors: true,
+              ignoreResults: true,
+              handleCompletion(updatedCount) {
+                if (updatedCount > 0) {
                   resolve();
                 } else {
                   reject(new Error("Couldn't add visits"));

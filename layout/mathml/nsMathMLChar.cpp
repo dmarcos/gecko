@@ -735,11 +735,7 @@ InitCharGlobals()
   // observer and will be deleted at shutdown. We now add some private
   // per font-family tables for stretchy operators, in order of preference.
   // Do not include the Unicode table in this list.
-  if (!glyphTableList->AddGlyphTable(NS_LITERAL_STRING("STIXGeneral"))
-#ifdef XP_WIN
-      || !glyphTableList->AddGlyphTable(NS_LITERAL_STRING("Symbol"))
-#endif
-      ) {
+  if (!glyphTableList->AddGlyphTable(NS_LITERAL_STRING("STIXGeneral"))) {
     rv = NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -1525,7 +1521,7 @@ nsMathMLChar::StretchInternal(nsPresContext*           aPresContext,
   // Set default font and get the default bounding metrics
   // mStyleContext is a leaf context used only when stretching happens.
   // For the base size, the default font should come from the parent context
-  nsFont font = mStyleContext->GetParent()->StyleFont()->mFont;
+  nsFont font = mStyleContext->GetParentAllowServo()->StyleFont()->mFont;
   NormalizeDefaultFont(font, aFontSizeInflation);
 
   const nsStyleFont* styleFont = mStyleContext->StyleFont();
@@ -1965,7 +1961,7 @@ nsMathMLChar::Display(nsDisplayListBuilder*   aBuilder,
                       uint32_t                aIndex,
                       const nsRect*           aSelectedRect)
 {
-  nsStyleContext* parentContext = mStyleContext->GetParent();
+  nsStyleContext* parentContext = mStyleContext->GetParentAllowServo();
   nsStyleContext* styleContext = mStyleContext;
 
   if (mDraw == DRAW_NORMAL) {
@@ -2043,7 +2039,7 @@ nsMathMLChar::PaintForeground(nsPresContext* aPresContext,
                               nsPoint aPt,
                               bool aIsSelected)
 {
-  nsStyleContext* parentContext = mStyleContext->GetParent();
+  nsStyleContext* parentContext = mStyleContext->GetParentAllowServo();
   nsStyleContext* styleContext = mStyleContext;
 
   if (mDraw == DRAW_NORMAL) {

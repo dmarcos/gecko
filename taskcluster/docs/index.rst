@@ -24,8 +24,10 @@ check out the :doc:`how-to section <how-tos>`.
     taskgraph
     loading
     transforms
+    optimization
     yaml-templates
     docker-images
     cron
+    actions
     how-tos
     reference

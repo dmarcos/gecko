@@ -485,13 +485,18 @@ exports.CSS_PROPERTIES = {
       "-moz-radial-gradient",
       "-moz-repeating-linear-gradient",
       "-moz-repeating-radial-gradient",
+      "fill",
       "inherit",
       "initial",
       "linear-gradient",
       "none",
       "radial-gradient",
+      "repeat",
       "repeating-linear-gradient",
       "repeating-radial-gradient",
+      "round",
+      "space",
+      "stretch",
       "unset",
       "url"
     ]
@@ -1199,8 +1204,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -1270,8 +1280,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -1717,6 +1732,20 @@ exports.CSS_PROPERTIES = {
       "unset"
     ]
   },
+  "-webkit-appearance": {
+    "isInherited": false,
+    "subproperties": [
+      "appearance"
+    ],
+    "supports": [],
+    "values": [
+      "auto",
+      "inherit",
+      "initial",
+      "none",
+      "unset"
+    ]
+  },
   "-webkit-backface-visibility": {
     "isInherited": false,
     "subproperties": [
@@ -1772,6 +1801,8 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "contain",
+      "cover",
       "inherit",
       "initial",
       "unset"
@@ -1831,13 +1862,18 @@ exports.CSS_PROPERTIES = {
       "-moz-radial-gradient",
       "-moz-repeating-linear-gradient",
       "-moz-repeating-radial-gradient",
+      "fill",
       "inherit",
       "initial",
       "linear-gradient",
       "none",
       "radial-gradient",
+      "repeat",
       "repeating-linear-gradient",
       "repeating-radial-gradient",
+      "round",
+      "space",
+      "stretch",
       "unset",
       "url"
     ]
@@ -1993,6 +2029,7 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "inset",
       "unset"
     ]
   },
@@ -2204,12 +2241,17 @@ exports.CSS_PROPERTIES = {
       "add",
       "alpha",
       "border-box",
+      "bottom",
+      "center",
+      "contain",
       "content-box",
+      "cover",
       "exclude",
       "fill-box",
       "inherit",
       "initial",
       "intersect",
+      "left",
       "linear-gradient",
       "luminance",
       "match-source",
@@ -2223,10 +2265,12 @@ exports.CSS_PROPERTIES = {
       "repeat-y",
       "repeating-linear-gradient",
       "repeating-radial-gradient",
+      "right",
       "round",
       "space",
       "stroke-box",
       "subtract",
+      "top",
       "unset",
       "url",
       "view-box"
@@ -2324,8 +2368,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -2339,8 +2388,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -2354,8 +2408,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -2387,6 +2446,8 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "contain",
+      "cover",
       "inherit",
       "initial",
       "unset"
@@ -2431,8 +2492,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -2559,8 +2625,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -2787,6 +2858,7 @@ exports.CSS_PROPERTIES = {
       "animation-play-state",
       "animation-timing-function",
       "-moz-appearance",
+      "appearance",
       "backface-visibility",
       "background-attachment",
       "background-blend-mode",
@@ -2865,6 +2937,7 @@ exports.CSS_PROPERTIES = {
       "column-rule-color",
       "column-rule-style",
       "column-rule-width",
+      "column-span",
       "column-width",
       "contain",
       "content",
@@ -3045,6 +3118,7 @@ exports.CSS_PROPERTIES = {
       "text-emphasis-style",
       "-webkit-text-fill-color",
       "text-indent",
+      "text-justify",
       "text-orientation",
       "text-overflow",
       "text-rendering",
@@ -3097,13 +3171,19 @@ exports.CSS_PROPERTIES = {
     "values": [
       "COLOR",
       "-moz-all",
+      "-moz-alt-content",
       "-moz-available",
       "-moz-block-height",
       "-moz-box",
+      "-moz-button",
       "-moz-center",
       "-moz-crisp-edges",
       "-moz-deck",
+      "-moz-desktop",
+      "-moz-dialog",
+      "-moz-document",
       "-moz-element",
+      "-moz-field",
       "-moz-fit-content",
       "-moz-grid",
       "-moz-grid-group",
@@ -3112,11 +3192,13 @@ exports.CSS_PROPERTIES = {
       "-moz-gtk-info-bar",
       "-moz-hidden-unscrollable",
       "-moz-image-rect",
+      "-moz-info",
       "-moz-inline-box",
       "-moz-inline-grid",
       "-moz-inline-stack",
       "-moz-left",
       "-moz-linear-gradient",
+      "-moz-list",
       "-moz-mac-active-source-list-selection",
       "-moz-mac-disclosure-button-closed",
       "-moz-mac-disclosure-button-open",
@@ -3132,6 +3214,7 @@ exports.CSS_PROPERTIES = {
       "-moz-none",
       "-moz-popup",
       "-moz-pre-space",
+      "-moz-pull-down-menu",
       "-moz-radial-gradient",
       "-moz-repeating-linear-gradient",
       "-moz-repeating-radial-gradient",
@@ -3144,6 +3227,7 @@ exports.CSS_PROPERTIES = {
       "-moz-win-exclude-glass",
       "-moz-win-glass",
       "-moz-win-media-toolbox",
+      "-moz-window",
       "-moz-window-button-box",
       "-moz-window-button-box-maximized",
       "-moz-window-button-close",
@@ -3155,6 +3239,7 @@ exports.CSS_PROPERTIES = {
       "-moz-window-frame-right",
       "-moz-window-titlebar",
       "-moz-window-titlebar-maximized",
+      "-moz-workspace",
       "-webkit-box",
       "-webkit-flex",
       "-webkit-inline-box",
@@ -3162,8 +3247,10 @@ exports.CSS_PROPERTIES = {
       "absolute",
       "active",
       "add",
+      "alias",
       "all",
       "all-petite-caps",
+      "all-scroll",
       "all-small-caps",
       "alpha",
       "alphabetic",
@@ -3176,8 +3263,11 @@ exports.CSS_PROPERTIES = {
       "balance",
       "baseline",
       "bevel",
+      "blink",
       "block",
       "block-axis",
+      "bold",
+      "bolder",
       "border-box",
       "both",
       "bottom",
@@ -3194,38 +3284,59 @@ exports.CSS_PROPERTIES = {
       "button-focus",
       "calc",
       "capitalize",
+      "caption",
       "caret",
+      "cell",
       "center",
       "central",
       "checkbox",
       "checkbox-container",
       "checkbox-label",
       "checkmenuitem",
+      "clip",
       "clone",
+      "close-quote",
+      "col-resize",
       "collapse",
       "color",
       "color-burn",
       "color-dodge",
       "column",
       "column-reverse",
+      "common-ligatures",
       "condensed",
       "contain",
       "content-box",
       "contents",
+      "context-fill",
+      "context-fill-opacity",
+      "context-menu",
+      "context-stroke",
+      "context-stroke-opacity",
+      "context-value",
+      "contextual",
+      "copy",
       "cover",
       "crispedges",
+      "crosshair",
       "cubic-bezier",
       "currentColor",
       "darken",
       "dashed",
       "default",
+      "dense",
+      "diagonal-fractions",
       "dialog",
       "difference",
+      "digits",
       "disabled",
+      "discretionary-ligatures",
+      "distribute",
       "dotted",
       "double",
       "drag",
       "dualbutton",
+      "e-resize",
       "ease",
       "ease-in",
       "ease-in-out",
@@ -3233,9 +3344,11 @@ exports.CSS_PROPERTIES = {
       "economy",
       "element",
       "elements",
+      "ellipsis",
       "enabled",
       "end",
       "evenodd",
+      "ew-resize",
       "exact",
       "exclude",
       "exclusion",
@@ -3249,23 +3362,30 @@ exports.CSS_PROPERTIES = {
       "flex",
       "flex-end",
       "flex-start",
+      "flip",
       "flow-root",
       "forwards",
+      "from-image",
       "full-width",
       "geometricprecision",
-      "grayscale",
+      "grab",
+      "grabbing",
       "grid",
       "groove",
       "groupbox",
       "hanging",
       "hard-light",
+      "help",
       "hidden",
       "hide",
+      "historical-forms",
+      "historical-ligatures",
       "horizontal",
       "horizontal-tb",
       "hsl",
       "hsla",
       "hue",
+      "icon",
       "ideographic",
       "ignore",
       "inactive",
@@ -3282,9 +3402,15 @@ exports.CSS_PROPERTIES = {
       "inline-table",
       "inset",
       "inside",
+      "inter-character",
+      "inter-word",
       "intersect",
       "isolate",
       "italic",
+      "jis04",
+      "jis78",
+      "jis83",
+      "jis90",
       "justify",
       "keep-all",
       "large",
@@ -3292,9 +3418,12 @@ exports.CSS_PROPERTIES = {
       "last baseline",
       "left",
       "lighten",
+      "lighter",
+      "line-through",
       "linear",
       "linear-gradient",
       "linearrgb",
+      "lining-nums",
       "list-item",
       "listbox",
       "listitem",
@@ -3310,7 +3439,9 @@ exports.CSS_PROPERTIES = {
       "margin-box",
       "match-source",
       "mathematical",
+      "max-content",
       "medium",
+      "menu",
       "menuarrow",
       "menubar",
       "menucheckbox",
@@ -3324,44 +3455,69 @@ exports.CSS_PROPERTIES = {
       "menupopup",
       "menuradio",
       "menuseparator",
+      "message-box",
       "meterbar",
       "meterchunk",
       "middle",
+      "min-content",
       "miter",
       "mixed",
+      "move",
       "multiply",
+      "n-resize",
+      "ne-resize",
+      "nesw-resize",
       "no-change",
       "no-clip",
+      "no-close-quote",
+      "no-common-ligatures",
+      "no-contextual",
+      "no-discretionary-ligatures",
       "no-drag",
+      "no-drop",
+      "no-historical-ligatures",
+      "no-open-quote",
       "no-repeat",
       "non-scaling-stroke",
       "none",
       "nonzero",
       "normal",
+      "not-allowed",
       "nowrap",
+      "ns-resize",
       "number-input",
+      "nw-resize",
+      "nwse-resize",
       "oblique",
+      "oldstyle-nums",
+      "open-quote",
       "optimizelegibility",
       "optimizequality",
       "optimizespeed",
+      "ordinal",
       "outset",
       "outside",
       "over",
       "overlay",
+      "overline",
       "padding-box",
       "painted",
       "pan-x",
       "pan-y",
       "paused",
       "petite-caps",
+      "pointer",
       "pre",
       "pre-line",
       "pre-wrap",
       "preserve-3d",
+      "progress",
       "progressbar",
       "progressbar-vertical",
       "progresschunk",
       "progresschunk-vertical",
+      "proportional-nums",
+      "proportional-width",
       "proximity",
       "radial-gradient",
       "radio",
@@ -3390,6 +3546,7 @@ exports.CSS_PROPERTIES = {
       "rl-tb",
       "round",
       "row",
+      "row-resize",
       "row-reverse",
       "ruby",
       "ruby-base",
@@ -3397,6 +3554,7 @@ exports.CSS_PROPERTIES = {
       "ruby-text",
       "ruby-text-container",
       "running",
+      "s-resize",
       "saturation",
       "scale-down",
       "scale-horizontal",
@@ -3420,6 +3578,7 @@ exports.CSS_PROPERTIES = {
       "scrollbarthumb-vertical",
       "scrollbartrack-horizontal",
       "scrollbartrack-vertical",
+      "se-resize",
       "searchfield",
       "select-after",
       "select-all",
@@ -3437,9 +3596,12 @@ exports.CSS_PROPERTIES = {
       "sideways-lr",
       "sideways-right",
       "sideways-rl",
+      "simplified",
+      "slashed-zero",
       "slice",
       "small",
       "small-caps",
+      "small-caption",
       "smaller",
       "smooth",
       "soft-light",
@@ -3455,8 +3617,10 @@ exports.CSS_PROPERTIES = {
       "splitter",
       "square",
       "srgb",
+      "stacked-fractions",
       "start",
       "static",
+      "status-bar",
       "statusbar",
       "statusbarpanel",
       "step-end",
@@ -3467,9 +3631,11 @@ exports.CSS_PROPERTIES = {
       "stretch-to-fit",
       "stroke",
       "stroke-box",
+      "style",
       "sub",
       "subtract",
       "super",
+      "sw-resize",
       "tab",
       "tab-scroll-arrow-back",
       "tab-scroll-arrow-forward",
@@ -3484,6 +3650,7 @@ exports.CSS_PROPERTIES = {
       "table-row-group",
       "tabpanel",
       "tabpanels",
+      "tabular-nums",
       "tb",
       "tb-rl",
       "text",
@@ -3505,6 +3672,7 @@ exports.CSS_PROPERTIES = {
       "tooltip",
       "top",
       "top-outside",
+      "traditional",
       "transparent",
       "treeheader",
       "treeheadercell",
@@ -3518,6 +3686,7 @@ exports.CSS_PROPERTIES = {
       "ultra-condensed",
       "ultra-expanded",
       "under",
+      "underline",
       "unicase",
       "unset",
       "uppercase",
@@ -3527,12 +3696,16 @@ exports.CSS_PROPERTIES = {
       "vertical",
       "vertical-lr",
       "vertical-rl",
+      "vertical-text",
       "view-box",
       "visible",
       "visiblefill",
       "visiblepainted",
       "visiblestroke",
+      "w-resize",
+      "wait",
       "wavy",
+      "weight",
       "window",
       "wrap",
       "wrap-reverse",
@@ -3540,7 +3713,9 @@ exports.CSS_PROPERTIES = {
       "x-large",
       "x-small",
       "xx-large",
-      "xx-small"
+      "xx-small",
+      "zoom-in",
+      "zoom-out"
     ]
   },
   "animation": {
@@ -3711,6 +3886,20 @@ exports.CSS_PROPERTIES = {
       "unset"
     ]
   },
+  "appearance": {
+    "isInherited": false,
+    "subproperties": [
+      "appearance"
+    ],
+    "supports": [],
+    "values": [
+      "auto",
+      "inherit",
+      "initial",
+      "none",
+      "unset"
+    ]
+  },
   "backface-visibility": {
     "isInherited": false,
     "subproperties": [
@@ -3755,13 +3944,18 @@ exports.CSS_PROPERTIES = {
       "-moz-repeating-linear-gradient",
       "-moz-repeating-radial-gradient",
       "border-box",
+      "bottom",
+      "center",
+      "contain",
       "content-box",
+      "cover",
       "currentColor",
       "fixed",
       "hsl",
       "hsla",
       "inherit",
       "initial",
+      "left",
       "linear-gradient",
       "local",
       "no-repeat",
@@ -3775,10 +3969,12 @@ exports.CSS_PROPERTIES = {
       "repeating-radial-gradient",
       "rgb",
       "rgba",
+      "right",
       "round",
       "scroll",
       "space",
       "text",
+      "top",
       "transparent",
       "unset",
       "url"
@@ -3918,8 +4114,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -3933,8 +4134,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -3948,8 +4154,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -3981,6 +4192,8 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "contain",
+      "cover",
       "inherit",
       "initial",
       "unset"
@@ -4045,6 +4258,7 @@ exports.CSS_PROPERTIES = {
       "dashed",
       "dotted",
       "double",
+      "fill",
       "groove",
       "hidden",
       "hsl",
@@ -4057,12 +4271,16 @@ exports.CSS_PROPERTIES = {
       "none",
       "outset",
       "radial-gradient",
+      "repeat",
       "repeating-linear-gradient",
       "repeating-radial-gradient",
       "rgb",
       "rgba",
       "ridge",
+      "round",
       "solid",
+      "space",
+      "stretch",
       "thick",
       "thin",
       "transparent",
@@ -4459,13 +4677,18 @@ exports.CSS_PROPERTIES = {
       "-moz-radial-gradient",
       "-moz-repeating-linear-gradient",
       "-moz-repeating-radial-gradient",
+      "fill",
       "inherit",
       "initial",
       "linear-gradient",
       "none",
       "radial-gradient",
+      "repeat",
       "repeating-linear-gradient",
       "repeating-radial-gradient",
+      "round",
+      "space",
+      "stretch",
       "unset",
       "url"
     ]
@@ -4494,6 +4717,10 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "repeat",
+      "round",
+      "space",
+      "stretch",
       "unset"
     ]
   },
@@ -4507,6 +4734,7 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "fill",
       "inherit",
       "initial",
       "unset"
@@ -5202,6 +5430,7 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "inset",
       "unset"
     ]
   },
@@ -5569,8 +5798,13 @@ exports.CSS_PROPERTIES = {
       11
     ],
     "values": [
+      "-moz-alt-content",
+      "close-quote",
       "inherit",
       "initial",
+      "no-close-quote",
+      "no-open-quote",
+      "open-quote",
       "unset"
     ]
   },
@@ -5607,9 +5841,45 @@ exports.CSS_PROPERTIES = {
       11
     ],
     "values": [
+      "alias",
+      "all-scroll",
+      "auto",
+      "cell",
+      "col-resize",
+      "context-menu",
+      "copy",
+      "crosshair",
+      "default",
+      "e-resize",
+      "ew-resize",
+      "grab",
+      "grabbing",
+      "help",
       "inherit",
       "initial",
-      "unset"
+      "move",
+      "n-resize",
+      "ne-resize",
+      "nesw-resize",
+      "no-drop",
+      "none",
+      "not-allowed",
+      "ns-resize",
+      "nw-resize",
+      "nwse-resize",
+      "pointer",
+      "progress",
+      "row-resize",
+      "s-resize",
+      "se-resize",
+      "sw-resize",
+      "text",
+      "unset",
+      "vertical-text",
+      "w-resize",
+      "wait",
+      "zoom-in",
+      "zoom-out"
     ]
   },
   "direction": {
@@ -5727,6 +5997,8 @@ exports.CSS_PROPERTIES = {
       11
     ],
     "values": [
+      "context-fill",
+      "context-stroke",
       "inherit",
       "initial",
       "unset"
@@ -5741,6 +6013,8 @@ exports.CSS_PROPERTIES = {
       7
     ],
     "values": [
+      "context-fill-opacity",
+      "context-stroke-opacity",
       "inherit",
       "initial",
       "unset"
@@ -5964,7 +6238,6 @@ exports.CSS_PROPERTIES = {
       "font-feature-settings",
       "font-language-override",
       "font-kerning",
-      "font-synthesis",
       "font-variant-alternates",
       "font-variant-caps",
       "font-variant-east-asian",
@@ -5979,32 +6252,77 @@ exports.CSS_PROPERTIES = {
     ],
     "values": [
       "-moz-block-height",
+      "-moz-button",
+      "-moz-desktop",
+      "-moz-dialog",
+      "-moz-document",
+      "-moz-field",
+      "-moz-info",
+      "-moz-list",
+      "-moz-pull-down-menu",
+      "-moz-window",
+      "-moz-workspace",
       "all-petite-caps",
       "all-small-caps",
       "auto",
+      "bold",
+      "bolder",
       "calc",
+      "caption",
+      "common-ligatures",
       "condensed",
+      "contextual",
+      "diagonal-fractions",
+      "discretionary-ligatures",
       "expanded",
       "extra-condensed",
       "extra-expanded",
+      "full-width",
+      "historical-forms",
+      "historical-ligatures",
+      "icon",
       "inherit",
       "initial",
       "italic",
+      "jis04",
+      "jis78",
+      "jis83",
+      "jis90",
       "large",
       "larger",
+      "lighter",
+      "lining-nums",
       "medium",
+      "menu",
+      "message-box",
+      "no-common-ligatures",
+      "no-contextual",
+      "no-discretionary-ligatures",
+      "no-historical-ligatures",
       "none",
       "normal",
       "oblique",
+      "oldstyle-nums",
+      "ordinal",
       "petite-caps",
+      "proportional-nums",
+      "proportional-width",
+      "ruby",
       "semi-condensed",
       "semi-expanded",
+      "simplified",
+      "slashed-zero",
       "small",
       "small-caps",
+      "small-caption",
       "smaller",
+      "stacked-fractions",
+      "status-bar",
       "sub",
       "super",
+      "tabular-nums",
       "titling-caps",
+      "traditional",
       "ultra-condensed",
       "ultra-expanded",
       "unicase",
@@ -6152,7 +6470,9 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
-      "unset"
+      "style",
+      "unset",
+      "weight"
     ]
   },
   "font-variant": {
@@ -6169,14 +6489,40 @@ exports.CSS_PROPERTIES = {
     "values": [
       "all-petite-caps",
       "all-small-caps",
+      "common-ligatures",
+      "contextual",
+      "diagonal-fractions",
+      "discretionary-ligatures",
+      "full-width",
+      "historical-forms",
+      "historical-ligatures",
       "inherit",
       "initial",
+      "jis04",
+      "jis78",
+      "jis83",
+      "jis90",
+      "lining-nums",
+      "no-common-ligatures",
+      "no-contextual",
+      "no-discretionary-ligatures",
+      "no-historical-ligatures",
       "normal",
+      "oldstyle-nums",
+      "ordinal",
       "petite-caps",
+      "proportional-nums",
+      "proportional-width",
+      "ruby",
+      "simplified",
+      "slashed-zero",
       "small-caps",
+      "stacked-fractions",
       "sub",
       "super",
+      "tabular-nums",
       "titling-caps",
+      "traditional",
       "unicase",
       "unset"
     ]
@@ -6188,6 +6534,7 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "historical-forms",
       "inherit",
       "initial",
       "unset"
@@ -6219,8 +6566,17 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "full-width",
       "inherit",
       "initial",
+      "jis04",
+      "jis78",
+      "jis83",
+      "jis90",
+      "proportional-width",
+      "ruby",
+      "simplified",
+      "traditional",
       "unset"
     ]
   },
@@ -6231,8 +6587,16 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "common-ligatures",
+      "contextual",
+      "discretionary-ligatures",
+      "historical-ligatures",
       "inherit",
       "initial",
+      "no-common-ligatures",
+      "no-contextual",
+      "no-discretionary-ligatures",
+      "no-historical-ligatures",
       "unset"
     ]
   },
@@ -6243,8 +6607,16 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "diagonal-fractions",
       "inherit",
       "initial",
+      "lining-nums",
+      "oldstyle-nums",
+      "ordinal",
+      "proportional-nums",
+      "slashed-zero",
+      "stacked-fractions",
+      "tabular-nums",
       "unset"
     ]
   },
@@ -6272,8 +6644,12 @@ exports.CSS_PROPERTIES = {
       7
     ],
     "values": [
+      "bold",
+      "bolder",
       "inherit",
       "initial",
+      "lighter",
+      "normal",
       "unset"
     ]
   },
@@ -6295,8 +6671,13 @@ exports.CSS_PROPERTIES = {
     ],
     "values": [
       "calc",
+      "column",
+      "dense",
       "inherit",
       "initial",
+      "max-content",
+      "min-content",
+      "row",
       "unset"
     ]
   },
@@ -6329,6 +6710,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "max-content",
+      "min-content",
       "unset"
     ]
   },
@@ -6339,8 +6722,11 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "column",
+      "dense",
       "inherit",
       "initial",
+      "row",
       "unset"
     ]
   },
@@ -6356,6 +6742,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "max-content",
+      "min-content",
       "unset"
     ]
   },
@@ -6508,6 +6896,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "max-content",
+      "min-content",
       "unset"
     ]
   },
@@ -6535,6 +6925,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "max-content",
+      "min-content",
       "unset"
     ]
   },
@@ -6550,6 +6942,8 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "max-content",
+      "min-content",
       "unset"
     ]
   },
@@ -6598,6 +6992,8 @@ exports.CSS_PROPERTIES = {
       1
     ],
     "values": [
+      "flip",
+      "from-image",
       "inherit",
       "initial",
       "unset"
@@ -7136,12 +7532,17 @@ exports.CSS_PROPERTIES = {
       "add",
       "alpha",
       "border-box",
+      "bottom",
+      "center",
+      "contain",
       "content-box",
+      "cover",
       "exclude",
       "fill-box",
       "inherit",
       "initial",
       "intersect",
+      "left",
       "linear-gradient",
       "luminance",
       "match-source",
@@ -7155,10 +7556,12 @@ exports.CSS_PROPERTIES = {
       "repeat-y",
       "repeating-linear-gradient",
       "repeating-radial-gradient",
+      "right",
       "round",
       "space",
       "stroke-box",
       "subtract",
+      "top",
       "unset",
       "url",
       "view-box"
@@ -7271,8 +7674,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -7286,8 +7694,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -7301,8 +7714,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -7334,6 +7752,8 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "contain",
+      "cover",
       "inherit",
       "initial",
       "unset"
@@ -7568,8 +7988,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -8081,8 +8506,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -8305,8 +8735,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -8320,8 +8755,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -8456,6 +8896,8 @@ exports.CSS_PROPERTIES = {
       11
     ],
     "values": [
+      "context-fill",
+      "context-stroke",
       "inherit",
       "initial",
       "unset"
@@ -8472,6 +8914,7 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "context-value",
       "inherit",
       "initial",
       "unset"
@@ -8488,6 +8931,7 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "context-value",
       "inherit",
       "initial",
       "unset"
@@ -8546,6 +8990,8 @@ exports.CSS_PROPERTIES = {
       7
     ],
     "values": [
+      "context-fill-opacity",
+      "context-stroke-opacity",
       "inherit",
       "initial",
       "unset"
@@ -8562,6 +9008,7 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "context-value",
       "inherit",
       "initial",
       "unset"
@@ -8643,8 +9090,11 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "all",
+      "digits",
       "inherit",
       "initial",
+      "none",
       "unset"
     ]
   },
@@ -8661,6 +9111,7 @@ exports.CSS_PROPERTIES = {
     "values": [
       "COLOR",
       "-moz-none",
+      "blink",
       "currentColor",
       "dashed",
       "dotted",
@@ -8669,10 +9120,14 @@ exports.CSS_PROPERTIES = {
       "hsla",
       "inherit",
       "initial",
+      "line-through",
+      "none",
+      "overline",
       "rgb",
       "rgba",
       "solid",
       "transparent",
+      "underline",
       "unset",
       "wavy"
     ]
@@ -8705,8 +9160,13 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "blink",
       "inherit",
       "initial",
+      "line-through",
+      "none",
+      "overline",
+      "underline",
       "unset"
     ]
   },
@@ -8780,6 +9240,10 @@ exports.CSS_PROPERTIES = {
     "values": [
       "inherit",
       "initial",
+      "left",
+      "over",
+      "right",
+      "under",
       "unset"
     ]
   },
@@ -8811,6 +9275,23 @@ exports.CSS_PROPERTIES = {
       "unset"
     ]
   },
+  "text-justify": {
+    "isInherited": true,
+    "subproperties": [
+      "text-justify"
+    ],
+    "supports": [],
+    "values": [
+      "auto",
+      "distribute",
+      "inherit",
+      "initial",
+      "inter-character",
+      "inter-word",
+      "none",
+      "unset"
+    ]
+  },
   "text-orientation": {
     "isInherited": true,
     "subproperties": [
@@ -8834,6 +9315,8 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
+      "clip",
+      "ellipsis",
       "inherit",
       "initial",
       "unset"
@@ -8958,8 +9441,13 @@ exports.CSS_PROPERTIES = {
       8
     ],
     "values": [
+      "bottom",
+      "center",
       "inherit",
       "initial",
+      "left",
+      "right",
+      "top",
       "unset"
     ]
   },
@@ -9078,9 +9566,6 @@ exports.CSS_PROPERTIES = {
     ],
     "supports": [],
     "values": [
-      "-moz-isolate",
-      "-moz-isolate-override",
-      "-moz-plaintext",
       "bidi-override",
       "embed",
       "inherit",
@@ -9290,6 +9775,7 @@ exports.PSEUDO_ELEMENTS = [
   ":after",
   ":before",
   ":backdrop",
+  ":cue",
   ":first-letter",
   ":first-line",
   ":-moz-selection",
@@ -9318,6 +9804,14 @@ exports.PREFERENCES = [
     "layout.css.all-shorthand.enabled"
   ],
   [
+    "-moz-appearance",
+    "layout.css.moz-appearance.enabled"
+  ],
+  [
+    "appearance",
+    "layout.css.appearance.enabled"
+  ],
+  [
     "background-blend-mode",
     "layout.css.background-blend-mode.enabled"
   ],
@@ -9328,6 +9822,10 @@ exports.PREFERENCES = [
   [
     "color-adjust",
     "layout.css.color-adjust.enabled"
+  ],
+  [
+    "column-span",
+    "layout.css.column-span.enabled"
   ],
   [
     "contain",
@@ -9426,14 +9924,6 @@ exports.PREFERENCES = [
     "layout.css.mix-blend-mode.enabled"
   ],
   [
-    "object-fit",
-    "layout.css.object-fit-and-position.enabled"
-  ],
-  [
-    "object-position",
-    "layout.css.object-fit-and-position.enabled"
-  ],
-  [
     "-moz-osx-font-smoothing",
     "layout.css.osx-font-smoothing.enabled"
   ],
@@ -9488,6 +9978,10 @@ exports.PREFERENCES = [
   [
     "-webkit-text-fill-color",
     "layout.css.prefixes.webkit"
+  ],
+  [
+    "text-justify",
+    "layout.css.text-justify.enabled"
   ],
   [
     "-webkit-text-stroke",
@@ -9640,6 +10134,10 @@ exports.PREFERENCES = [
   [
     "-webkit-animation-timing-function",
     "layout.css.prefixes.webkit"
+  ],
+  [
+    "-webkit-appearance",
+    "layout.css.appearance.enabled"
   ],
   [
     "-webkit-filter",

@@ -54,7 +54,6 @@
 #include "gfxWindowsSurface.h"
 #endif
 
-#include "DisplayItemScrollClip.h"
 #include "Layers.h"
 #include "ReadbackLayer.h"
 #include "ImageContainer.h"
@@ -64,9 +63,6 @@
 #include "nsAccessibilityService.h"
 #endif
 
-#ifdef MOZ_LOGGING
-#define FORCE_PR_LOG 1 /* Allow logging in the release build */
-#endif /* MOZ_LOGGING */
 #include "mozilla/Logging.h"
 
 #ifdef XP_MACOSX
@@ -90,7 +86,6 @@ using mozilla::DefaultXDisplay;
 #endif
 
 #include "mozilla/dom/TabChild.h"
-#include "ClientLayerManager.h"
 
 #ifdef CreateEvent // Thank you MS.
 #undef CreateEvent
@@ -152,6 +147,7 @@ protected:
 nsPluginFrame::nsPluginFrame(nsStyleContext* aContext)
   : nsFrame(aContext)
   , mInstanceOwner(nullptr)
+  , mOuterView(nullptr)
   , mInnerView(nullptr)
   , mBackgroundSink(nullptr)
   , mReflowCallbackPosted(false)
@@ -196,6 +192,7 @@ nsPluginFrame::Init(nsIContent*       aContent,
          ("Initializing nsPluginFrame %p for content %p\n", this, aContent));
 
   nsFrame::Init(aContent, aParent, aPrevInFlow);
+  CreateView();
 }
 
 void
@@ -508,13 +505,13 @@ nsPluginFrame::Reflow(nsPresContext*           aPresContext,
   // arrived. Otherwise there may be PARAMs or other stuff that the
   // plugin needs to see that haven't arrived yet.
   if (!GetContent()->IsDoneAddingChildren()) {
-    aStatus = NS_FRAME_COMPLETE;
+    aStatus.Reset();
     return;
   }
 
   // if we are printing or print previewing, bail for now
   if (aPresContext->Medium() == nsGkAtoms::print) {
-    aStatus = NS_FRAME_COMPLETE;
+    aStatus.Reset();
     return;
   }
 
@@ -533,7 +530,7 @@ nsPluginFrame::Reflow(nsPresContext*           aPresContext,
     aPresContext->PresShell()->PostReflowCallback(this);
   }
 
-  aStatus = NS_FRAME_COMPLETE;
+  aStatus.Reset();
 
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aMetrics);
 }
@@ -1010,10 +1007,8 @@ GetClippedBoundsIncludingAllScrollClips(nsDisplayItem* aItem,
                                         nsDisplayListBuilder* aBuilder)
 {
   nsRect r = aItem->GetClippedBounds(aBuilder);
-  for (auto* sc = aItem->ScrollClip(); sc; sc = sc->mParent) {
-    if (sc->mClip) {
-      r = sc->mClip->ApplyNonRoundedIntersection(r);
-    }
+  for (auto* sc = aItem->GetClipChain(); sc; sc = sc->mParent) {
+    r = sc->mClip.ApplyNonRoundedIntersection(r);
   }
   return r;
 }
@@ -1418,11 +1413,10 @@ nsPluginFrame::GetLayerState(nsDisplayListBuilder* aBuilder,
 #endif
 }
 
-class PluginFrameDidCompositeObserver final : public ClientLayerManager::
-  DidCompositeObserver
+class PluginFrameDidCompositeObserver final : public DidCompositeObserver
 {
 public:
-  PluginFrameDidCompositeObserver(nsPluginInstanceOwner* aOwner, ClientLayerManager* aLayerManager)
+  PluginFrameDidCompositeObserver(nsPluginInstanceOwner* aOwner, LayerManager* aLayerManager)
     : mInstanceOwner(aOwner),
       mLayerManager(aLayerManager)
   {
@@ -1433,13 +1427,13 @@ public:
   void DidComposite() override {
     mInstanceOwner->DidComposite();
   }
-  bool IsValid(ClientLayerManager* aLayerManager) {
+  bool IsValid(LayerManager* aLayerManager) {
     return aLayerManager == mLayerManager;
   }
 
 private:
   nsPluginInstanceOwner* mInstanceOwner;
-  RefPtr<ClientLayerManager> mLayerManager;
+  RefPtr<LayerManager> mLayerManager;
 };
 
 already_AddRefed<Layer>
@@ -1523,10 +1517,11 @@ nsPluginFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
 
     if (aBuilder->IsPaintingToWindow() &&
         aBuilder->GetWidgetLayerManager() &&
-        aBuilder->GetWidgetLayerManager()->AsClientLayerManager() &&
+        (aBuilder->GetWidgetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT ||
+         aBuilder->GetWidgetLayerManager()->GetBackendType() == LayersBackend::LAYERS_WR) &&
         mInstanceOwner->UseAsyncRendering())
     {
-      RefPtr<ClientLayerManager> lm = aBuilder->GetWidgetLayerManager()->AsClientLayerManager();
+      RefPtr<LayerManager> lm = aBuilder->GetWidgetLayerManager();
       if (!mDidCompositeObserver || !mDidCompositeObserver->IsValid(lm)) {
         mDidCompositeObserver = MakeUnique<PluginFrameDidCompositeObserver>(mInstanceOwner, lm);
       }
@@ -1654,8 +1649,10 @@ nsPluginFrame::HandleEvent(nsPresContext* aPresContext,
   }
   else if (anEvent->mMessage == ePluginFocus) {
     nsIFocusManager* fm = nsFocusManager::GetFocusManager();
-    if (fm)
-      return fm->FocusPlugin(GetContent());
+    if (fm) {
+      nsCOMPtr<nsIContent> content = GetContent();
+      return fm->FocusPlugin(content);
+    }
   }
 
   if (mInstanceOwner->SendNativeEvents() &&
@@ -1856,7 +1853,7 @@ nsPluginFrame::EndSwapDocShells(nsISupports* aSupports, void*)
     nsIWidget* parent =
       rootPC->PresShell()->GetRootFrame()->GetNearestWidget();
     widget->SetParent(parent);
-    nsWeakFrame weakFrame(objectFrame);
+    AutoWeakFrame weakFrame(objectFrame);
     objectFrame->CallSetWindow();
     if (!weakFrame.IsAlive()) {
       return;

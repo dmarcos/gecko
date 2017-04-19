@@ -6,15 +6,16 @@
 
 /* Utilities for animation of computed style values */
 
+#include "mozilla/StyleAnimationValue.h"
+
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/RuleNodeCacheConditions.h"
-#include "mozilla/StyleAnimationValue.h"
+#include "mozilla/ServoBindings.h"
 #include "mozilla/StyleSetHandle.h"
 #include "mozilla/StyleSetHandleInlines.h"
 #include "mozilla/Tuple.h"
 #include "mozilla/UniquePtr.h"
-#include "nsStyleTransformMatrix.h"
 #include "nsAutoPtr.h"
 #include "nsCOMArray.h"
 #include "nsIStyleRule.h"
@@ -3458,7 +3459,7 @@ ComputeValuesFromStyleContext(
       PropertyStyleAnimationValuePair* pair = aValues.AppendElement();
       pair->mProperty = *p;
       if (!StyleAnimationValue::ExtractComputedValue(*p, aStyleContext,
-                                                     pair->mValue)) {
+                                                     pair->mValue.mGecko)) {
         return false;
       }
     }
@@ -3468,7 +3469,7 @@ ComputeValuesFromStyleContext(
   PropertyStyleAnimationValuePair* pair = aValues.AppendElement();
   pair->mProperty = aProperty;
   return StyleAnimationValue::ExtractComputedValue(aProperty, aStyleContext,
-                                                   pair->mValue);
+                                                   pair->mValue.mGecko);
 }
 
 static bool
@@ -3583,7 +3584,7 @@ StyleAnimationValue::ComputeValue(nsCSSPropertyID aProperty,
   MOZ_ASSERT(values.Length() == 1);
   MOZ_ASSERT(values[0].mProperty == aProperty);
 
-  aComputedValue = values[0].mValue;
+  aComputedValue = values[0].mValue.mGecko;
   return true;
 }
 
@@ -3646,46 +3647,6 @@ StyleAnimationValue::ComputeValues(
                                          aTargetElement, aStyleContext,
                                          aSpecifiedValue, aUseSVGMode,
                                          aResult);
-}
-
-/* static */ bool
-StyleAnimationValue::ComputeValues(
-  nsCSSPropertyID aProperty,
-  CSSEnabledState aEnabledState,
-  nsStyleContext* aStyleContext,
-  const RawServoDeclarationBlock& aDeclarations,
-  nsTArray<PropertyStyleAnimationValuePair>& aValues)
-{
-  MOZ_ASSERT(aStyleContext->PresContext()->StyleSet()->IsServo(),
-             "Should be using ServoStyleSet if we have a"
-             " RawServoDeclarationBlock");
-
-  if (!nsCSSProps::IsEnabled(aProperty, aEnabledState)) {
-    return false;
-  }
-
-  const ServoComputedValues* previousStyle =
-    aStyleContext->StyleSource().AsServoComputedValues();
-
-  // FIXME: Servo bindings don't yet represent const-ness so we just
-  // cast it away for now.
-  auto declarations = const_cast<RawServoDeclarationBlock*>(&aDeclarations);
-  RefPtr<ServoComputedValues> computedValues =
-    aStyleContext->PresContext()->StyleSet()->AsServo()->
-      RestyleWithAddedDeclaration(declarations, previousStyle).Consume();
-  if (!computedValues) {
-    return false;
-  }
-
-  RefPtr<nsStyleContext> tmpStyleContext =
-    NS_NewStyleContext(aStyleContext, aStyleContext->PresContext(),
-                       aStyleContext->GetPseudo(),
-                       aStyleContext->GetPseudoType(),
-                       computedValues.forget(),
-                       false /* skipFixup */);
-
-  return ComputeValuesFromStyleContext(aProperty, aEnabledState,
-                                       tmpStyleContext, aValues);
 }
 
 bool
@@ -4142,7 +4103,7 @@ ExtractImageLayerSizePairList(const nsStyleImageLayers& aLayer,
 }
 
 static bool
-StyleClipBasicShapeToCSSArray(const StyleClipPath& aClipPath,
+StyleClipBasicShapeToCSSArray(const StyleShapeSource& aClipPath,
                               nsCSSValue::Array* aResult)
 {
   MOZ_ASSERT(aResult->Count() == 2,
@@ -4514,7 +4475,7 @@ StyleAnimationValue::ExtractComputedValue(nsCSSPropertyID aProperty,
         case eCSSProperty_clip_path: {
           const nsStyleSVGReset* svgReset =
             static_cast<const nsStyleSVGReset*>(styleStruct);
-          const StyleClipPath& clipPath = svgReset->mClipPath;
+          const StyleShapeSource& clipPath = svgReset->mClipPath;
           const StyleShapeSourceType type = clipPath.GetType();
 
           if (type == StyleShapeSourceType::URL) {
@@ -4815,29 +4776,10 @@ StyleAnimationValue::ExtractComputedValue(nsCSSPropertyID aProperty,
 gfxSize
 StyleAnimationValue::GetScaleValue(const nsIFrame* aForFrame) const
 {
-  MOZ_ASSERT(aForFrame);
   MOZ_ASSERT(GetUnit() == StyleAnimationValue::eUnit_Transform);
 
   nsCSSValueSharedList* list = GetCSSValueSharedListValue();
-  MOZ_ASSERT(list->mHead);
-
-  RuleNodeCacheConditions dontCare;
-  bool dontCareBool;
-  nsStyleTransformMatrix::TransformReferenceBox refBox(aForFrame);
-  Matrix4x4 transform = nsStyleTransformMatrix::ReadTransforms(
-                          list->mHead,
-                          aForFrame->StyleContext(),
-                          aForFrame->PresContext(), dontCare, refBox,
-                          aForFrame->PresContext()->AppUnitsPerDevPixel(),
-                          &dontCareBool);
-
-  Matrix transform2d;
-  bool canDraw2D = transform.CanDraw2D(&transform2d);
-  if (!canDraw2D) {
-    return gfxSize();
-  }
-
-  return ThebesMatrix(transform2d).ScaleFactors(true);
+  return nsStyleTransformMatrix::GetScaleValue(list, aForFrame);
 }
 
 StyleAnimationValue::StyleAnimationValue(int32_t aInt, Unit aUnit,
@@ -5250,4 +5192,84 @@ StyleAnimationValue::operator==(const StyleAnimationValue& aOther) const
 
   NS_NOTREACHED("incomplete case");
   return false;
+}
+
+// AnimationValue Implementation
+
+bool
+AnimationValue::operator==(const AnimationValue& aOther) const
+{
+  // It is possible to compare an empty AnimationValue with others, so both
+  // mServo and mGecko could be null while comparing.
+  MOZ_ASSERT(!mServo || mGecko.IsNull());
+  if (mServo && aOther.mServo) {
+    return Servo_AnimationValue_DeepEqual(mServo, aOther.mServo);
+  }
+  return !mServo && !aOther.mServo &&
+         mGecko == aOther.mGecko;
+}
+
+bool
+AnimationValue::operator!=(const AnimationValue& aOther) const
+{
+  return !operator==(aOther);
+}
+
+float
+AnimationValue::GetOpacity() const
+{
+  MOZ_ASSERT(!mServo != mGecko.IsNull());
+  return mServo ? Servo_AnimationValue_GetOpacity(mServo)
+                : mGecko.GetFloatValue();
+}
+
+gfxSize
+AnimationValue::GetScaleValue(const nsIFrame* aFrame) const
+{
+  MOZ_ASSERT(!mServo != mGecko.IsNull());
+  if (mServo) {
+    RefPtr<nsCSSValueSharedList> list;
+    Servo_AnimationValue_GetTransform(mServo, &list);
+    return nsStyleTransformMatrix::GetScaleValue(list, aFrame);
+  }
+  return mGecko.GetScaleValue(aFrame);
+}
+
+void
+AnimationValue::SerializeSpecifiedValue(nsCSSPropertyID aProperty,
+                                        nsAString& aString) const
+{
+  MOZ_ASSERT(!mServo != mGecko.IsNull());
+  if (mServo) {
+    Servo_AnimationValue_Serialize(mServo, aProperty, &aString);
+    return;
+  }
+
+  DebugOnly<bool> uncomputeResult =
+    StyleAnimationValue::UncomputeValue(aProperty, mGecko, aString);
+  MOZ_ASSERT(uncomputeResult, "failed to uncompute StyleAnimationValue");
+}
+
+bool
+AnimationValue::IsInterpolableWith(nsCSSPropertyID aProperty,
+                                   const AnimationValue& aToValue) const
+{
+  if (IsNull() || aToValue.IsNull()) {
+    return false;
+  }
+
+  MOZ_ASSERT(!mServo != mGecko.IsNull());
+  MOZ_ASSERT(mGecko.IsNull() == aToValue.mGecko.IsNull() &&
+             !mServo == !aToValue.mServo,
+             "Animation values should have the same style engine");
+
+  if (mServo) {
+    return Servo_AnimationValues_IsInterpolable(mServo, aToValue.mServo);
+  }
+
+  // If this is ever a performance problem, we could add a
+  // StyleAnimationValue::IsInterpolatable method, but it seems fine for now.
+  StyleAnimationValue dummy;
+  return StyleAnimationValue::Interpolate(
+           aProperty, mGecko, aToValue.mGecko, 0.5, dummy);
 }

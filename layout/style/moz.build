@@ -22,12 +22,6 @@ with Files('nsDOM*'):
 DIRS += ['xbl-marquee']
 TEST_DIRS += ['test']
 
-XPIDL_SOURCES += [
-    'nsICSSUnprefixingService.idl',
-]
-
-XPIDL_MODULE = 'layout_base'
-
 EXPORTS += [
     '!nsStyleStructList.h',
     'AnimationCommon.h',
@@ -38,6 +32,7 @@ EXPORTS += [
     'nsCSSAnonBoxList.h',
     'nsCSSCounterDescList.h',
     'nsCSSFontDescList.h',
+    'nsCSSFontFaceRule.h',
     'nsCSSKeywordList.h',
     'nsCSSKeywords.h',
     'nsCSSParser.h',
@@ -70,6 +65,7 @@ EXPORTS += [
     'nsRuleNode.h',
     'nsRuleProcessorData.h',
     'nsRuleWalker.h',
+    'nsStyleAutoArray.h',
     'nsStyleConsts.h',
     'nsStyleContext.h',
     'nsStyleCoord.h',
@@ -92,6 +88,8 @@ EXPORTS.mozilla += [
     'DeclarationBlock.h',
     'DeclarationBlockInlines.h',
     'DocumentStyleRootIterator.h',
+    'GenericSpecifiedValues.h',
+    'GenericSpecifiedValuesInlines.h',
     'HandleRefPtr.h',
     'IncrementalClearCOMRuleArray.h',
     'LayerAnimationInfo.h',
@@ -105,7 +103,12 @@ EXPORTS.mozilla += [
     'ServoCSSRuleList.h',
     'ServoDeclarationBlock.h',
     'ServoElementSnapshot.h',
+    'ServoMediaList.h',
+    'ServoMediaRule.h',
+    'ServoNamespaceRule.h',
+    'ServoPageRule.h',
     'ServoPropPrefList.h',
+    'ServoSpecifiedValues.h',
     'ServoStyleRule.h',
     'ServoStyleSet.h',
     'ServoStyleSheet.h',
@@ -121,16 +124,21 @@ EXPORTS.mozilla += [
     'StyleSheet.h',
     'StyleSheetInfo.h',
     'StyleSheetInlines.h',
+    'URLExtraData.h',
 ]
 
 EXPORTS.mozilla.dom += [
     'CSS.h',
     'CSSLexer.h',
+    'CSSMediaRule.h',
+    'CSSNamespaceRule.h',
+    'CSSPageRule.h',
     'CSSRuleList.h',
     'CSSValue.h',
     'FontFace.h',
     'FontFaceSet.h',
     'FontFaceSetIterator.h',
+    'MediaList.h',
     'MediaQueryList.h',
 ]
 
@@ -149,10 +157,12 @@ EXPORTS.mozilla.css += [
 
 UNIFIED_SOURCES += [
     'AnimationCollection.cpp',
-    'AnimationCommon.cpp',
+    'BindingStyleRule.cpp',
     'CounterStyleManager.cpp',
     'CSS.cpp',
     'CSSLexer.cpp',
+    'CSSMediaRule.cpp',
+    'CSSPageRule.cpp',
     'CSSRuleList.cpp',
     'CSSStyleSheet.cpp',
     'CSSVariableDeclarations.cpp',
@@ -164,10 +174,12 @@ UNIFIED_SOURCES += [
     'FontFace.cpp',
     'FontFaceSet.cpp',
     'FontFaceSetIterator.cpp',
+    'GroupRule.cpp',
     'ImageLoader.cpp',
     'IncrementalClearCOMRuleArray.cpp',
     'LayerAnimationInfo.cpp',
     'Loader.cpp',
+    'MediaList.cpp',
     'MediaQueryList.cpp',
     'nsAnimationManager.cpp',
     'nsComputedDOMStyle.cpp',
@@ -178,6 +190,7 @@ UNIFIED_SOURCES += [
     'nsCSSProps.cpp',
     'nsCSSPseudoClasses.cpp',
     'nsCSSPseudoElements.cpp',
+    'nsCSSRuleProcessor.cpp',
     'nsCSSRules.cpp',
     'nsCSSScanner.cpp',
     'nsCSSValue.cpp',
@@ -210,34 +223,24 @@ UNIFIED_SOURCES += [
     'ServoCSSRuleList.cpp',
     'ServoDeclarationBlock.cpp',
     'ServoElementSnapshot.cpp',
+    'ServoMediaList.cpp',
+    'ServoMediaRule.cpp',
+    'ServoNamespaceRule.cpp',
+    'ServoPageRule.cpp',
+    'ServoSpecifiedValues.cpp',
     'ServoStyleRule.cpp',
     'ServoStyleSet.cpp',
     'ServoStyleSheet.cpp',
     'StyleAnimationValue.cpp',
     'StyleRule.cpp',
     'StyleSheet.cpp',
-    'SVGAttrAnimationRuleProcessor.cpp',
+    'URLExtraData.cpp',
 ]
 
-# - BindingStyleRule.cpp doesn't _really_ needs to be built separately,
-# except insofar as it shifts unified build boundaries, causing
-# Unified_cpp_layout_style4.cpp to include nsStyleCoord.cpp, which
-# includes, via nsStyleCoord.h, <type_traits>, which ends up including
-# <xutility>, which fails in much the way described in
-# <https://bugzilla.mozilla.org/show_bug.cgi?id=1331102>.
-# - nsCSSRuleProcessor.cpp needs to be built separately because it uses
-# plarena.h.
 # - nsLayoutStylesheetCache.cpp needs to be built separately because it uses
 # nsExceptionHandler.h, which includes windows.h.
 SOURCES += [
-    'BindingStyleRule.cpp',
-    'nsCSSRuleProcessor.cpp',
     'nsLayoutStylesheetCache.cpp',
-]
-
-EXTRA_COMPONENTS += [
-    'CSSUnprefixingService.js',
-    'CSSUnprefixingService.manifest',
 ]
 
 include('/ipc/chromium/chromium-config.mozbuild')

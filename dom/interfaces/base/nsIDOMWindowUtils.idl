@@ -962,8 +962,6 @@ interface nsIDOMWindowUtils : nsISupports {
    */
   void suppressEventHandling(in boolean aSuppress);
 
-  void clearMozAfterPaintEvents();
-
   /**
    * Disable or enable non synthetic test mouse events on *all* windows.
    *
@@ -1457,12 +1455,6 @@ interface nsIDOMWindowUtils : nsISupports {
                              [retval, array, size_is(frameCount)] out float frameIntervals);
 
   /**
-   * Signals that we're begining to tab switch. This is used by painting code to
-   * determine total tab switch time.
-   */
-  void beginTabSwitch();
-
-  /**
    * The DPI of the display
    */
   readonly attribute float displayDPI;
@@ -1566,10 +1558,22 @@ interface nsIDOMWindowUtils : nsISupports {
                                   in AString value2);
 
   /**
-   * Wrap an nsIFile in an DOM File
-   * Returns a File object.
+   * Returns the animation type of the specified property (e.g. 'coord').
+   *
+   * @param aProperty A longhand CSS property (e.g. 'background-color').
    */
-  nsISupports wrapDOMFile(in nsIFile aFile);
+  AString getAnimationTypeForLonghand(in AString aProperty);
+
+  /**
+   * Returns the computed style for the specified property of given pseudo type
+   * on the given element after removing styles from declarative animations.
+   * @param aElement - A target element
+   * @param aPseudoElement - A pseudo type (e.g. '::before' or null)
+   * @param aProperty - A longhand CSS property (e.g. 'background-color')
+   */
+  AString getUnanimatedComputedStyle(in nsIDOMElement aElement,
+                                     in AString aPseudoElement,
+                                     in AString aProperty);
 
   /**
    * Get the type of the currently focused html input, if any.
@@ -1983,6 +1987,26 @@ interface nsIDOMWindowUtils : nsISupports {
    * timeouts.
    */
   boolean isTimeoutTracking(in unsigned long timeoutId);
+
+  /**
+   * Adds an EventStates bit to the element.
+   *
+   * The state string must be one of the following:
+   *   * (none yet; but for example "higlighted" for NS_EVENT_STATE_HIGHLIGHTED)
+   *
+   * The supported state strings are defined in kManuallyManagedStates
+   * in nsDOMWindowUtils.cpp.
+   */
+  void addManuallyManagedState(in nsIDOMElement element,
+                               in AString state);
+
+  /**
+   * Removes the specified EventStates bits from the element.
+   *
+   * See above for the strings that can be passed for |state|.
+   */
+  void removeManuallyManagedState(in nsIDOMElement element,
+                                  in AString state);
 
   // These consts are only for testing purposes.
   const long DEFAULT_MOUSE_POINTER_ID = 0;

@@ -4,6 +4,8 @@
 
 // Note: this file is included in aboutDialog.xul if MOZ_UPDATER is defined.
 
+/* import-globals-from aboutDialog.js */
+
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/DownloadUtils.jsm");
 
@@ -386,7 +388,7 @@ appUpdater.prototype =
             return;
           }
           Services.obs.removeObserver(arguments.callee, "update-staged");
-        }, "update-staged", false);
+        }, "update-staged");
       } else {
         this.selectPanel("apply");
       }

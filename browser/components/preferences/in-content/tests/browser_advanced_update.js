@@ -85,18 +85,15 @@ function resetPreferences() {
 
 function formatInstallDate(sec) {
   var date = new Date(sec);
-  const locale = Cc["@mozilla.org/chrome/chrome-registry;1"]
-                 .getService(Ci.nsIXULChromeRegistry)
-                 .getSelectedLocale("global", true);
   const dtOptions = { year: "numeric", month: "long", day: "numeric",
                       hour: "numeric", minute: "numeric", second: "numeric" };
-  return date.toLocaleString(locale, dtOptions);
+  return date.toLocaleString(undefined, dtOptions);
 }
 
 registerCleanupFunction(resetPreferences);
 
 add_task(function*() {
-  yield openPreferencesViaOpenPreferencesAPI("advanced", "updateTab", { leaveOpen: true });
+  yield openPreferencesViaOpenPreferencesAPI("advanced", { leaveOpen: true });
   resetPreferences();
   Services.prefs.setBoolPref("browser.search.update", false);
 
@@ -115,7 +112,7 @@ add_task(function*() {
 add_task(function*() {
   mockUpdateManager.register();
 
-  yield openPreferencesViaOpenPreferencesAPI("advanced", "updateTab", { leaveOpen: true });
+  yield openPreferencesViaOpenPreferencesAPI("advanced", { leaveOpen: true });
   let doc = gBrowser.selectedBrowser.contentDocument;
 
   let showBtn = doc.getElementById("showUpdateHistory");

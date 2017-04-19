@@ -69,11 +69,6 @@ public:
   virtual IMEState GetDesiredIMEState() override;
 
   // Overriden nsIFormControl methods
-  NS_IMETHOD_(uint32_t) GetType() const override
-  {
-    return NS_FORM_OBJECT;
-  }
-
   NS_IMETHOD Reset() override;
   NS_IMETHOD SubmitNamesValues(HTMLFormSubmission *aFormSubmission) override;
 
@@ -98,7 +93,7 @@ public:
 
   nsresult CopyInnerTo(Element* aDest);
 
-  void StartObjectLoad() { StartObjectLoad(true); }
+  void StartObjectLoad() { StartObjectLoad(true, false); }
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLObjectElement,
                                            nsGenericHTMLFormElement)
@@ -247,12 +242,16 @@ public:
     return GetContentDocument(aSubjectPrincipal);
   }
 
-private:
   /**
    * Calls LoadObject with the correct arguments to start the plugin load.
    */
-  void StartObjectLoad(bool aNotify);
+  void StartObjectLoad(bool aNotify, bool aForceLoad);
 
+protected:
+  // Override for nsImageLoadingContent.
+  nsIContent* AsContent() override { return this; }
+
+private:
   /**
    * Returns if the element is currently focusable regardless of it's tabindex
    * value. This is used to know the default tabindex value.
@@ -269,7 +268,7 @@ private:
   virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
-                                    nsRuleData* aData);
+                                    GenericSpecifiedValues* aGenericData);
 
   bool mIsDoneAddingChildren;
 };

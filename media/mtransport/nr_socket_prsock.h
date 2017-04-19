@@ -280,8 +280,7 @@ private:
   void sendto_i(const net::NetAddr &addr, nsAutoPtr<DataBuffer> buf);
   void close_i();
 #if defined(MOZILLA_INTERNAL_API) && !defined(MOZILLA_XPCOMRT_API)
-  static void release_child_i(nsIUDPSocketChild* aChild, nsCOMPtr<nsIEventTarget> ststhread);
-  static void release_use_s();
+  static void release_child_i(nsIUDPSocketChild* aChild);
 #endif
   // STS thread executor
   void recv_callback_s(RefPtr<nr_udp_message> msg);
@@ -375,7 +374,7 @@ private:
                uint32_t tracking_number);
   void close_i();
 
-  static void release_child_i(dom::TCPSocketChild* aChild, nsCOMPtr<nsIEventTarget> ststhread);
+  static void release_child_i(dom::TCPSocketChild* aChild);
 
   // STS thread executor
   void message_sent_s(uint32_t bufferedAmount, uint32_t tracking_number);

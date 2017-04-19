@@ -102,7 +102,6 @@ enum class GLFeature {
     get_integer64_indexed,
     get_query_object_i64v,
     get_query_object_iv,
-    get_string_indexed,
     gpu_shader4,
     instanced_arrays,
     instanced_non_arrays,
@@ -121,6 +120,7 @@ enum class GLFeature {
     read_buffer,
     renderbuffer_color_float,
     renderbuffer_color_half_float,
+    robust_buffer_access_behavior,
     robustness,
     sRGB_framebuffer,
     sRGB_texture,
@@ -150,7 +150,6 @@ enum class GLFeature {
 
 enum class ContextProfile : uint8_t {
     Unknown = 0,
-    OpenGL, // only for IsAtLeast's <profile> parameter
     OpenGLCore,
     OpenGLCompatibility,
     OpenGLES
@@ -200,10 +199,6 @@ public:
     MOZ_DECLARE_WEAKREFERENCE_TYPENAME(GLContext)
 
 // -----------------------------------------------------------------------------
-// basic enums
-public:
-
-// -----------------------------------------------------------------------------
 // basic getters
 public:
 
@@ -222,6 +217,8 @@ public:
     virtual bool IsWARP() const {
         return false;
     }
+
+    virtual void GetWSIInfo(nsCString* const out) const = 0;
 
     /**
      * Return true if we are running on a OpenGL core profile context
@@ -242,48 +239,12 @@ public:
         return mProfile == ContextProfile::OpenGLCompatibility;
     }
 
-    /**
-     * Return true if the context is a true OpenGL ES context or an ANGLE context
-     */
     inline bool IsGLES() const {
         MOZ_ASSERT(mProfile != ContextProfile::Unknown, "unknown context profile");
 
         return mProfile == ContextProfile::OpenGLES;
     }
 
-    static const char* GetProfileName(ContextProfile profile)
-    {
-        switch (profile)
-        {
-            case ContextProfile::OpenGL:
-                return "OpenGL";
-            case ContextProfile::OpenGLCore:
-                return "OpenGL Core";
-            case ContextProfile::OpenGLCompatibility:
-                return "OpenGL Compatibility";
-            case ContextProfile::OpenGLES:
-                return "OpenGL ES";
-            default:
-                break;
-        }
-
-        MOZ_ASSERT(profile != ContextProfile::Unknown, "unknown context profile");
-        return "OpenGL unknown profile";
-    }
-
-    /**
-     * Return true if we are running on a OpenGL core profile context
-     */
-    const char* ProfileString() const {
-        return GetProfileName(mProfile);
-    }
-
-    /**
-     * Return true if the context is compatible with given parameters
-     *
-     * IsAtLeast(ContextProfile::OpenGL, N) is exactly same as
-     * IsAtLeast(ContextProfile::OpenGLCore, N) || IsAtLeast(ContextProfile::OpenGLCompatibility, N)
-     */
     inline bool IsAtLeast(ContextProfile profile, unsigned int version) const
     {
         MOZ_ASSERT(profile != ContextProfile::Unknown, "IsAtLeast: bad <profile> parameter");
@@ -292,11 +253,6 @@ public:
 
         if (version > mVersion) {
             return false;
-        }
-
-        if (profile == ContextProfile::OpenGL) {
-            return mProfile == ContextProfile::OpenGLCore ||
-                   mProfile == ContextProfile::OpenGLCompatibility;
         }
 
         return profile == mProfile;
@@ -309,10 +265,6 @@ public:
      */
     inline uint32_t Version() const {
         return mVersion;
-    }
-
-    const char* VersionString() const {
-        return mVersionString.get();
     }
 
     inline uint32_t ShadingLanguageVersion() const {
@@ -362,26 +314,12 @@ protected:
      * the context is an OpenGL 2.1 context, mVersion value will be 210.
      */
     uint32_t mVersion;
-    nsCString mVersionString;
     ContextProfile mProfile;
 
     uint32_t mShadingLanguageVersion;
 
     GLVendor mVendor;
     GLRenderer mRenderer;
-
-    void SetProfileVersion(ContextProfile profile, uint32_t version) {
-        MOZ_ASSERT(!mSymbols.fBindFramebuffer,
-                   "SetProfileVersion can only be called before initialization!");
-        MOZ_ASSERT(profile != ContextProfile::Unknown &&
-                   profile != ContextProfile::OpenGL,
-                   "Invalid `profile` for SetProfileVersion");
-        MOZ_ASSERT(version >= 100, "Invalid `version` for SetProfileVersion");
-
-        mVersion = version;
-        mProfile = profile;
-    }
-
 
 // -----------------------------------------------------------------------------
 // Extensions management
@@ -418,6 +356,7 @@ public:
         ARB_ES2_compatibility,
         ARB_ES3_compatibility,
         ARB_color_buffer_float,
+        ARB_compatibility,
         ARB_copy_buffer,
         ARB_depth_texture,
         ARB_draw_buffers,
@@ -432,6 +371,7 @@ public:
         ARB_map_buffer_range,
         ARB_occlusion_query2,
         ARB_pixel_buffer_object,
+        ARB_robust_buffer_access_behavior,
         ARB_robustness,
         ARB_sampler_objects,
         ARB_seamless_cube_map,
@@ -486,6 +426,8 @@ public:
         IMG_texture_compression_pvrtc,
         IMG_texture_npot,
         KHR_debug,
+        KHR_robust_buffer_access_behavior,
+        KHR_robustness,
         KHR_texture_compression_astc_hdr,
         KHR_texture_compression_astc_ldr,
         NV_draw_instanced,
@@ -568,15 +510,6 @@ private:
      * Is this feature supported using the core (unsuffixed) symbols?
      */
     bool IsFeatureProvidedByCoreSymbols(GLFeature feature);
-
-// -----------------------------------------------------------------------------
-// Robustness handling
-private:
-    /**
-     * The derived class is expected to provide information on whether or not it
-     * supports robustness.
-     */
-    virtual bool SupportsRobustness() const = 0;
 
 public:
 // -----------------------------------------------------------------------------
@@ -3186,7 +3119,7 @@ public:
     }
 
 // -----------------------------------------------------------------------------
-// get_string_indexed
+// GL3+, ES3+
 
     const GLubyte* fGetStringi(GLenum name, GLuint index) {
         BEFORE_GL_CALL;

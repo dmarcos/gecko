@@ -142,6 +142,25 @@ protected:
 
   virtual bool IncludeInContext(nsINode *aNode);
 
+  class MOZ_STACK_CLASS AutoReleaseDocumentIfNeeded final
+  {
+  public:
+    explicit AutoReleaseDocumentIfNeeded(nsDocumentEncoder* aEncoder)
+      : mEncoder(aEncoder)
+    {
+    }
+
+    ~AutoReleaseDocumentIfNeeded()
+    {
+      if (mEncoder->mFlags & RequiresReinitAfterOutput) {
+        mEncoder->mDocument = nullptr;
+      }
+    }
+
+  private:
+    nsDocumentEncoder* mEncoder;
+  };
+
   nsCOMPtr<nsIDocument>          mDocument;
   nsCOMPtr<nsISelection>         mSelection;
   RefPtr<nsRange>              mRange;
@@ -1009,6 +1028,8 @@ nsDocumentEncoder::EncodeToStringWithMaxLength(uint32_t aMaxLength,
   if (!mDocument)
     return NS_ERROR_NOT_INITIALIZED;
 
+  AutoReleaseDocumentIfNeeded autoReleaseDocument(this);
+
   aOutputString.Truncate();
 
   nsString output;
@@ -1403,6 +1424,9 @@ nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
     return NS_OK;
   }
 
+  // XXX We should try to get rid of the Selection object here.
+  // XXX bug 1245883
+
   // also consider ourselves in a text widget if we can't find an html document
   nsCOMPtr<nsIHTMLDocument> htmlDoc = do_QueryInterface(mDocument);
   if (!(htmlDoc && mDocument->IsHTMLDocument())) {
@@ -1430,7 +1454,10 @@ nsHTMLCopyEncoder::SetSelection(nsISelection* aSelection)
     rv = PromoteRange(myRange);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = mSelection->AddRange(myRange);
+    ErrorResult result;
+    nsRange* r = static_cast<nsRange*>(myRange.get());
+    mSelection->AsSelection()->AddRangeInternal(*r, mDocument, result);
+    rv = result.StealNSResult();
     NS_ENSURE_SUCCESS(rv, rv);
   }
 

@@ -353,7 +353,7 @@ DragDataProducer::GetNodeString(nsIContent* inNode,
 
   // use a range to get the text-equivalent of the node
   nsCOMPtr<nsIDocument> doc = node->OwnerDoc();
-  mozilla::ErrorResult rv;
+  mozilla::IgnoredErrorResult rv;
   RefPtr<nsRange> range = doc->CreateRange(rv);
   if (range) {
     range->SelectNode(*node, rv);
@@ -466,7 +466,7 @@ DragDataProducer::Produce(DataTransfer* aDataTransfer,
       // Note that while <object> elements implement nsIFormControl, we should
       // really allow dragging them if they happen to be images.
       nsCOMPtr<nsIFormControl> form(do_QueryInterface(mTarget));
-      if (form && !mIsAltKeyPressed && form->GetType() != NS_FORM_OBJECT) {
+      if (form && !mIsAltKeyPressed && form->ControlType() != NS_FORM_OBJECT) {
         *aCanDrag = false;
         return NS_OK;
       }

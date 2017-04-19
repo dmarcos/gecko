@@ -620,7 +620,7 @@ function sendWheelAndPaint(aTarget, aOffsetX, aOffsetY, aEvent, aCallback, aWind
         });
       }
 
-      SpecialPowers.Services.obs.addObserver(waitForPaints, "apz-repaints-flushed", false);
+      SpecialPowers.Services.obs.addObserver(waitForPaints, "apz-repaints-flushed");
       if (!utils.flushApzRepaints(aWindow)) {
         waitForPaints();
       }
@@ -2131,7 +2131,7 @@ function synthesizeDrop(aSrcElement, aDestElement, aDragData, aDropEffect, aWind
     return synthesizeDropAfterDragOver(result, dataTransfer, aDestElement,
                                        aDestWindow, aDragEvent);
   } finally {
-    ds.endDragSession(true);
+    ds.endDragSession(true, _parseModifiers(aDragEvent));
   }
 }
 

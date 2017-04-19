@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include "CompositorTypes.h"
+#include "gfxPrefs.h"
 #include "GLContext.h"
 #include "GLBlitHelper.h"
 #include "GLReadTexImageHelper.h"
@@ -471,7 +472,7 @@ GLScreenBuffer::AssureBlitted()
 void
 GLScreenBuffer::Morph(UniquePtr<SurfaceFactory> newFactory)
 {
-    MOZ_ASSERT(newFactory);
+    MOZ_RELEASE_ASSERT(newFactory, "newFactory must not be null");
     mFactory = Move(newFactory);
 }
 

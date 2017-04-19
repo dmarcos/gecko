@@ -104,7 +104,7 @@ function areContentSyscallsSandboxed(level) {
       syscallsSandboxMinLevel = 1;
       break;
     case "Linux":
-      syscallsSandboxMinLevel = 2;
+      syscallsSandboxMinLevel = 1;
       break;
     default:
       Assert.ok(false, "Unknown OS");
@@ -134,28 +134,15 @@ add_task(function*() {
   // If the pref isn't set and we're running on Linux on !isNightly(),
   // exit without failing. The Linux content sandbox is only enabled
   // on Nightly at this time.
+  // eslint-disable-next-line mozilla/use-default-preference-values
   try {
     level = prefs.getIntPref("security.sandbox.content.level");
   } catch (e) {
     prefExists = false;
   }
 
-  // Special case Linux on !isNightly
-  if (isLinux() && !isNightly()) {
-    todo(prefExists, "pref security.sandbox.content.level exists");
-    if (!prefExists) {
-      return;
-    }
-  }
-
   ok(prefExists, "pref security.sandbox.content.level exists");
   if (!prefExists) {
-    return;
-  }
-
-  // Special case Linux on !isNightly
-  if (isLinux() && !isNightly()) {
-    todo(level > 0, "content sandbox enabled for !nightly.");
     return;
   }
 
@@ -167,12 +154,6 @@ add_task(function*() {
   }
 
   let areSyscallsSandboxed = areContentSyscallsSandboxed(level);
-
-  // Special case Linux on !isNightly
-  if (isLinux() && !isNightly()) {
-    todo(areSyscallsSandboxed, "content syscall sandbox enabled for !nightly.");
-    return;
-  }
 
   // Content sandbox enabled, but level doesn't include syscall sandboxing.
   ok(areSyscallsSandboxed, "content syscall sandboxing is enabled.");

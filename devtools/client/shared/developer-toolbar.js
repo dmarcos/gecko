@@ -79,99 +79,6 @@ var CommandUtils = {
   },
 
   /**
-   * Read a toolbarSpec from preferences
-   * @param pref The name of the preference to read
-   */
-  getCommandbarSpec: function (pref) {
-    let value = prefBranch.getComplexValue(pref, Ci.nsISupportsString).data;
-    return JSON.parse(value);
-  },
-
-  /**
-   * Create a list of props for React components that manage the state of the buttons.
-   *
-   * @param {Array} toolbarSpec - An array of strings each of which is a GCLI command.
-   * @param {Object} target
-   * @param {Object} document - Used to listen to unload event of the window.
-   * @param {Requisition} requisition
-   * @param {Function} createButtonState - A function that provides a common interface
-   *                                       to create a button for the toolbox.
-   *
-   * @return {Array} List of ToolboxButton objects..
-   *
-   * Warning: this method uses the unload event of the window that owns the
-   * buttons that are of type checkbox. this means that we don't properly
-   * unregister event handlers until the window is destroyed.
-   */
-  createCommandButtons: function (toolbarSpec, target, document, requisition,
-                                  createButtonState) {
-    return util.promiseEach(toolbarSpec, typed => {
-      // Ask GCLI to parse the typed string (doesn't execute it)
-      return requisition.update(typed).then(() => {
-        // Ignore invalid commands
-        let command = requisition.commandAssignment.value;
-        if (command == null) {
-          throw new Error("No command '" + typed + "'");
-        }
-        if (!command.buttonId) {
-          throw new Error("Attempting to add a button to the toolbar, and the command " +
-                          "did not have an id.");
-        }
-        // Create the ToolboxButton.
-        let button = createButtonState({
-          id: command.buttonId,
-          className: command.buttonClass,
-          description: command.tooltipText || command.description,
-          onClick: requisition.updateExec.bind(requisition, typed)
-        });
-
-        // Allow the command button to be toggleable.
-        if (command.state) {
-          /**
-           * The onChange event should be called with an event object that
-           * contains a target property which specifies which target the event
-           * applies to. For legacy reasons the event object can also contain
-           * a tab property.
-           */
-          const onChange = (eventName, ev) => {
-            if (ev.target == target || ev.tab == target.tab) {
-              let updateChecked = (checked) => {
-                // This will emit a ToolboxButton update event.
-                button.isChecked = checked;
-              };
-
-              // isChecked would normally be synchronous. An annoying quirk
-              // of the 'csscoverage toggle' command forces us to accept a
-              // promise here, but doing Promise.resolve(reply).then(...) here
-              // makes this async for everyone, which breaks some tests so we
-              // treat non-promise replies separately to keep then synchronous.
-              let reply = command.state.isChecked(target);
-              if (typeof reply.then == "function") {
-                reply.then(updateChecked, console.error);
-              } else {
-                updateChecked(reply);
-              }
-            }
-          };
-
-          command.state.onChange(target, onChange);
-          onChange("", { target: target });
-
-          document.defaultView.addEventListener("unload", function (event) {
-            if (command.state.offChange) {
-              command.state.offChange(target, onChange);
-            }
-          }, { once: true });
-        }
-
-        requisition.clear();
-
-        return button;
-      });
-    });
-  },
-
-  /**
    * A helper function to create the environment object that is passed to
    * GCLI commands.
    * @param targetContainer An object containing a 'target' property which
@@ -242,6 +149,16 @@ function DeveloperToolbar(chromeWindow) {
 
   // Will be setup when show() is called
   this.target = null;
+
+  // The `_showPromise` will be set once `show` is called the first time, and resolved
+  // when the toolbar is shown. Since it will be set to `null` only when `hide` method
+  // is called, multiple calls to `show` method will returns this promise instead of
+  // process again all the initialization.
+  this._showPromise = null;
+  // The `_hidePromise` will be set once `hide` is called, and resolved when the method
+  // has finished. Once the toolbar is hidden, both `_showPromise` and `_hidePromise`
+  // will be set to `null`.
+  this._hidePromise = null;
 
   this._doc = chromeWindow.document;
 
@@ -381,13 +298,35 @@ DeveloperToolbar.prototype.toggle = function () {
 
 /**
  * Called from browser.xul in response to menu-click or keyboard shortcut to
- * toggle the toolbar
+ * toggle the toolbar.
+ * The method returns a promise that would be resolved once focused; if the toolbar is not
+ * visible yet it will be automatically shown.
  */
 DeveloperToolbar.prototype.focus = function () {
   if (this.visible) {
-    this._input.focus();
-    return promise.resolve();
+    // If the toolbar was just inserted, the <textbox> may still have
+    // its binding in process of being applied and not be focusable yet
+    let waitForBinding = defer();
+
+    let checkBinding = () => {
+      // Bail out if the toolbar has been destroyed in the meantime
+      if (!this._input) {
+        waitForBinding.reject();
+        return;
+      }
+      // mInputField is a xbl field of <xul:textbox>
+      if (typeof this._input.mInputField != "undefined") {
+        this._input.focus();
+        waitForBinding.resolve();
+      } else {
+        this._input.ownerDocument.defaultView.setTimeout(checkBinding, 50);
+      }
+    };
+    checkBinding();
+
+    return waitForBinding.promise;
   }
+
   return this.show(true);
 };
 
@@ -423,7 +362,12 @@ DeveloperToolbar.introShownThisSession = false;
  * Show the developer toolbar
  */
 DeveloperToolbar.prototype.show = function (focus) {
-  if (this._showPromise != null) {
+  // if `_showPromise` is set, just returns it instead of process all the initialization
+  // again; ensuring we're focusing the element too if `focus` argument is set to `true`.
+  if (this._showPromise !== null) {
+    if (focus) {
+      return this.focus();
+    }
     return this._showPromise;
   }
 
@@ -523,25 +467,9 @@ DeveloperToolbar.prototype.show = function (focus) {
     this._element.hidden = false;
 
     if (focus) {
-      // If the toolbar was just inserted, the <textbox> may still have
-      // its binding in process of being applied and not be focusable yet
-      let waitForBinding = () => {
-        // Bail out if the toolbar has been destroyed in the meantime
-        if (!this._input) {
-          return;
-        }
-        // mInputField is a xbl field of <xul:textbox>
-        if (typeof this._input.mInputField != "undefined") {
-          this._input.focus();
-          this._notify(NOTIFICATIONS.SHOW);
-        } else {
-          this._input.ownerDocument.defaultView.setTimeout(waitForBinding, 50);
-        }
-      };
-      waitForBinding();
-    } else {
-      this._notify(NOTIFICATIONS.SHOW);
+      yield this.focus();
     }
+    this._notify(NOTIFICATIONS.SHOW);
 
     if (!DeveloperToolbar.introShownThisSession) {
       let intro = require("gcli/ui/intro");
@@ -550,8 +478,6 @@ DeveloperToolbar.prototype.show = function (focus) {
                            this.outputPanel);
       DeveloperToolbar.introShownThisSession = true;
     }
-
-    this._showPromise = null;
   }).bind(this));
 
   return this._showPromise;
@@ -561,15 +487,19 @@ DeveloperToolbar.prototype.show = function (focus) {
  * Hide the developer toolbar.
  */
 DeveloperToolbar.prototype.hide = function () {
-  // If we're already in the process of hiding, just use the other promise
-  if (this._hidePromise != null) {
+  // If we're already in the process of hiding, just returns the promise
+  if (this._hidePromise !== null) {
     return this._hidePromise;
   }
 
-  // show() is async, so ensure we don't need to wait for show() to finish
-  let waitPromise = this._showPromise || promise.resolve();
+  // If `_showPromise` is `null`, it means `show` method was never called, so just
+  // returns a resolved promise.
+  if (this._showPromise === null) {
+    return promise.resolve();
+  }
 
-  this._hidePromise = waitPromise.then(() => {
+  // show() is async, so ensure we don't need to wait for show() to finish
+  this._hidePromise = this._showPromise.then(() => {
     this._element.hidden = true;
 
     Services.prefs.setBoolPref("devtools.toolbar.visible", false);
@@ -580,6 +510,9 @@ DeveloperToolbar.prototype.hide = function () {
     this._telemetry.toolClosed("developertoolbar");
     this._notify(NOTIFICATIONS.HIDE);
 
+    // The developer toolbar is now closed, is neither shown or in process of hiding,
+    // so we're set to `null` both `_showPromise` and `_hidePromise`.
+    this._showPromise = null;
     this._hidePromise = null;
   });
 
@@ -692,7 +625,7 @@ DeveloperToolbar.prototype.destroy = function () {
 DeveloperToolbar.prototype._notify = function (topic) {
   let data = { toolbar: this };
   data.wrappedJSObject = data;
-  Services.obs.notifyObservers(data, topic, null);
+  Services.obs.notifyObservers(data, topic);
 };
 
 /**
@@ -1086,7 +1019,7 @@ OutputPanel.prototype._update = function () {
 
   // Empty this._div
   while (this._div.hasChildNodes()) {
-    this._div.removeChild(this._div.firstChild);
+    this._div.firstChild.remove();
   }
 
   if (this.displayedOutput.data != null) {
@@ -1097,7 +1030,7 @@ OutputPanel.prototype._update = function () {
       }
 
       while (this._div.hasChildNodes()) {
-        this._div.removeChild(this._div.firstChild);
+        this._div.firstChild.remove();
       }
 
       let links = node.querySelectorAll("*[href]");

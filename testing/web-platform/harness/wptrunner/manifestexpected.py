@@ -116,6 +116,10 @@ class ExpectedManifest(ManifestItem):
         return bool_prop("restart-after", self)
 
     @property
+    def leaks(self):
+        return bool_prop("leaks", self)
+
+    @property
     def tags(self):
         return tags(self)
 
@@ -132,6 +136,10 @@ class DirectoryManifest(ManifestItem):
     @property
     def restart_after(self):
         return bool_prop("restart-after", self)
+
+    @property
+    def leaks(self):
+        return bool_prop("leaks", self)
 
     @property
     def tags(self):
@@ -177,6 +185,10 @@ class TestNode(ManifestItem):
     @property
     def restart_after(self):
         return bool_prop("restart-after", self)
+
+    @property
+    def leaks(self):
+        return bool_prop("leaks", self)
 
     @property
     def tags(self):
@@ -237,18 +249,16 @@ def get_manifest(metadata_root, test_path, url_base, run_info):
     except IOError:
         return None
 
-def get_dir_manifest(metadata_root, path, run_info):
+def get_dir_manifest(path, run_info):
     """Get the ExpectedManifest for a particular test path, or None if there is no
     metadata stored for that test path.
 
-    :param metadata_root: Absolute path to the root of the metadata directory
-    :param path: Path to the ini file relative to the metadata root
+    :param path: Full path to the ini file
     :param run_info: Dictionary of properties of the test run for which the expectation
                      values should be computed.
     """
-    full_path = os.path.join(metadata_root, path)
     try:
-        with open(full_path) as f:
+        with open(path) as f:
             return static.compile(f,
                                   run_info,
                                   data_cls_getter=lambda x,y: DirectoryManifest)

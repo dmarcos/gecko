@@ -50,7 +50,7 @@ public:
     return Result::FATAL_ERROR_LIBRARY_FAILURE;
   }
 
-  Result IsChainValid(const DERArray&, Time) override
+  Result IsChainValid(const DERArray&, Time, const CertPolicyId&) override
   {
     return Result::FATAL_ERROR_LIBRARY_FAILURE;
   }
@@ -197,10 +197,16 @@ CTLogVerifier::Verify(const LogEntry& entry,
   if (rv != Success) {
     return rv;
   }
+
+  // sct.extensions may be empty.  If it is, sctExtensionsInput will remain in
+  // its default state, which is valid but of length 0.
   Input sctExtensionsInput;
-  rv = BufferToInput(sct.extensions, sctExtensionsInput);
-  if (rv != Success) {
-    return rv;
+  if (sct.extensions.length() > 0) {
+    rv = sctExtensionsInput.Init(sct.extensions.begin(),
+                                 sct.extensions.length());
+    if (rv != Success) {
+      return rv;
+    }
   }
 
   Buffer serializedData;

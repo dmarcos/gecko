@@ -22,21 +22,7 @@
    type of icon displayed. This rule must be defined before the others in order
    for its list-style-image to be overridden. */
 .notification-anchor-icon {
-%ifdef MOZ_WIDGET_GTK
-  list-style-image: url(moz-icon://stock/gtk-dialog-info?size=16);
-%else
-  list-style-image: url(chrome://global/skin/icons/information-16.png);
-%endif
-}
-
-@media (min-resolution: 1.1dppx) {
-  .notification-anchor-icon {
-%ifdef MOZ_WIDGET_GTK
-    list-style-image: url(moz-icon://stock/gtk-dialog-info?size=dialog);
-%else
-    list-style-image: url(chrome://global/skin/icons/information-32.png);
-%endif
-  }
+  list-style-image: url(chrome://browser/skin/notification-icons.svg#default-info);
 }
 
 .notification-anchor-icon:not(.plugin-blocked):-moz-lwtheme,
@@ -46,6 +32,19 @@
 }
 
 /* INDIVIDUAL NOTIFICATIONS */
+
+.focus-tab-by-prompt-icon {
+  list-style-image: url(chrome://browser/skin/notification-icons.svg#focus-tab-by-prompt);
+}
+
+.popup-notification-icon[popupid="persistent-storage"],
+.persistent-storage-icon {
+  list-style-image: url(chrome://browser/skin/notification-icons.svg#persistent-storage);
+}
+
+.persistent-storage-icon.blocked-permission-icon {
+  list-style-image: url(chrome://browser/skin/notification-icons.svg#persistent-storage-blocked);
+}
 
 .popup-notification-icon[popupid="web-notifications"],
 .desktop-notification-icon {
@@ -320,3 +319,11 @@ html|*#webRTC-previewVideo {
   }
 }
 %endif
+
+/* UPDATE */
+.popup-notification-icon[popupid="update-available"],
+.popup-notification-icon[popupid="update-manual"],
+.popup-notification-icon[popupid="update-restart"] {
+  background: #74BF43 url(chrome://browser/skin/notification-icons.svg#update) no-repeat center;
+  border-radius: 50%;
+}

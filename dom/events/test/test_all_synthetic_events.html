@@ -116,14 +116,6 @@ const kEventConstructors = {
                                                          return new DeviceProximityEvent(aName, aProps);
                                                        },
                                              },
-  DeviceStorageAreaChangedEvent:             { create: function (aName, aProps) {
-                                                         return new DeviceStorageAreaChangedEvent(aName, aProps);
-                                                       },
-                                             },
-  DeviceStorageChangeEvent:                  { create: function (aName, aProps) {
-                                                         return new DeviceStorageChangeEvent(aName, aProps);
-                                                       },
-                                             },
   DownloadEvent:                             { create: function (aName, aProps) {
                                                          return new DownloadEvent(aName, aProps);
                                                        },
@@ -200,6 +192,10 @@ const kEventConstructors = {
                                                            messageType: "license-request",
                                                            message: new ArrayBuffer(0)
                                                          });
+                                                       },
+                                             },
+  MediaQueryListEvent:                       { create: function (aName, aProps) {
+                                                         return new MediaQueryListEvent(aName, aProps);
                                                        },
                                              },
   MediaStreamEvent:                          { create: function (aName, aProps) {
@@ -338,13 +334,6 @@ const kEventConstructors = {
                                                          return e;
                                                        },
                                              },
-  ServiceWorkerMessageEvent:                 { create: function (aName, aProps) {
-                                                         var e = new ServiceWorkerMessageEvent("serviceworkermessageevent", { bubbles: aProps.bubbles,
-                                                             cancelable: aProps.cancelable, data: aProps.data, origin: aProps.origin,
-                                                             lastEventId: aProps.lastEventId, source: aProps.source });
-                                                         return e;
-                                                       },
-                                             },
   SimpleGestureEvent:                        { create: function (aName, aProps) {
                                                          var e = document.createEvent("simplegestureevent");
                                                          e.initSimpleGestureEvent(aName, aProps.bubbles, aProps.cancelable,
@@ -396,13 +385,6 @@ const kEventConstructors = {
                                                        },
                                                chromeOnly: true,
                                              },
-  SVGZoomEvent:                              { create: function (aName, aProps) {
-                                                         var e = document.createEvent("svgzoomevent");
-                                                         e.initUIEvent(aName, aProps.bubbles, aProps.cancelable,
-                                                                       aProps.view, aProps.detail);
-                                                         return e;
-                                                       },
-                                             },
   TCPSocketErrorEvent:                       { create: function(aName, aProps) {
                                                          return new TCPSocketErrorEvent(aName, aProps);
                                                        },
@@ -449,6 +431,12 @@ const kEventConstructors = {
   USSDReceivedEvent:                         { create: function (aName, aProps) {
                                                           return new USSDReceivedEvent(aName, aProps);
                                                        },
+                                             },
+  VRDisplayEvent:                            { create: null,
+                                               // Required argument expects a VRDisplay that can not
+                                               // be created from Javascript without physical VR hardware
+                                               // connected.  When Bug 1229480 lands, this test can be
+                                               // updated to use the puppet VR device.
                                              },
   WheelEvent:                                { create: function (aName, aProps) {
                                                          return new WheelEvent(aName, aProps);

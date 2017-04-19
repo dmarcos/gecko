@@ -178,14 +178,13 @@ public:
 
   void ToDataURL(JSContext* aCx, const nsAString& aType,
                  JS::Handle<JS::Value> aParams,
-                 nsAString& aDataURL, CallerType aCallerType,
+                 nsAString& aDataURL,
                  ErrorResult& aRv);
 
   void ToBlob(JSContext* aCx,
               BlobCallback& aCallback,
               const nsAString& aType,
               JS::Handle<JS::Value> aParams,
-              CallerType aCallerType,
               ErrorResult& aRv);
 
   OffscreenCanvas* TransferControlToOffscreen(ErrorResult& aRv);
@@ -255,7 +254,8 @@ public:
   bool GetIsOpaque();
   virtual bool GetOpaqueAttr() override;
 
-  virtual already_AddRefed<gfx::SourceSurface> GetSurfaceSnapshot(bool* aPremultAlpha = nullptr);
+  virtual already_AddRefed<gfx::SourceSurface>
+  GetSurfaceSnapshot(gfxAlphaType* aOutAlphaType = nullptr);
 
   /*
    * Register a FrameCaptureListener with this canvas.

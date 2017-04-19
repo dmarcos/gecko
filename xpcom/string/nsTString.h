@@ -372,12 +372,14 @@ public:
   using nsTSubstring_CharT::StripChars;
 #endif
   void StripChars(const char* aSet);
+  bool StripChars(const char* aSet, const fallible_t&);
 
 
   /**
    *  This method strips whitespace throughout the string.
    */
   void StripWhitespace();
+  bool StripWhitespace(const fallible_t&);
 
 
   /**
@@ -460,12 +462,6 @@ public:
 
 
 protected:
-
-  explicit
-  nsTString_CharT(uint32_t aFlags)
-    : substring_type(aFlags)
-  {
-  }
 
   // allow subclasses to initialize fields directly
   nsTString_CharT(char_type* aData, size_type aLength, uint32_t aFlags)
@@ -856,6 +852,7 @@ public:
   // call. |aStr| will be truncated as a side-effect of this
   // constructor.
   nsTAdoptingString_CharT(const self_type& aStr)
+    : nsTXPIDLString_CharT()
   {
     *this = aStr;
   }

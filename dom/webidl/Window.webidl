@@ -24,7 +24,6 @@ interface IID;
 interface nsIBrowserDOMWindow;
 interface nsIMessageBroadcaster;
 interface nsIDOMCrypto;
-typedef any Transferable;
 
 // http://www.whatwg.org/specs/web-apps/current-work/
 [PrimaryGlobal, LegacyUnenumerableNamedProperties, NeedResolve]
@@ -68,7 +67,7 @@ typedef any Transferable;
   getter object (DOMString name);
 
   // the user agent
-  [Throws] readonly attribute Navigator navigator;
+  readonly attribute Navigator navigator;
 #ifdef HAVE_SIDEBAR
   [Replaceable, Throws] readonly attribute External external;
 #endif
@@ -85,7 +84,7 @@ typedef any Transferable;
   any showModalDialog(DOMString url, optional any argument, optional DOMString options = "");
 
   [Throws, CrossOriginCallable, NeedsSubjectPrincipal]
-  void postMessage(any message, DOMString targetOrigin, optional sequence<Transferable> transfer);
+  void postMessage(any message, DOMString targetOrigin, optional sequence<object> transfer = []);
 
   // also has obsolete members
 };
@@ -184,14 +183,10 @@ partial interface Window {
   [ChromeOnly] void mozScrollSnap();
   // The four properties below are double per spec at the moment, but whether
   // that will continue is unclear.
-  //[Replaceable, Throws] readonly attribute double scrollX;
-  //[Replaceable, Throws] readonly attribute double pageXOffset;
-  //[Replaceable, Throws] readonly attribute double scrollY;
-  //[Replaceable, Throws] readonly attribute double pageYOffset;
-  [Replaceable, Throws] readonly attribute long scrollX;
-  [Replaceable, Throws] readonly attribute long pageXOffset;
-  [Replaceable, Throws] readonly attribute long scrollY;
-  [Replaceable, Throws] readonly attribute long pageYOffset;
+  [Replaceable, Throws] readonly attribute double scrollX;
+  [Replaceable, Throws] readonly attribute double pageXOffset;
+  [Replaceable, Throws] readonly attribute double scrollY;
+  [Replaceable, Throws] readonly attribute double pageYOffset;
 
   // client
   // These are writable because we allow chrome to write them.  And they need
@@ -248,9 +243,6 @@ Window implements WindowModal;
 
 // Mozilla-specific stuff
 partial interface Window {
-  //[NewObject, Throws] CSSStyleDeclaration getDefaultComputedStyle(Element elt, optional DOMString pseudoElt = "");
-  [NewObject, Throws] CSSStyleDeclaration? getDefaultComputedStyle(Element elt, optional DOMString pseudoElt = "");
-
   // Mozilla extensions
   /**
    * Method for scrolling this window by a number of lines.
@@ -472,18 +464,22 @@ partial interface Window {
   [Pref="dom.vr.enabled"]
   attribute EventHandler onvrdisplaydisconnect;
   [Pref="dom.vr.enabled"]
+  attribute EventHandler onvrdisplayactivate;
+  [Pref="dom.vr.enabled"]
+  attribute EventHandler onvrdisplaydeactivate;
+  [Pref="dom.vr.enabled"]
   attribute EventHandler onvrdisplaypresentchange;
 };
 
 // https://webaudio.github.io/web-audio-api/#widl-Window-audioWorklet
 partial interface Window {
-  [Pref="dom.audioWorklet.enabled", Throws, SameObject]
+  [Pref="dom.audioWorklet.enabled", Throws]
   readonly attribute Worklet audioWorklet;
 };
 
 // https://drafts.css-houdini.org/css-paint-api-1/#dom-window-paintworklet
 partial interface Window {
-    [Pref="dom.paintWorklet.enabled", Throws, SameObject]
+    [Pref="dom.paintWorklet.enabled", Throws]
     readonly attribute Worklet paintWorklet;
 };
 
@@ -515,4 +511,28 @@ callback IdleRequestCallback = void (IdleDeadline deadline);
  */
 partial interface Window {
   [ChromeOnly] readonly attribute boolean isSecureContextIfOpenerIgnored;
+};
+
+partial interface Window {
+  /**
+   * Returns a list of locales that the application should be localized to.
+   *
+   * The result is a sorted list of valid locale IDs and it should be
+   * used for all APIs that accept list of locales, like ECMA402 and L10n APIs.
+   *
+   * This API always returns at least one locale.
+   *
+   * Example: ["en-US", "de", "pl", "sr-Cyrl", "zh-Hans-HK"]
+   */
+  [Func="IsChromeOrXBL"]
+  sequence<DOMString> getAppLocalesAsBCP47();
+
+#ifdef ENABLE_INTL_API
+  /**
+   * Getter funcion for IntlUtils, which provides helper functions for
+   * localization.
+   */
+  [Throws, Func="IsChromeOrXBL"]
+  readonly attribute IntlUtils intlUtils;
+#endif
 };

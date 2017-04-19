@@ -132,6 +132,15 @@ SpecialPowersObserverAPI.prototype = {
     return this._crashDumpDir;
   },
 
+  _getPendingCrashDumpDir: function() {
+    if (!this._pendingCrashDumpDir) {
+      this._pendingCrashDumpDir = Services.dirsvc.get("UAppData", Ci.nsIFile);
+      this._pendingCrashDumpDir.append("Crash Reports");
+      this._pendingCrashDumpDir.append("pending");
+    }
+    return this._pendingCrashDumpDir;
+  },
+
   _getExtraData: function(dumpId) {
     let extraFile = this._getCrashDumpDir().clone();
     extraFile.append(dumpId + ".extra");
@@ -176,6 +185,22 @@ SpecialPowersObserverAPI.prototype = {
       }
     }
     return crashDumpFiles.concat();
+  },
+
+  _deletePendingCrashDumpFiles: function() {
+    var crashDumpDir = this._getPendingCrashDumpDir();
+    var removed = false;
+    if (crashDumpDir.exists()) {
+      let entries = crashDumpDir.directoryEntries;
+      while (entries.hasMoreElements()) {
+        let file = entries.getNext().QueryInterface(Ci.nsIFile);
+        if (file.isFile()) {
+          file.remove(false);
+          removed = true;
+        }
+      }
+    }
+    return removed;
   },
 
   _getURI: function (url) {
@@ -356,6 +381,8 @@ SpecialPowersObserverAPI.prototype = {
             return this._deleteCrashDumpFiles(aMessage.json.filenames);
           case "find-crash-dump-files":
             return this._findCrashDumpFiles(aMessage.json.crashDumpFilesToIgnore);
+          case "delete-pending-crash-dump-files":
+            return this._deletePendingCrashDumpFiles();
           default:
             throw new SpecialPowersError("Invalid operation for SPProcessCrashService");
         }
@@ -550,7 +577,7 @@ SpecialPowersObserverAPI.prototype = {
         // they're run on a bare archive rather than a running instance,
         // as the add-on manager runs them.
         let extensionData = new ExtensionData(extension.rootURI);
-        extensionData.readManifest().then(
+        extensionData.loadManifest().then(
           () => {
             return extensionData.initAllLocales().then(() => {
               if (extensionData.errors.length) {
@@ -559,7 +586,7 @@ SpecialPowersObserverAPI.prototype = {
             });
           },
           () => {
-            // readManifest() will throw if we're loading an embedded
+            // loadManifest() will throw if we're loading an embedded
             // extension, so don't worry about locale errors in that
             // case.
           }

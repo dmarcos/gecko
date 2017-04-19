@@ -26,6 +26,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/ContentCache.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/TextEventDispatcherListener.h"
 
 namespace mozilla {
 
@@ -182,7 +183,11 @@ public:
                                const InputContextAction& aAction) override;
   virtual InputContext GetInputContext() override;
   virtual NativeIMEContext GetNativeIMEContext() override;
-  virtual nsIMEUpdatePreference GetIMEUpdatePreference() override;
+  virtual IMENotificationRequests GetIMENotificationRequests() override;
+  TextEventDispatcherListener* GetNativeTextEventDispatcherListener() override
+  { return mNativeTextEventDispatcherListener; }
+  void SetNativeTextEventDispatcherListener(TextEventDispatcherListener* aListener)
+  { mNativeTextEventDispatcherListener = aListener; }
 
   virtual void SetCursor(nsCursor aCursor) override;
   virtual nsresult SetCursor(imgIContainer* aCursor,
@@ -315,7 +320,8 @@ private:
   class PaintTask : public Runnable {
   public:
     NS_DECL_NSIRUNNABLE
-    explicit PaintTask(PuppetWidget* widget) : mWidget(widget) {}
+    explicit PaintTask(PuppetWidget* widget)
+     : Runnable("PuppetWidget::PaintTask"), mWidget(widget) {}
     void Revoke() { mWidget = nullptr; }
   private:
     PuppetWidget* mWidget;
@@ -350,7 +356,7 @@ private:
   // retained-content-only transactions
   RefPtr<DrawTarget> mDrawTarget;
   // IME
-  nsIMEUpdatePreference mIMEPreferenceOfParent;
+  IMENotificationRequests mIMENotificationRequestsOfParent;
   InputContext mInputContext;
   // mNativeIMEContext is initialized when this dispatches every composition
   // event both from parent process's widget and TextEventDispatcher in same
@@ -374,6 +380,8 @@ private:
   uint32_t mCursorHotspotX, mCursorHotspotY;
 
   nsCOMArray<nsIKeyEventInPluginCallback> mKeyEventInPluginCallbacks;
+
+  RefPtr<TextEventDispatcherListener> mNativeTextEventDispatcherListener;
 
 protected:
   bool mEnabled;
@@ -435,13 +443,10 @@ public:
     explicit PuppetScreen(void* nativeScreen);
     ~PuppetScreen();
 
-    NS_IMETHOD GetId(uint32_t* aId) override;
     NS_IMETHOD GetRect(int32_t* aLeft, int32_t* aTop, int32_t* aWidth, int32_t* aHeight) override;
     NS_IMETHOD GetAvailRect(int32_t* aLeft, int32_t* aTop, int32_t* aWidth, int32_t* aHeight) override;
     NS_IMETHOD GetPixelDepth(int32_t* aPixelDepth) override;
     NS_IMETHOD GetColorDepth(int32_t* aColorDepth) override;
-    NS_IMETHOD GetRotation(uint32_t* aRotation) override;
-    NS_IMETHOD SetRotation(uint32_t  aRotation) override;
 };
 
 class PuppetScreenManager final : public nsIScreenManager

@@ -201,9 +201,12 @@ XPCWrappedNativeXrayTraits::getWN(JSObject* wrapper)
 }
 
 const JSClass XPCWrappedNativeXrayTraits::HolderClass = {
-    "NativePropertyHolder", JSCLASS_HAS_RESERVED_SLOTS(2)
+    "NativePropertyHolder", JSCLASS_HAS_RESERVED_SLOTS(HOLDER_SHARED_SLOT_COUNT)
 };
 
+const JSClass XrayTraits::HolderClass = {
+    "XrayHolder", JSCLASS_HAS_RESERVED_SLOTS(HOLDER_SHARED_SLOT_COUNT)
+};
 
 const JSClass JSXrayTraits::HolderClass = {
     "JSXrayHolder", JSCLASS_HAS_RESERVED_SLOTS(SLOT_COUNT)
@@ -552,7 +555,8 @@ JSXrayTraits::resolveOwnProperty(JSContext* cx, const Wrapper& jsWrapper,
         // that it makes sense to just treat them like Objects for Xray purposes.
         if (key == JSProto_Object || key == JSProto_Array) {
             return getOwnPropertyFromWrapperIfSafe(cx, wrapper, id, desc);
-        } else if (IsTypedArrayKey(key)) {
+        }
+        if (IsTypedArrayKey(key)) {
             if (IsArrayIndex(GetArrayIndexFromId(cx, id))) {
                 // WebExtensions can't use cloneInto(), so we just let them do
                 // the slow thing to maximize compatibility.
@@ -569,19 +573,19 @@ JSXrayTraits::resolveOwnProperty(JSContext* cx, const Wrapper& jsWrapper,
                         desc.object().set(wrapper);
                     }
                     return true;
-                } else {
-                    JS_ReportErrorASCII(cx, "Accessing TypedArray data over Xrays is slow, and forbidden "
-                                        "in order to encourage performant code. To copy TypedArrays "
-                                        "across origin boundaries, consider using Components.utils.cloneInto().");
-                    return false;
                 }
+                JS_ReportErrorASCII(cx, "Accessing TypedArray data over Xrays is slow, and forbidden "
+                                    "in order to encourage performant code. To copy TypedArrays "
+                                    "across origin boundaries, consider using Components.utils.cloneInto().");
+                return false;
             }
         } else if (key == JSProto_Function) {
             if (id == GetJSIDByIndex(cx, XPCJSContext::IDX_LENGTH)) {
                 FillPropertyDescriptor(desc, wrapper, JSPROP_PERMANENT | JSPROP_READONLY,
                                        NumberValue(JS_GetFunctionArity(JS_GetObjectFunction(target))));
                 return true;
-            } else if (id == GetJSIDByIndex(cx, XPCJSContext::IDX_NAME)) {
+            }
+            if (id == GetJSIDByIndex(cx, XPCJSContext::IDX_NAME)) {
                 RootedString fname(cx, JS_GetFunctionId(JS_GetObjectFunction(target)));
                 if (fname)
                     JS_MarkCrossZoneIdValue(cx, StringValue(fname));
@@ -874,7 +878,8 @@ JSXrayTraits::enumerateNames(JSContext* cx, HandleObject wrapper, unsigned flags
             for (size_t i = 0; i < props.length(); ++i)
                 JS_MarkCrossZoneId(cx, props[i]);
             return true;
-        } else if (IsTypedArrayKey(key)) {
+        }
+        if (IsTypedArrayKey(key)) {
             uint32_t length = JS_GetTypedArrayLength(target);
             // TypedArrays enumerate every indexed property in range, but
             // |length| is a getter that lives on the proto, like it should be.
@@ -1852,7 +1857,7 @@ DOMXrayTraits::preserveWrapper(JSObject* target)
 JSObject*
 DOMXrayTraits::createHolder(JSContext* cx, JSObject* wrapper)
 {
-    return JS_NewObjectWithGivenProto(cx, nullptr, nullptr);
+    return JS_NewObjectWithGivenProto(cx, &HolderClass, nullptr);
 }
 
 const JSClass*
@@ -2405,16 +2410,35 @@ XrayWrapper<Base, Traits>::getPrototype(JSContext* cx, JS::HandleObject wrapper,
     // only if there's been a set. If there's not an expando, or the expando
     // slot is |undefined|, hand back the default proto, appropriately wrapped.
 
-    RootedValue v(cx);
     if (expando) {
-        JSAutoCompartment ac(cx, expando);
-        v = JS_GetReservedSlot(expando, JSSLOT_EXPANDO_PROTOTYPE);
+        RootedValue v(cx);
+        { // Scope for JSAutoCompartment
+            JSAutoCompartment ac(cx, expando);
+            v = JS_GetReservedSlot(expando, JSSLOT_EXPANDO_PROTOTYPE);
+        }
+        if (!v.isUndefined()) {
+            protop.set(v.toObjectOrNull());
+            return JS_WrapObject(cx, protop);
+        }
     }
-    if (v.isUndefined())
-        return getPrototypeHelper(cx, wrapper, target, protop);
 
-    protop.set(v.toObjectOrNull());
-    return JS_WrapObject(cx, protop);
+    // Check our holder, and cache there if we don't have it cached already.
+    RootedObject holder(cx, Traits::singleton.ensureHolder(cx, wrapper));
+    if (!holder)
+        return false;
+
+    Value cached = js::GetReservedSlot(holder,
+                                       Traits::HOLDER_SLOT_CACHED_PROTO);
+    if (cached.isUndefined()) {
+        if (!getPrototypeHelper(cx, wrapper, target, protop))
+            return false;
+
+        js::SetReservedSlot(holder, Traits::HOLDER_SLOT_CACHED_PROTO,
+                            ObjectOrNullValue(protop));
+    } else {
+        protop.set(cached.toObjectOrNull());
+    }
+    return true;
 }
 
 template <typename Base, typename Traits>

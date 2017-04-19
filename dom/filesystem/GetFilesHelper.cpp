@@ -7,6 +7,8 @@
 #include "GetFilesHelper.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/FileBlobImpl.h"
+#include "FileSystemUtils.h"
 #include "nsProxyRelease.h"
 
 namespace mozilla {
@@ -19,6 +21,10 @@ namespace {
 class ReleaseRunnable final : public Runnable
 {
 public:
+  ReleaseRunnable()
+    : Runnable("ReleaseRunnable")
+  {}
+
   static void
   MaybeReleaseOnMainThread(nsTArray<RefPtr<Promise>>& aPromises,
                            nsTArray<RefPtr<GetFilesCallback>>& aCallbacks,
@@ -32,7 +38,7 @@ public:
 
     RefPtr<ReleaseRunnable> runnable =
       new ReleaseRunnable(aPromises, aCallbacks, aFiles, global.forget());
-    NS_DispatchToMainThread(runnable);
+    FileSystemUtils::DispatchRunnable(nullptr, runnable.forget());
   }
 
   NS_IMETHOD
@@ -129,7 +135,8 @@ GetFilesHelper::Create(nsIGlobalObject* aGlobal,
 }
 
 GetFilesHelper::GetFilesHelper(nsIGlobalObject* aGlobal, bool aRecursiveFlag)
-  : GetFilesHelperBase(aRecursiveFlag)
+  : Runnable("GetFilesHelper")
+  , GetFilesHelperBase(aRecursiveFlag)
   , mGlobal(aGlobal)
   , mListingCompleted(false)
   , mErrorResult(NS_OK)
@@ -226,7 +233,8 @@ GetFilesHelper::Run()
       return NS_OK;
     }
 
-    return NS_DispatchToMainThread(this);
+    RefPtr<Runnable> runnable = this;
+    return FileSystemUtils::DispatchRunnable(nullptr, runnable.forget());
   }
 
   // We are here, but we should not do anything on this thread because, in the
@@ -277,17 +285,17 @@ GetFilesHelper::RunIO()
     return;
   }
 
-  nsAutoString path;
-  mErrorResult = file->GetLeafName(path);
+  nsAutoString leafName;
+  mErrorResult = file->GetLeafName(leafName);
   if (NS_WARN_IF(NS_FAILED(mErrorResult))) {
     return;
   }
 
-  if (path.IsEmpty()) {
-    path.AppendLiteral(FILESYSTEM_DOM_PATH_SEPARATOR_LITERAL);
-  }
+  nsAutoString domPath;
+  domPath.AssignLiteral(FILESYSTEM_DOM_PATH_SEPARATOR_LITERAL);
+  domPath.Append(leafName);
 
-  mErrorResult = ExploreDirectory(path, file);
+  mErrorResult = ExploreDirectory(domPath, file);
 }
 
 void
@@ -303,21 +311,9 @@ GetFilesHelper::RunMainThread()
   }
 
   // Create the sequence of Files.
-  for (uint32_t i = 0; i < mTargetPathArray.Length(); ++i) {
-    nsCOMPtr<nsIFile> file;
-    mErrorResult =
-      NS_NewLocalFile(mTargetPathArray[i].mRealPath, true,
-                      getter_AddRefs(file));
-    if (NS_WARN_IF(NS_FAILED(mErrorResult))) {
-      mFiles.Clear();
-      return;
-    }
-
-    RefPtr<File> domFile =
-      File::CreateFromFile(mGlobal, file);
+  for (uint32_t i = 0; i < mTargetBlobImplArray.Length(); ++i) {
+    RefPtr<File> domFile = File::Create(mGlobal, mTargetBlobImplArray[i]);
     MOZ_ASSERT(domFile);
-
-    domFile->SetPath(mTargetPathArray[i].mDomPath);
 
     if (!mFiles.AppendElement(domFile, fallible)) {
       mErrorResult = NS_ERROR_OUT_OF_MEMORY;
@@ -395,16 +391,13 @@ GetFilesHelperBase::ExploreDirectory(const nsAString& aDOMPath, nsIFile* aFile)
     domPath.Append(leafName);
 
     if (isFile) {
-      FileData* data = mTargetPathArray.AppendElement(fallible);
-      if (!data) {
+      RefPtr<BlobImpl> blobImpl = new FileBlobImpl(currFile);
+      blobImpl->SetDOMPath(domPath);
+
+      if (!mTargetBlobImplArray.AppendElement(blobImpl, fallible)) {
         return NS_ERROR_OUT_OF_MEMORY;
       }
 
-      if (NS_WARN_IF(NS_FAILED(currFile->GetPath(data->mRealPath)))) {
-        continue;
-      }
-
-      data->mDomPath = domPath;
       continue;
     }
 
@@ -444,18 +437,14 @@ GetFilesHelperBase::AddExploredDirectory(nsIFile* aDir)
     return rv;
   }
 
-  nsAutoCString path;
-
+  nsAutoString path;
   if (!isLink) {
-    nsAutoString path16;
-    rv = aDir->GetPath(path16);
+    rv = aDir->GetPath(path);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
-
-    path = NS_ConvertUTF16toUTF8(path16);
   } else {
-    rv = aDir->GetNativeTarget(path);
+    rv = aDir->GetTarget(path);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -478,8 +467,8 @@ GetFilesHelperBase::ShouldFollowSymLink(nsIFile* aDir)
   MOZ_ASSERT(isLink && isDir, "Why are we here?");
 #endif
 
-  nsAutoCString targetPath;
-  if (NS_WARN_IF(NS_FAILED(aDir->GetNativeTarget(targetPath)))) {
+  nsAutoString targetPath;
+  if (NS_WARN_IF(NS_FAILED(aDir->GetTarget(targetPath)))) {
     return false;
   }
 

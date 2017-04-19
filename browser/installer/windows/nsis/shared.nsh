@@ -43,11 +43,11 @@
   ClearErrors
   WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" "Write Test"
   ${If} ${Errors}
-    StrCpy $TmpVal "HKCU" ; used primarily for logging
+    StrCpy $TmpVal "HKCU"
   ${Else}
     SetShellVarContext all    ; Set SHCTX to all users (e.g. HKLM)
     DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
-    StrCpy $TmpVal "HKLM" ; used primarily for logging
+    StrCpy $TmpVal "HKLM"
     ${RegCleanMain} "Software\Mozilla"
     ${RegCleanUninstall}
     ${UpdateProtocolHandlers}
@@ -80,11 +80,18 @@
   ; Adds a pinned Task Bar shortcut (see MigrateTaskBarShortcut for details).
   ${MigrateTaskBarShortcut}
 
+  ${UpdateShortcutBranding}
+
   ${RemoveDeprecatedKeys}
 
   ${SetAppKeys}
   ${FixClassKeys}
   ${SetUninstallKeys}
+  ${If} $TmpVal == "HKLM"
+    ${SetStartMenuInternet} HKLM
+  ${ElseIf} $TmpVal == "HKCU"
+    ${SetStartMenuInternet} HKCU
+  ${EndIf}
 
   ; Remove files that may be left behind by the application in the
   ; VirtualStore directory.
@@ -96,6 +103,9 @@
   ${FixDistributionsINI}
 
   RmDir /r /REBOOTOK "$INSTDIR\${TO_BE_DELETED}"
+
+  ; Register AccessibleHandler.dll with COM (this writes to HKLM)
+  ${RegisterAccessibleHandler}
 
 !ifdef MOZ_MAINTENANCE_SERVICE
   Call IsUserAdmin
@@ -150,8 +160,6 @@
   ${SetStartMenuInternet} "HKLM"
   ${FixShellIconHandler} "HKLM"
   ${ShowShortcuts}
-  ${StrFilter} "${FileMainEXE}" "+" "" "" $R9
-  WriteRegStr HKLM "Software\Clients\StartMenuInternet" "" "$R9-$AppUserModelID"
 !macroend
 !define SetAsDefaultAppGlobal "!insertmacro SetAsDefaultAppGlobal"
 
@@ -159,8 +167,13 @@
 ; application from Open With for the file types the application handles
 ; (bug 370480).
 !macro HideShortcuts
-  ${StrFilter} "${FileMainEXE}" "+" "" "" $0
-  StrCpy $R1 "Software\Clients\StartMenuInternet\$0\InstallInfo"
+  ; Find the correct registry path to clear IconsVisible.
+  StrCpy $R1 "Software\Clients\StartMenuInternet\${AppRegName}-$AppUserModelID\InstallInfo"
+  ReadRegDWORD $0 HKLM "$R1" "ShowIconsCommand"
+  ${If} ${Errors}
+    ${StrFilter} "${FileMainEXE}" "+" "" "" $0
+    StrCpy $R1 "Software\Clients\StartMenuInternet\$0\InstallInfo"
+  ${EndIf}
   WriteRegDWORD HKLM "$R1" "IconsVisible" 0
   ${If} ${AtLeastWin8}
     WriteRegDWORD HKCU "$R1" "IconsVisible" 0
@@ -221,7 +234,13 @@
 ; Adds shortcuts for this installation. This should also add the application
 ; to Open With for the file types the application handles (bug 370480).
 !macro ShowShortcuts
+  ; Find the correct registry path to set IconsVisible.
   StrCpy $R1 "Software\Clients\StartMenuInternet\${AppRegName}-$AppUserModelID\InstallInfo"
+  ReadRegDWORD $0 HKLM "$R1" "ShowIconsCommand"
+  ${If} ${Errors}
+    ${StrFilter} "${FileMainEXE}" "+" "" "" $0
+    StrCpy $R1 "Software\Clients\StartMenuInternet\$0\InstallInfo"
+  ${EndIf}
   WriteRegDWORD HKLM "$R1" "IconsVisible" 1
   ${If} ${AtLeastWin8}
     WriteRegDWORD HKCU "$R1" "IconsVisible" 1
@@ -292,13 +311,136 @@
 !macroend
 !define ShowShortcuts "!insertmacro ShowShortcuts"
 
-!macro AddAssociationIfNoneExist FILE_TYPE
+; Update the branding information on all shortcuts our installer created,
+; in case the branding has changed between updates.
+; This should only be called sometime after both MigrateStartMenuShortcut
+; and MigrateTaskBarShurtcut
+!macro UpdateShortcutBranding
+  ${GetLongPath} "$INSTDIR\uninstall\${SHORTCUTS_LOG}" $R9
+  ${If} ${FileExists} "$R9"
+    ClearErrors
+    ; The entries in the shortcut log are numbered, but we never actually
+    ; create more than one shortcut (or log entry) in each location.
+    ReadINIStr $R8 "$R9" "STARTMENU" "Shortcut0"
+    ${IfNot} ${Errors}
+      ${If} ${FileExists} "$SMPROGRAMS\$R8"
+        ShellLink::GetShortCutTarget "$SMPROGRAMS\$R8"
+        Pop $R7
+        ${GetLongPath} "$R7" $R7
+        ${If} $R7 == "$INSTDIR\${FileMainEXE}"
+          ShellLink::GetShortCutIconLocation "$SMPROGRAMS\$R8"
+          Pop $R6
+          ${GetLongPath} "$R6" $R6
+          ${If} $R6 != "$INSTDIR\firefox.ico"
+          ${AndIf} ${FileExists} "$INSTDIR\firefox.ico"
+            StrCpy $R5 "1"
+          ${ElseIf} $R6 == "$INSTDIR\firefox.ico"
+          ${AndIfNot} ${FileExists} "$INSTDIR\firefox.ico"
+            StrCpy $R5 "1"
+          ${Else}
+            StrCpy $R5 "0"
+          ${EndIf}
+
+          ${If} $R5 == "1"
+          ${OrIf} $R8 != "${BrandFullName}.lnk"
+            Delete "$SMPROGRAMS\$R8"
+            ${If} ${FileExists} "$INSTDIR\firefox.ico"
+              CreateShortcut "$SMPROGRAMS\${BrandFullName}.lnk" \
+                             "$INSTDIR\${FileMainEXE}" "" "$INSTDIR\firefox.ico"
+            ${Else}
+              CreateShortcut "$SMPROGRAMS\${BrandFullName}.lnk" \
+                             "$INSTDIR\${FileMainEXE}"
+            ${EndIf}
+            WriteINIStr "$R9" "STARTMENU" "Shortcut0" "${BrandFullName}.lnk"
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+
+    ClearErrors
+    ReadINIStr $R8 "$R9" "DESKTOP" "Shortcut0"
+    ${IfNot} ${Errors}
+      ${If} ${FileExists} "$DESKTOP\$R8"
+        ShellLink::GetShortCutTarget "$DESKTOP\$R8"
+        Pop $R7
+        ${GetLongPath} "$R7" $R7
+        ${If} $R7 == "$INSTDIR\${FileMainEXE}"
+          ShellLink::GetShortCutIconLocation "$DESKTOP\$R8"
+          Pop $R6
+          ${GetLongPath} "$R6" $R6
+          ${If} $R6 != "$INSTDIR\firefox.ico"
+          ${AndIf} ${FileExists} "$INSTDIR\firefox.ico"
+            StrCpy $R5 "1"
+          ${ElseIf} $R6 == "$INSTDIR\firefox.ico"
+          ${AndIfNot} ${FileExists} "$INSTDIR\firefox.ico"
+            StrCpy $R5 "1"
+          ${Else}
+            StrCpy $R5 "0"
+          ${EndIf}
+
+          ${If} $R5 == "1"
+          ${OrIf} $R8 != "${BrandFullName}.lnk"
+            Delete "$DESKTOP\$R8"
+            ${If} ${FileExists} "$INSTDIR\firefox.ico"
+              CreateShortcut "$DESKTOP\${BrandFullName}.lnk" \
+                             "$INSTDIR\${FileMainEXE}" "" "$INSTDIR\firefox.ico"
+            ${Else}
+              CreateShortcut "$DESKTOP\${BrandFullName}.lnk" \
+                             "$INSTDIR\${FileMainEXE}"
+            ${EndIf}
+            WriteINIStr "$R9" "DESKTOP" "Shortcut0" "${BrandFullName}.lnk"
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+
+    ClearErrors
+    ReadINIStr $R8 "$R9" "QUICKLAUNCH" "Shortcut0"
+    ${IfNot} ${Errors}
+      ; "QUICKLAUNCH" actually means a taskbar pin.
+      ; We can't simultaneously rename and change the icon for a taskbar pin
+      ; without the icon breaking, and the icon is more important than the name,
+      ; so we'll forget about changing the name and just overwrite the icon.
+      ${If} ${FileExists} "$QUICKLAUNCH\User Pinned\TaskBar\$R8"
+        ShellLink::GetShortCutTarget "$QUICKLAUNCH\User Pinned\TaskBar\$R8"
+        Pop $R7
+        ${GetLongPath} "$R7" $R7
+        ${If} "$INSTDIR\${FileMainEXE}" == "$R7"
+          ShellLink::GetShortCutIconLocation "$QUICKLAUNCH\User Pinned\TaskBar\$R8"
+          Pop $R6
+          ${GetLongPath} "$R6" $R6
+          ${If} $R6 != "$INSTDIR\firefox.ico"
+          ${AndIf} ${FileExists} "$INSTDIR\firefox.ico"
+            StrCpy $R5 "1"
+          ${ElseIf} $R6 == "$INSTDIR\firefox.ico"
+          ${AndIfNot} ${FileExists} "$INSTDIR\firefox.ico"
+            StrCpy $R5 "1"
+          ${Else}
+            StrCpy $R5 "0"
+          ${EndIf}
+
+          ${If} $R5 == "1"
+            ${If} ${FileExists} "$INSTDIR\firefox.ico"
+              CreateShortcut "$QUICKLAUNCH\User Pinned\TaskBar\$R8" "$R7" "" \
+                             "$INSTDIR\firefox.ico"
+            ${Else}
+              CreateShortcut "$QUICKLAUNCH\User Pinned\TaskBar\$R8" "$R7"
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
+!define UpdateShortcutBranding "!insertmacro UpdateShortcutBranding"
+
+!macro AddAssociationIfNoneExist FILE_TYPE KEY
   ClearErrors
   EnumRegKey $7 HKCR "${FILE_TYPE}" 0
   ${If} ${Errors}
-    WriteRegStr SHCTX "SOFTWARE\Classes\${FILE_TYPE}"  "" "FirefoxHTML-$AppUserModelID"
+    WriteRegStr SHCTX "SOFTWARE\Classes\${FILE_TYPE}"  "" ${KEY}
   ${EndIf}
-  WriteRegStr SHCTX "SOFTWARE\Classes\${FILE_TYPE}\OpenWithProgids" "FirefoxHTML-$AppUserModelID" ""
+  WriteRegStr SHCTX "SOFTWARE\Classes\${FILE_TYPE}\OpenWithProgids" ${KEY} ""
 !macroend
 !define AddAssociationIfNoneExist "!insertmacro AddAssociationIfNoneExist"
 
@@ -307,6 +449,15 @@
 !macro SetHandlers
   ${GetLongPath} "$INSTDIR\${FileMainEXE}" $8
 
+  ; See if we're using path hash suffixed registry keys for this install.
+  StrCpy $5 ""
+  ${StrFilter} "${FileMainEXE}" "+" "" "" $2
+  ReadRegStr $0 SHCTX "Software\Clients\StartMenuInternet\$2\DefaultIcon" ""
+  StrCpy $0 $0 -2
+  ${If} $0 != $8
+    StrCpy $5 "-$AppUserModelID"
+  ${EndIf}
+
   StrCpy $0 "SOFTWARE\Classes"
   StrCpy $2 "$\"$8$\" -osint -url $\"%1$\""
 
@@ -314,46 +465,46 @@
   ReadRegStr $6 SHCTX "$0\.htm" ""
   ${WordFind} "$6" "-" "+1{" $6
   ${If} "$6" != "FirefoxHTML"
-    WriteRegStr SHCTX "$0\.htm"   "" "FirefoxHTML-$AppUserModelID"
+    WriteRegStr SHCTX "$0\.htm"   "" "FirefoxHTML$5"
   ${EndIf}
 
   ReadRegStr $6 SHCTX "$0\.html" ""
   ${WordFind} "$6" "-" "+1{" $6
   ${If} "$6" != "FirefoxHTML"
-    WriteRegStr SHCTX "$0\.html"  "" "FirefoxHTML-$AppUserModelID"
+    WriteRegStr SHCTX "$0\.html"  "" "FirefoxHTML$5"
   ${EndIf}
 
   ReadRegStr $6 SHCTX "$0\.shtml" ""
   ${WordFind} "$6" "-" "+1{" $6
   ${If} "$6" != "FirefoxHTML"
-    WriteRegStr SHCTX "$0\.shtml" "" "FirefoxHTML-$AppUserModelID"
+    WriteRegStr SHCTX "$0\.shtml" "" "FirefoxHTML$5"
   ${EndIf}
 
   ReadRegStr $6 SHCTX "$0\.xht" ""
   ${WordFind} "$6" "-" "+1{" $6
   ${If} "$6" != "FirefoxHTML"
-    WriteRegStr SHCTX "$0\.xht"   "" "FirefoxHTML-$AppUserModelID"
+    WriteRegStr SHCTX "$0\.xht"   "" "FirefoxHTML$5"
   ${EndIf}
 
   ReadRegStr $6 SHCTX "$0\.xhtml" ""
   ${WordFind} "$6" "-" "+1{" $6
   ${If} "$6" != "FirefoxHTML"
-    WriteRegStr SHCTX "$0\.xhtml" "" "FirefoxHTML-$AppUserModelID"
+    WriteRegStr SHCTX "$0\.xhtml" "" "FirefoxHTML$5"
   ${EndIf}
 
-  ${AddAssociationIfNoneExist} ".pdf"
-  ${AddAssociationIfNoneExist} ".oga"
-  ${AddAssociationIfNoneExist} ".ogg"
-  ${AddAssociationIfNoneExist} ".ogv"
-  ${AddAssociationIfNoneExist} ".pdf"
-  ${AddAssociationIfNoneExist} ".webm"
+  ${AddAssociationIfNoneExist} ".pdf" "FirefoxHTML$5"
+  ${AddAssociationIfNoneExist} ".oga" "FirefoxHTML$5"
+  ${AddAssociationIfNoneExist} ".ogg" "FirefoxHTML$5"
+  ${AddAssociationIfNoneExist} ".ogv" "FirefoxHTML$5"
+  ${AddAssociationIfNoneExist} ".pdf" "FirefoxHTML$5"
+  ${AddAssociationIfNoneExist} ".webm" "FirefoxHTML$5"
 
   ; An empty string is used for the 5th param because FirefoxHTML is not a
   ; protocol handler
-  ${AddDisabledDDEHandlerValues} "FirefoxHTML-$AppUserModelID" "$2" "$8,1" \
+  ${AddDisabledDDEHandlerValues} "FirefoxHTML$5" "$2" "$8,1" \
                                  "${AppRegName} HTML Document" ""
 
-  ${AddDisabledDDEHandlerValues} "FirefoxURL-$AppUserModelID" "$2" "$8,1" "${AppRegName} URL" \
+  ${AddDisabledDDEHandlerValues} "FirefoxURL$5" "$2" "$8,1" "${AppRegName} URL" \
                                  "true"
   ; An empty string is used for the 4th & 5th params because the following
   ; protocol handlers already have a display name and the additional keys
@@ -386,7 +537,20 @@
   ${GetLongPath} "$INSTDIR\${FileMainEXE}" $8
   ${GetLongPath} "$INSTDIR\uninstall\helper.exe" $7
 
-  StrCpy $0 "Software\Clients\StartMenuInternet\${AppRegName}-$AppUserModelID"
+  ; If we already have keys at the old FIREFOX.EXE path, then just update those.
+  ; We have to be careful to update the existing keys in place so that we don't
+  ; create duplicate keys for the same installation, or cause Windows to think
+  ; something "suspicious" has happened and it should reset the default browser.
+  ${StrFilter} "${FileMainEXE}" "+" "" "" $1
+  ReadRegStr $0 ${RegKey} "Software\Clients\StartMenuInternet\$1\DefaultIcon" ""
+  StrCpy $0 $0 -2
+  ${If} $0 != $8
+    StrCpy $1 "${AppRegName}-$AppUserModelID"
+    StrCpy $2 "-$AppUserModelID"
+  ${Else}
+    StrCpy $2 ""
+  ${EndIf}
+  StrCpy $0 "Software\Clients\StartMenuInternet\$1"
 
   WriteRegStr ${RegKey} "$0" "" "${BrandFullName}"
 
@@ -397,18 +561,7 @@
   WriteRegStr ${RegKey} "$0\InstallInfo" "HideIconsCommand" "$\"$7$\" /HideShortcuts"
   WriteRegStr ${RegKey} "$0\InstallInfo" "ShowIconsCommand" "$\"$7$\" /ShowShortcuts"
   WriteRegStr ${RegKey} "$0\InstallInfo" "ReinstallCommand" "$\"$7$\" /SetAsDefaultAppGlobal"
-
-  ClearErrors
-  ReadRegDWORD $1 ${RegKey} "$0\InstallInfo" "IconsVisible"
-  ; If the IconsVisible name value pair doesn't exist add it otherwise the
-  ; application won't be displayed in Set Program Access and Defaults.
-  ${If} ${Errors}
-    ${If} ${FileExists} "$QUICKLAUNCH\${BrandFullName}.lnk"
-      WriteRegDWORD ${RegKey} "$0\InstallInfo" "IconsVisible" 1
-    ${Else}
-      WriteRegDWORD ${RegKey} "$0\InstallInfo" "IconsVisible" 0
-    ${EndIf}
-  ${EndIf}
+  WriteRegDWORD ${RegKey} "$0\InstallInfo" "IconsVisible" 1
 
   WriteRegStr ${RegKey} "$0\shell\open\command" "" "$\"$8$\""
 
@@ -423,20 +576,20 @@
   WriteRegStr ${RegKey} "$0\Capabilities" "ApplicationIcon" "$8,0"
   WriteRegStr ${RegKey} "$0\Capabilities" "ApplicationName" "${BrandShortName}"
 
-  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".htm"   "FirefoxHTML-$AppUserModelID"
-  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".html"  "FirefoxHTML-$AppUserModelID"
-  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".shtml" "FirefoxHTML-$AppUserModelID"
-  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".xht"   "FirefoxHTML-$AppUserModelID"
-  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".xhtml" "FirefoxHTML-$AppUserModelID"
+  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".htm"   "FirefoxHTML$2"
+  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".html"  "FirefoxHTML$2"
+  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".shtml" "FirefoxHTML$2"
+  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".xht"   "FirefoxHTML$2"
+  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".xhtml" "FirefoxHTML$2"
 
-  WriteRegStr ${RegKey} "$0\Capabilities\StartMenu" "StartMenuInternet" "${AppRegName}-$AppUserModelID"
+  WriteRegStr ${RegKey} "$0\Capabilities\StartMenu" "StartMenuInternet" "$1"
 
-  WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "ftp"    "FirefoxURL-$AppUserModelID"
-  WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "http"   "FirefoxURL-$AppUserModelID"
-  WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "https"  "FirefoxURL-$AppUserModelID"
+  WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "ftp"    "FirefoxURL$2"
+  WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "http"   "FirefoxURL$2"
+  WriteRegStr ${RegKey} "$0\Capabilities\URLAssociations" "https"  "FirefoxURL$2"
 
   ; Registered Application
-  WriteRegStr ${RegKey} "Software\RegisteredApplications" "${AppRegName}-$AppUserModelID" "$0\Capabilities"
+  WriteRegStr ${RegKey} "Software\RegisteredApplications" "$1" "$0\Capabilities"
 !macroend
 !define SetStartMenuInternet "!insertmacro SetStartMenuInternet"
 
@@ -445,13 +598,21 @@
 ; installs (see bug 268512). The symptoms can be either an incorrect icon or no
 ; icon being displayed for files associated with Firefox (does not use SHCTX).
 !macro FixShellIconHandler RegKey
+  ; Find the correct key to update, either FirefoxHTML or FirefoxHTML-[PathHash]
+  StrCpy $3 "FirefoxHTML-$AppUserModelID"
   ClearErrors
-  ReadRegStr $1 ${RegKey} "Software\Classes\FirefoxHTML-$AppUserModelID\ShellEx\IconHandler" ""
+  ReadRegStr $0 ${RegKey} "Software\Classes\$3\DefaultIcon" ""
+  ${If} ${Errors}
+    StrCpy $3 "FirefoxHTML"
+  ${EndIf}
+
+  ClearErrors
+  ReadRegStr $1 ${RegKey} "Software\Classes\$3\ShellEx\IconHandler" ""
   ${Unless} ${Errors}
-    ReadRegStr $1 ${RegKey} "Software\Classes\FirefoxHTML-$AppUserModelID\DefaultIcon" ""
+    ReadRegStr $1 ${RegKey} "Software\Classes\$3\DefaultIcon" ""
     ${GetLongPath} "$INSTDIR\${FileMainEXE}" $2
     ${If} "$1" != "$2,1"
-      WriteRegStr ${RegKey} "Software\Classes\FirefoxHTML-$AppUserModelID\DefaultIcon" "" "$2,1"
+      WriteRegStr ${RegKey} "Software\Classes\$3\DefaultIcon" "" "$2,1"
     ${EndIf}
   ${EndUnless}
 !macroend
@@ -606,7 +767,7 @@
       DeleteRegValue HKLM "Software\Classes\${FILE_TYPE}" ""
     ${EndIf}
   ${ElseIf} "$0" == "FirefoxHTML"
-    ; Since KHCU is set to FirefoxHTML remove FirefoxHTML as the default value
+    ; Since HKCU is set to FirefoxHTML remove FirefoxHTML as the default value
     ; from HKCU if HKLM is set to a value other than an empty string.
     ${If} "$1" != ""
       DeleteRegValue HKCU "Software\Classes\${FILE_TYPE}" ""
@@ -668,12 +829,24 @@
     ; protocol handler.
     ${AddDisabledDDEHandlerValues} "FirefoxHTML-$AppUserModelID" "$2" "$8,1" \
                                    "${AppRegName} HTML Document" ""
+  ${Else}
+    ${IsHandlerForInstallDir} "FirefoxHTML" $R9
+    ${If} "$R9" == "true"
+      ${AddDisabledDDEHandlerValues} "FirefoxHTML" "$2" "$8,1" \
+                                     "${AppRegName} HTML Document" ""
+    ${EndIf}
   ${EndIf}
 
   ${IsHandlerForInstallDir} "FirefoxURL-$AppUserModelID" $R9
   ${If} "$R9" == "true"
     ${AddDisabledDDEHandlerValues} "FirefoxURL-$AppUserModelID" "$2" "$8,1" \
                                    "${AppRegName} URL" "true"
+  ${Else}
+    ${IsHandlerForInstallDir} "FirefoxURL" $R9
+    ${If} "$R9" == "true"
+      ${AddDisabledDDEHandlerValues} "FirefoxURL" "$2" "$8,1" \
+                                     "${AppRegName} URL" "true"
+    ${EndIf}
   ${EndIf}
 
   ; An empty string is used for the 4th & 5th params because the following
@@ -743,6 +916,11 @@
 !macroend
 !define AddMaintCertKeys "!insertmacro AddMaintCertKeys"
 !endif
+
+!macro RegisterAccessibleHandler
+  ${RegisterDLL} "$INSTDIR\AccessibleHandler.dll"
+!macroend
+!define RegisterAccessibleHandler "!insertmacro RegisterAccessibleHandler"
 
 ; Removes various registry entries for reasons noted below (does not use SHCTX).
 !macro RemoveDeprecatedKeys
@@ -1125,6 +1303,7 @@
   ; should be ${FileMainEXE} so if it is in use the CheckForFilesInUse macro
   ; returns after the first check.
   Push "end"
+  Push "AccessibleHandler.dll"
   Push "AccessibleMarshal.dll"
   Push "IA2Marshal.dll"
   Push "freebl3.dll"
@@ -1135,6 +1314,7 @@
   Push "xpcom.dll"
   Push "crashreporter.exe"
   Push "minidump-analyzer.exe"
+  Push "pingsender.exe"
   Push "updater.exe"
   Push "${FileMainEXE}"
 !macroend
@@ -1212,25 +1392,53 @@
 ; easily called from an elevated instance of the binary. Since this can be
 ; called by an elevated instance logging is not performed in this function.
 Function SetAsDefaultAppUserHKCU
-  ; Only set as the user's StartMenuInternet browser if the StartMenuInternet
-  ; registry keys are for this install.
+  ; See if we're using path hash suffixed registry keys for this install
+  ${GetLongPath} "$INSTDIR\${FileMainEXE}" $8
   ${StrFilter} "${FileMainEXE}" "+" "" "" $R9
   ClearErrors
-  ReadRegStr $0 HKCU "Software\Clients\StartMenuInternet\$R9-$AppUserModelID\DefaultIcon" ""
+  ReadRegStr $0 HKCU "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
   ${If} ${Errors}
   ${OrIf} ${AtMostWin2008R2}
     ClearErrors
-    ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\$R9-$AppUserModelID\DefaultIcon" ""
+    ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
+  ${EndIf}
+  StrCpy $0 $0 -2
+  ${If} $0 != $8
+    ${If} $AppUserModelID == ""
+      ${InitHashAppModelId} "$INSTDIR" "Software\Mozilla\${AppName}\TaskBarIDs"
+    ${EndIf}
+    StrCpy $R9 "${AppRegName}-$AppUserModelID"
+  ${EndIf}
+
+  ; Only set as the user's StartMenuInternet browser if the StartMenuInternet
+  ; registry keys are for this install.
+  ClearErrors
+  ReadRegStr $0 HKCU "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
+  ${If} ${Errors}
+  ${OrIf} ${AtMostWin2008R2}
+    ClearErrors
+    ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
   ${EndIf}
   ${Unless} ${Errors}
-    ${GetPathFromString} "$0" $0
-    ${GetParent} "$0" $0
-    ${If} ${FileExists} "$0"
-      ${GetLongPath} "$0" $0
-      ${If} "$0" == "$INSTDIR"
-        WriteRegStr HKCU "Software\Clients\StartMenuInternet" "" "$R9-$AppUserModelID"
-      ${EndIf}
+    WriteRegStr HKCU "Software\Clients\StartMenuInternet" "" "$R9"
+  ${Else}
+    ClearErrors
+    ReadRegStr $0 HKCU "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
+    ${If} ${Errors}
+    ${OrIf} ${AtMostWin2008R2}
+      ClearErrors
+      ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
     ${EndIf}
+    ${Unless} ${Errors}
+      ${GetPathFromString} "$0" $0
+      ${GetParent} "$0" $0
+      ${If} ${FileExists} "$0"
+        ${GetLongPath} "$0" $0
+        ${If} "$0" == "$INSTDIR"
+          WriteRegStr HKCU "Software\Clients\StartMenuInternet" "" "$R9"
+        ${EndIf}
+      ${EndIf}
+    ${EndUnless}
   ${EndUnless}
 
   SetShellVarContext current  ; Set SHCTX to the current user (e.g. HKCU)
@@ -1248,11 +1456,11 @@ Function SetAsDefaultAppUserHKCU
   ; file handlers set previously at the user level will associate this install
   ; as the default browser.
   ClearErrors
-  ReadRegStr $0 HKLM "Software\RegisteredApplications" "${AppRegName}-$AppUserModelID"
+  ReadRegStr $0 HKLM "Software\RegisteredApplications" "$R9"
   ${Unless} ${Errors}
     ; This is all protected by a user choice hash in Windows 8 so it won't
     ; help, but it also won't hurt.
-    AppAssocReg::SetAppAsDefaultAll "${AppRegName}-$AppUserModelID"
+    AppAssocReg::SetAppAsDefaultAll "$R9"
   ${EndUnless}
   ${RemoveDeprecatedKeys}
   ${MigrateTaskBarShortcut}
@@ -1304,13 +1512,23 @@ Function SetAsDefaultAppUser
   ; StartMenuInternet registry keys.
   ; http://support.microsoft.com/kb/297878
 
-  ; Check if this install location registered as the StartMenuInternet client
+  ; Check if this install location registered as a StartMenuInternet client
   ClearErrors
   ReadRegStr $0 HKCU "Software\Clients\StartMenuInternet\${AppRegName}-$AppUserModelID\DefaultIcon" ""
   ${If} ${Errors}
   ${OrIf} ${AtMostWin2008R2}
     ClearErrors
     ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\${AppRegName}-$AppUserModelID\DefaultIcon" ""
+  ${EndIf}
+  ${If} ${Errors}
+    ${StrFilter} "${FileMainEXE}" "+" "" "" $R9
+    ClearErrors
+    ReadRegStr $0 HKCU "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
+  ${EndIf}
+  ${If} ${Errors}
+  ${OrIf} ${AtMostWin2008R2}
+    ClearErrors
+    ReadRegStr $0 HKLM "Software\Clients\StartMenuInternet\$R9\DefaultIcon" ""
   ${EndIf}
 
   ${Unless} ${Errors}

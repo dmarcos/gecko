@@ -6,6 +6,7 @@ var gFxAccounts = {
 
   _initialized: false,
   _inCustomizationMode: false,
+  _cachedProfile: null,
 
   get weave() {
     delete this.weave;
@@ -64,10 +65,7 @@ var gFxAccounts = {
   get loginFailed() {
     // Referencing Weave.Service will implicitly initialize sync, and we don't
     // want to force that - so first check if it is ready.
-    let service = Cc["@mozilla.org/weave/service;1"]
-                  .getService(Components.interfaces.nsISupports)
-                  .wrappedJSObject;
-    if (!service.ready) {
+    if (!this.weaveService.ready) {
       return false;
     }
     // LOGIN_FAILED_LOGIN_REJECTED explicitly means "you must log back in".
@@ -114,7 +112,7 @@ var gFxAccounts = {
     }
 
     for (let topic of this.topics) {
-      Services.obs.addObserver(this, topic, false);
+      Services.obs.addObserver(this, topic);
     }
 
     gNavToolbox.addEventListener("customizationstarting", this);
@@ -140,9 +138,9 @@ var gFxAccounts = {
 
   observe(subject, topic, data) {
     switch (topic) {
-      case this.FxAccountsCommon.ONPROFILE_IMAGE_CHANGE_NOTIFICATION:
-        this.updateUI();
-        break;
+      case this.FxAccountsCommon.ON_PROFILE_CHANGE_NOTIFICATION:
+        this._cachedProfile = null;
+        // Fallthrough intended
       default:
         this.updateUI();
         break;
@@ -156,10 +154,7 @@ var gFxAccounts = {
 
   // Note that updateUI() returns a Promise that's only used by tests.
   updateUI() {
-    let profileInfoEnabled = false;
-    try {
-      profileInfoEnabled = Services.prefs.getBoolPref("identity.fxaccounts.profile_image.enabled");
-    } catch (e) { }
+    let profileInfoEnabled = Services.prefs.getBoolPref("identity.fxaccounts.profile_image.enabled", false);
 
     this.panelUIFooter.hidden = false;
 
@@ -219,9 +214,9 @@ var gFxAccounts = {
         }
       }
       if (showErrorBadge) {
-        gMenuButtonBadgeManager.addBadge(gMenuButtonBadgeManager.BADGEID_FXA, "fxa-needs-authentication");
+        PanelUI.showBadgeOnlyNotification("fxa-needs-authentication");
       } else {
-        gMenuButtonBadgeManager.removeBadge(gMenuButtonBadgeManager.BADGEID_FXA);
+        PanelUI.removeNotification("fxa-needs-authentication");
       }
     }
 
@@ -257,6 +252,9 @@ var gFxAccounts = {
       if (!userData || !userData.verified || !profileInfoEnabled) {
         return null; // don't even try to grab the profile.
       }
+      if (this._cachedProfile) {
+        return this._cachedProfile;
+      }
       return fxAccounts.getSignedInUserProfile().catch(err => {
         // Not fetching the profile is sad but the FxA logs will already have noise.
         return null;
@@ -266,6 +264,7 @@ var gFxAccounts = {
         return;
       }
       updateWithProfile(profile);
+      this._cachedProfile = profile; // Try to avoid fetching the profile on every UI update
     }).catch(error => {
       // This is most likely in tests, were we quickly log users in and out.
       // The most likely scenario is a user logged out, so reflect that.
@@ -321,6 +320,13 @@ var gFxAccounts = {
     this.openAccountsPage("reauth", { entrypoint: entryPoint });
   },
 
+  async openDevicesManagementPage(entryPoint) {
+    let url = await fxAccounts.promiseAccountsManageDevicesURI(entryPoint);
+    switchToTabHavingURI(url, true, {
+      replaceQueryString: true
+    });
+  },
+
   sendTabToDevice(url, clientId, title) {
     Weave.Service.clientsEngine.sendURIToClientForDisplay(url, clientId, title);
   },
@@ -328,7 +334,7 @@ var gFxAccounts = {
   populateSendTabToDevicesMenu(devicesPopup, url, title) {
     // remove existing menu items
     while (devicesPopup.hasChildNodes()) {
-      devicesPopup.removeChild(devicesPopup.firstChild);
+      devicesPopup.firstChild.remove();
     }
 
     const fragment = document.createDocumentFragment();
@@ -367,7 +373,8 @@ var gFxAccounts = {
   },
 
   updateTabContextMenu(aPopupMenu, aTargetTab) {
-    if (!this.sendTabToDeviceEnabled) {
+    if (!this.sendTabToDeviceEnabled ||
+        !this.weaveService.ready) {
       return;
     }
 
@@ -379,7 +386,8 @@ var gFxAccounts = {
   },
 
   initPageContextMenu(contextMenu) {
-    if (!this.sendTabToDeviceEnabled) {
+    if (!this.sendTabToDeviceEnabled ||
+        !this.weaveService.ready) {
       return;
     }
 
@@ -413,3 +421,10 @@ XPCOMUtils.defineLazyGetter(gFxAccounts, "FxAccountsCommon", function() {
 
 XPCOMUtils.defineLazyModuleGetter(this, "EnsureFxAccountsWebChannel",
   "resource://gre/modules/FxAccountsWebChannel.jsm");
+
+
+XPCOMUtils.defineLazyGetter(gFxAccounts, "weaveService", function() {
+  return Components.classes["@mozilla.org/weave/service;1"]
+                   .getService(Components.interfaces.nsISupports)
+                   .wrappedJSObject;
+});

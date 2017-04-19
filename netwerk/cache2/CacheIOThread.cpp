@@ -49,7 +49,7 @@ void CacheIOTelemetry::Report(uint32_t aLevel, CacheIOTelemetry::size_type aLeng
     return;
   }
 
-  static Telemetry::ID telemetryID[] = {
+  static Telemetry::HistogramID telemetryID[] = {
     Telemetry::HTTP_CACHE_IO_QUEUE_2_OPEN_PRIORITY,
     Telemetry::HTTP_CACHE_IO_QUEUE_2_READ_PRIORITY,
     Telemetry::HTTP_CACHE_IO_QUEUE_2_MANAGEMENT,
@@ -327,8 +327,10 @@ nsresult CacheIOThread::DispatchInternal(already_AddRefed<nsIRunnable> aRunnable
 {
   nsCOMPtr<nsIRunnable> runnable(aRunnable);
 #ifdef MOZ_TASK_TRACER
-  runnable = tasktracer::CreateTracedRunnable(runnable.forget());
-  (static_cast<tasktracer::TracedRunnable*>(runnable.get()))->DispatchTask();
+  if (tasktracer::IsStartLogging()) {
+      runnable = tasktracer::CreateTracedRunnable(runnable.forget());
+      (static_cast<tasktracer::TracedRunnable*>(runnable.get()))->DispatchTask();
+  }
 #endif
 
   if (NS_WARN_IF(!runnable))

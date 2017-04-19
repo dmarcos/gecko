@@ -43,7 +43,13 @@ class Compositor;
 class ThebesBufferData;
 class TiledContentHost;
 class CompositableParentManager;
+class WebRenderImageHost;
 struct EffectChain;
+
+struct ImageCompositeNotificationInfo {
+  base::ProcessId mImageBridgeProcessId;
+  ImageCompositeNotification mNotification;
+};
 
 struct AsyncCompositableRef
 {
@@ -86,10 +92,11 @@ public:
   virtual CompositableType GetType() = 0;
 
   // If base class overrides, it should still call the parent implementation
-  virtual void SetCompositor(Compositor* aCompositor);
+  virtual void SetTextureSourceProvider(TextureSourceProvider* aProvider);
 
   // composite the contents of this buffer host to the compositor's surface
-  virtual void Composite(LayerComposite* aLayer,
+  virtual void Composite(Compositor* aCompositor,
+                         LayerComposite* aLayer,
                          EffectChain& aEffectChain,
                          float aOpacity,
                          const gfx::Matrix4x4& aTransform,
@@ -100,13 +107,11 @@ public:
 
   /**
    * Update the content host.
-   * aUpdated is the region which should be updated
-   * aUpdatedRegionBack is the region in aNewBackResult which has been updated
+   * aUpdated is the region which should be updated.
    */
   virtual bool UpdateThebes(const ThebesBufferData& aData,
                             const nsIntRegion& aUpdated,
-                            const nsIntRegion& aOldValidRegionBack,
-                            nsIntRegion* aUpdatedRegionBack)
+                            const nsIntRegion& aOldValidRegionBack)
   {
     NS_ERROR("should be implemented or not used");
     return false;
@@ -120,8 +125,6 @@ public:
   virtual TextureHost* GetAsTextureHost(gfx::IntRect* aPictureRect = nullptr) {
     return nullptr;
   }
-
-  virtual LayerRenderState GetRenderState() = 0;
 
   virtual gfx::IntSize GetImageSize() const
   {
@@ -138,15 +141,13 @@ public:
 
   void RemoveMaskEffect();
 
-  Compositor* GetCompositor() const
-  {
-    return mCompositor;
-  }
+  TextureSourceProvider* GetTextureSourceProvider() const;
 
   Layer* GetLayer() const { return mLayer; }
   void SetLayer(Layer* aLayer) { mLayer = aLayer; }
 
   virtual TiledContentHost* AsTiledContentHost() { return nullptr; }
+  virtual WebRenderImageHost* AsWebRenderImageHost() { return nullptr; }
 
   typedef uint32_t AttachFlags;
   static const AttachFlags NO_FLAGS = 0;
@@ -155,13 +156,13 @@ public:
   static const AttachFlags FORCE_DETACH = 2;
 
   virtual void Attach(Layer* aLayer,
-                      Compositor* aCompositor,
+                      TextureSourceProvider* aProvider,
                       AttachFlags aFlags = NO_FLAGS)
   {
-    MOZ_ASSERT(aCompositor, "Compositor is required");
+    MOZ_ASSERT(aProvider);
     NS_ASSERTION(aFlags & ALLOW_REATTACH || !mAttached,
                  "Re-attaching compositables must be explicitly authorised");
-    SetCompositor(aCompositor);
+    SetTextureSourceProvider(aProvider);
     SetLayer(aLayer);
     mAttached = true;
     mKeepAttached = aFlags & KEEP_ATTACHED;
@@ -205,9 +206,6 @@ public:
   virtual void UseTextureHost(const nsTArray<TimedTexture>& aTextures);
   virtual void UseComponentAlphaTextures(TextureHost* aTextureOnBlack,
                                          TextureHost* aTextureOnWhite);
-  virtual void UseOverlaySource(OverlaySource aOverlay,
-                                const gfx::IntRect& aPictureRect) { }
-
   virtual void RemoveTextureHost(TextureHost* aTexture);
 
   // Called every time this is composited
@@ -236,11 +234,16 @@ public:
   /// is is destroyed.
   virtual void CleanupResources() {}
 
+  virtual void BindTextureSource() {}
+
+protected:
+  HostLayerManager* GetLayerManager() const;
+
 protected:
   TextureInfo mTextureInfo;
   AsyncCompositableRef mAsyncRef;
   uint64_t mCompositorID;
-  RefPtr<Compositor> mCompositor;
+  RefPtr<TextureSourceProvider> mTextureSourceProvider;
   Layer* mLayer;
   uint32_t mFlashCounter; // used when the pref "layers.flash-borders" is true.
   bool mAttached;

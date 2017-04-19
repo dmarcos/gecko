@@ -58,7 +58,7 @@ function promiseWindow(url) {
         Services.obs.removeObserver(obs, "domwindowopened");
         resolve(win);
       }, {once: true});
-    }, "domwindowopened", false);
+    }, "domwindowopened");
   });
 }
 
@@ -70,7 +70,7 @@ function whenDelayedStartupFinished(aWindow) {
         Services.obs.removeObserver(observer, aTopic);
         resolve();
       }
-    }, "browser-delayed-startup-finished", false);
+    }, "browser-delayed-startup-finished");
   });
 }
 
@@ -235,6 +235,18 @@ function expectNoObserverCalled(aIgnoreDeviceEvents = false) {
           is(data[topic], 0, topic + " notification unexpected");
         }
       }
+      resolve();
+    });
+    mm.sendAsyncMessage("Test:ExpectNoObserverCalled");
+  });
+}
+
+function ignoreObserversCalled() {
+  return new Promise(resolve => {
+    let mm = _mm();
+    mm.addMessageListener("Test:ExpectNoObserverCalled:Reply",
+                          function listener() {
+      mm.removeMessageListener("Test:ExpectNoObserverCalled:Reply", listener);
       resolve();
     });
     mm.sendAsyncMessage("Test:ExpectNoObserverCalled");
@@ -407,12 +419,14 @@ function* closeStream(aAlreadyClosed, aFrameId, aStreamCount = 1) {
 
 function* reloadAndAssertClosedStreams() {
   info("reloading the web page");
-  let promise = promiseObserverCalled("recording-device-events");
+  let promises = [
+    promiseObserverCalled("recording-device-events"),
+    promiseObserverCalled("recording-window-ended")
+  ];
   yield ContentTask.spawn(gBrowser.selectedBrowser, null,
                           "() => content.location.reload()");
-  yield promise;
+  yield Promise.all(promises);
 
-  yield expectObserverCalled("recording-window-ended");
   yield expectNoObserverCalled();
   yield checkNotSharing();
 }
@@ -437,7 +451,9 @@ function checkDeviceSelectors(aAudio, aVideo, aScreen) {
     ok(screenSelector.hidden, "screen selector hidden");
 }
 
-function* checkSharingUI(aExpected, aWin = window) {
+// aExpected is for the current tab,
+// aExpectedGlobal is for all tabs.
+function* checkSharingUI(aExpected, aWin = window, aExpectedGlobal = null) {
   let doc = aWin.document;
   // First check the icon above the control center (i) icon.
   let identityBox = doc.getElementById("identity-box");
@@ -481,7 +497,7 @@ function* checkSharingUI(aExpected, aWin = window) {
   aWin.gIdentityHandler._identityPopup.hidden = true;
 
   // Check the global indicators.
-  yield* assertWebRTCIndicatorStatus(aExpected);
+  yield* assertWebRTCIndicatorStatus(aExpectedGlobal || aExpected);
 }
 
 function* checkNotSharing() {
@@ -503,4 +519,35 @@ function promiseReloadFrame(aFrameId) {
            .location
            .reload();
   });
+}
+
+async function runTests(tests, options = {}) {
+  let leaf = options.relativeURI || "get_user_media.html";
+
+  let rootDir = getRootDirectory(gTestPath);
+  rootDir = rootDir.replace("chrome://mochitests/content/",
+                            "https://example.com/");
+  let absoluteURI = rootDir + leaf;
+  let cleanup = options.cleanup || (() => expectNoObserverCalled());
+
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, absoluteURI);
+  let browser = tab.linkedBrowser;
+
+  browser.messageManager.loadFrameScript(CONTENT_SCRIPT_HELPER, true);
+
+  is(PopupNotifications._currentNotifications.length, 0,
+     "should start the test without any prior popup notification");
+  ok(gIdentityHandler._identityPopup.hidden,
+     "should start the test with the control center hidden");
+
+  await SpecialPowers.pushPrefEnv({"set": [[PREF_PERMISSION_FAKE, true]]});
+
+  for (let testCase of tests) {
+    info(testCase.desc);
+    await Task.spawn(testCase.run(browser));
+    await cleanup();
+  }
+
+  // Some tests destroy the original tab and leave a new one in its place.
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
 }

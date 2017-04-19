@@ -12,9 +12,11 @@
 #include "nsCSSPropertyIDSet.h"
 #include "nsCSSValue.h"
 #include "nsCycleCollectionParticipant.h"
+#include "nsRefPtrHashtable.h"
 #include "nsTArray.h"
 #include "nsWrapperCache.h"
 #include "mozilla/AnimationPerformanceWarning.h"
+#include "mozilla/AnimationPropertySegment.h"
 #include "mozilla/AnimationTarget.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/ComputedTimingFunction.h"
@@ -34,7 +36,6 @@ class nsIContent;
 class nsIDocument;
 class nsIFrame;
 class nsIPresShell;
-class nsPresContext;
 
 namespace mozilla {
 
@@ -54,35 +55,6 @@ enum class IterationCompositeOperation : uint8_t;
 enum class CompositeOperation : uint8_t;
 struct AnimationPropertyDetails;
 }
-
-struct AnimationPropertySegment
-{
-  float mFromKey, mToKey;
-  // NOTE: In the case that no keyframe for 0 or 1 offset is specified
-  // the unit of mFromValue or mToValue is eUnit_Null.
-  StyleAnimationValue mFromValue, mToValue;
-  // FIXME add a deep == impl for RawServoAnimationValue
-  RefPtr<RawServoAnimationValue> mServoFromValue, mServoToValue;
-
-  Maybe<ComputedTimingFunction> mTimingFunction;
-  dom::CompositeOperation mFromComposite = dom::CompositeOperation::Replace;
-  dom::CompositeOperation mToComposite = dom::CompositeOperation::Replace;
-
-  bool operator==(const AnimationPropertySegment& aOther) const
-  {
-    return mFromKey == aOther.mFromKey &&
-           mToKey == aOther.mToKey &&
-           mFromValue == aOther.mFromValue &&
-           mToValue == aOther.mToValue &&
-           mTimingFunction == aOther.mTimingFunction &&
-           mFromComposite == aOther.mFromComposite &&
-           mToComposite == aOther.mToComposite;
-  }
-  bool operator!=(const AnimationPropertySegment& aOther) const
-  {
-    return !(*this == aOther);
-  }
-};
 
 struct AnimationProperty
 {
@@ -130,6 +102,13 @@ struct AnimationProperty
   {
     return !(*this == aOther);
   }
+};
+
+struct ServoComputedValuesWithParent
+{
+  const ServoComputedValues* mCurrentStyle;
+  const ServoComputedValues* mParentStyle;
+  explicit operator bool() const { return true; }
 };
 
 struct ElementPropertyTransition;
@@ -189,15 +168,15 @@ public:
   {
     mEffectOptions.GetSpacingAsString(aRetVal);
   }
-
   void NotifyAnimationTimingUpdated();
-
+  void RequestRestyle(EffectCompositor::RestyleType aRestyleType);
   void SetAnimation(Animation* aAnimation) override;
-
   void SetKeyframes(JSContext* aContext, JS::Handle<JSObject*> aKeyframes,
                     ErrorResult& aRv);
   void SetKeyframes(nsTArray<Keyframe>&& aKeyframes,
                     nsStyleContext* aStyleContext);
+  void SetKeyframes(nsTArray<Keyframe>&& aKeyframes,
+                    const ServoComputedValuesWithParent& aServoValues);
 
   // Returns true if the effect includes |aProperty| regardless of whether the
   // property is overridden by !important rule.
@@ -225,11 +204,20 @@ public:
   // Update |mProperties| by recalculating from |mKeyframes| using
   // |aStyleContext| to resolve specified values.
   void UpdateProperties(nsStyleContext* aStyleContext);
+  // Servo version of the above function.
+  void UpdateProperties(const ServoComputedValuesWithParent& aServoValues);
 
-  // Updates |aStyleRule| with the animation values produced by this
+  // Update various bits of state related to running ComposeStyle().
+  // We need to update this outside ComposeStyle() because we should avoid
+  // mutating any state in ComposeStyle() since it might be called during
+  // parallel traversal.
+  void WillComposeStyle();
+
+  // Updates |aComposeResult| with the animation values produced by this
   // AnimationEffect for the current time except any properties contained
   // in |aPropertiesToSkip|.
-  void ComposeStyle(AnimationRule& aStyleRule,
+  template<typename ComposeAnimationResult>
+  void ComposeStyle(ComposeAnimationResult&& aRestultContainer,
                     const nsCSSPropertyIDSet& aPropertiesToSkip);
 
   // Composite |aValueToComposite| on |aUnderlyingValue| with
@@ -265,7 +253,6 @@ public:
   }
 
   nsIDocument* GetRenderedDocument() const;
-  nsPresContext* GetPresContext() const;
   nsIPresShell* GetPresShell() const;
 
   // Associates a warning with the animated property on the specified frame
@@ -279,6 +266,10 @@ public:
   // Cumulative change hint on each segment for each property.
   // This is used for deciding the animation is paint-only.
   void CalculateCumulativeChangeHint(nsStyleContext* aStyleContext);
+  void CalculateCumulativeChangeHint(
+    const ServoComputedValuesWithParent& aServoValues)
+  {
+  }
 
   // Returns true if all of animation properties' change hints
   // can ignore painting if the animation is not visible.
@@ -286,9 +277,17 @@ public:
   // in detail which change hint can be ignored.
   bool CanIgnoreIfNotVisible() const;
 
-  // Returns true if the effect is run on the compositor for |aProperty| and
-  // needs a base style to composite with.
-  bool NeedsBaseStyle(nsCSSPropertyID aProperty) const;
+  // Returns true if the effect is current state and has scale animation.
+  // |aFrame| is used for calculation of scale values.
+  bool ContainsAnimatedScale(const nsIFrame* aFrame) const;
+
+  StyleAnimationValue BaseStyle(nsCSSPropertyID aProperty) const
+  {
+    StyleAnimationValue result;
+    DebugOnly<bool> hasProperty = mBaseStyleValues.Get(aProperty, &result);
+    MOZ_ASSERT(hasProperty || result.IsNull());
+    return result;
+  }
 
 protected:
   KeyframeEffectReadOnly(nsIDocument* aDocument,
@@ -318,7 +317,8 @@ protected:
   // Build properties by recalculating from |mKeyframes| using |aStyleContext|
   // to resolve specified values. This function also applies paced spacing if
   // needed.
-  nsTArray<AnimationProperty> BuildProperties(nsStyleContext* aStyleContext);
+  template<typename StyleType>
+  nsTArray<AnimationProperty> BuildProperties(StyleType&& aStyle);
 
   // This effect is registered with its target element so long as:
   //
@@ -334,8 +334,6 @@ protected:
   // Remove the current effect target from its EffectSet.
   void UnregisterTarget();
 
-  void RequestRestyle(EffectCompositor::RestyleType aRestyleType);
-
   // Update the associated frame state bits so that, if necessary, a stacking
   // context will be created and the effect sent to the compositor.  We
   // typically need to do this when the properties referenced by the keyframe
@@ -344,22 +342,10 @@ protected:
 
   // Looks up the style context associated with the target element, if any.
   // We need to be careful to *not* call this when we are updating the style
-  // context. That's because calling GetStyleContextForElement when we are in
-  // the process of building a style context may trigger various forms of
-  // infinite recursion.
+  // context. That's because calling GetStyleContext when we are in the process
+  // of building a style context may trigger various forms of infinite
+  // recursion.
   already_AddRefed<nsStyleContext> GetTargetStyleContext();
-
-  // Similar to the above but ignoring animation rules. We use this to get base
-  // styles (which don't include animation rules).
-  already_AddRefed<nsStyleContext>
-  GetTargetStyleContextWithoutAnimation();
-
-  enum AnimationStyle {
-    Skip,
-    Include
-  };
-  template<AnimationStyle aAnimationStyle>
-  already_AddRefed<nsStyleContext> DoGetTargetStyleContext();
 
   // A wrapper for marking cascade update according to the current
   // target and its effectSet.
@@ -380,14 +366,26 @@ protected:
     nsCSSPropertyID aProperty,
     const RefPtr<AnimValuesStyleRule>& aAnimationRule);
 
-  // Set a bit in mNeedsBaseStyleSet if |aProperty| can be run on the
-  // compositor.
-  void SetNeedsBaseStyle(nsCSSPropertyID aProperty);
+  // Ensure the base styles is available for any properties in |aProperties|.
+  void EnsureBaseStyles(nsStyleContext* aStyleContext,
+                        const nsTArray<AnimationProperty>& aProperties);
+  void EnsureBaseStyles(const ServoComputedValuesWithParent& aServoValues,
+                        const nsTArray<AnimationProperty>& aProperties);
 
-  // Ensure the base styles is available for any properties that can be run on
-  // the compositor and which are not includes in |aPropertiesToSkip|.
-  void EnsureBaseStylesForCompositor(
-    const nsCSSPropertyIDSet& aPropertiesToSkip);
+  // If no base style is already stored for |aProperty|, resolves the base style
+  // for |aProperty| using |aStyleContext| and stores it in mBaseStyleValues.
+  // If |aCachedBaseStyleContext| is non-null, it will be used, otherwise the
+  // base style context will be resolved and stored in
+  // |aCachedBaseStyleContext|.
+  void EnsureBaseStyle(nsCSSPropertyID aProperty,
+                       nsStyleContext* aStyleContext,
+                       RefPtr<nsStyleContext>& aCachedBaseStyleContext);
+  // Stylo version of the above function that also first checks for an additive
+  // value in |aProperty|'s list of segments.
+  void EnsureBaseStyle(const AnimationProperty& aProperty,
+                       nsIAtom* aPseudoAtom,
+                       nsPresContext* aPresContext,
+                       RefPtr<ServoComputedValues>& aBaseComputedValues);
 
   Maybe<OwningAnimationTarget> mTarget;
 
@@ -413,13 +411,36 @@ protected:
   // we need to re-evaluate the cascade of animations when that changes.
   bool mInEffectOnLastAnimationTimingUpdate;
 
-  // Represents whether or not the corresponding property requires a base style
-  // to composite with. This is only set when the property is run on the
-  // compositor.
-  nsCSSPropertyIDSet mNeedsBaseStyleSet;
+  // The non-animated values for properties in this effect that contain at
+  // least one animation value that is composited with the underlying value
+  // (i.e. it uses the additive or accumulate composite mode).
+  nsDataHashtable<nsUint32HashKey, StyleAnimationValue> mBaseStyleValues;
+  nsRefPtrHashtable<nsUint32HashKey, RawServoAnimationValue>
+    mBaseStyleValuesForServo;
+
+  // We only want to record telemetry data for "ContentTooLarge" warnings once
+  // per effect:target pair so we use this member to record if we have already
+  // reported a "ContentTooLarge" warning for the current target.
+  bool mRecordedContentTooLarge = false;
 
 private:
   nsChangeHint mCumulativeChangeHint;
+
+  template<typename StyleType>
+  void DoSetKeyframes(nsTArray<Keyframe>&& aKeyframes, StyleType&& aStyle);
+
+  template<typename StyleType>
+  void DoUpdateProperties(StyleType&& aStyle);
+
+  void ComposeStyleRule(RefPtr<AnimValuesStyleRule>& aStyleRule,
+                        const AnimationProperty& aProperty,
+                        const AnimationPropertySegment& aSegment,
+                        const ComputedTiming& aComputedTiming);
+
+  void ComposeStyleRule(const RawServoAnimationValueMap& aAnimationValues,
+                        const AnimationProperty& aProperty,
+                        const AnimationPropertySegment& aSegment,
+                        const ComputedTiming& aComputedTiming);
 
   nsIFrame* GetAnimationFrame() const;
 

@@ -69,6 +69,7 @@ SpeechSynthesisUtterance::Constructor(GlobalObject& aGlobal,
 
   if (!win) {
     aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
   }
 
   MOZ_ASSERT(win->IsInnerWindow());
@@ -158,7 +159,7 @@ SpeechSynthesisUtterance::GetChosenVoiceURI(nsString& aResult) const
 void
 SpeechSynthesisUtterance::DispatchSpeechSynthesisEvent(const nsAString& aEventType,
                                                        uint32_t aCharIndex,
-                                                       Nullable<uint32_t> aCharLength,
+                                                       const Nullable<uint32_t>& aCharLength,
                                                        float aElapsedTime,
                                                        const nsAString& aName)
 {

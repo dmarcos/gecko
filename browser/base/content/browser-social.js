@@ -2,12 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* eslint-env mozilla/browser-window */
+/* global OpenGraphBuilder:false, DynamicResizeWatcher:false */
+
 // the "exported" symbols
 var SocialUI,
     SocialShare,
     SocialActivationListener;
 
 (function() {
+"use strict";
 
 XPCOMUtils.defineLazyGetter(this, "OpenGraphBuilder", function() {
   let tmp = {};
@@ -21,6 +25,9 @@ XPCOMUtils.defineLazyGetter(this, "DynamicResizeWatcher", function() {
   return tmp.DynamicResizeWatcher;
 });
 
+let messageManager = window.messageManager;
+let openUILinkIn = window.openUILinkIn;
+
 SocialUI = {
   _initialized: false,
 
@@ -33,7 +40,7 @@ SocialUI = {
     mm.loadFrameScript("chrome://browser/content/content.js", true);
     mm.loadFrameScript("chrome://browser/content/social-content.js", true);
 
-    Services.obs.addObserver(this, "social:providers-changed", false);
+    Services.obs.addObserver(this, "social:providers-changed");
 
     CustomizableUI.addListener(this);
     SocialActivationListener.init();
@@ -67,16 +74,16 @@ SocialUI = {
     }
   },
 
-  _providersChanged: function() {
+  _providersChanged() {
     SocialShare.populateProviderMenu();
   },
 
-  showLearnMore: function() {
+  showLearnMore() {
     let url = Services.urlFormatter.formatURLPref("app.support.baseURL") + "social-api";
     openUILinkIn(url, "tab");
   },
 
-  closeSocialPanelForLinkTraversal: function (target, linkNode) {
+  closeSocialPanelForLinkTraversal(target, linkNode) {
     // No need to close the panel if this traversal was not retargeted
     if (target == "" || target == "_self")
       return;
@@ -103,7 +110,7 @@ SocialUI = {
     // extrachrome is not restored during session restore, so we need
     // to check for the toolbar as well.
     let chromeless = docElem.getAttribute("chromehidden").includes("extrachrome") ||
-                     docElem.getAttribute('chromehidden').includes("toolbar");
+                     docElem.getAttribute("chromehidden").includes("toolbar");
     // This property is "fixed" for a window, so avoid doing the check above
     // multiple times...
     delete this._chromeless;
@@ -118,11 +125,11 @@ SocialUI = {
     return Social.providers.length > 0;
   },
 
-  canSharePage: function(aURI) {
-    return (aURI && (aURI.schemeIs('http') || aURI.schemeIs('https')));
+  canSharePage(aURI) {
+    return (aURI && (aURI.schemeIs("http") || aURI.schemeIs("https")));
   },
 
-  onCustomizeEnd: function(aWindow) {
+  onCustomizeEnd(aWindow) {
     if (aWindow != window)
       return;
     // customization mode gets buttons out of sync with command updating, fix
@@ -140,20 +147,20 @@ SocialUI = {
 
   // called on tab/urlbar/location changes and after customization. Update
   // anything that is tab specific.
-  updateState: function() {
+  updateState() {
     goSetCommandEnabled("Social:PageShareable", this.canSharePage(gBrowser.currentURI));
   }
 }
 
 // message manager handlers
 SocialActivationListener = {
-  init: function() {
+  init() {
     messageManager.addMessageListener("Social:Activation", this);
   },
-  uninit: function() {
+  uninit() {
     messageManager.removeMessageListener("Social:Activation", this);
   },
-  receiveMessage: function(aMessage) {
+  receiveMessage(aMessage) {
     let data = aMessage.json;
     let browser = aMessage.target;
     data.window = window;
@@ -185,8 +192,8 @@ SocialActivationListener = {
           // make this new provider the selected provider. If the panel hasn't
           // been opened, we need to make the frame first.
           SocialShare._createFrame();
-          SocialShare.iframe.setAttribute('src', 'data:text/plain;charset=utf8,');
-          SocialShare.iframe.setAttribute('origin', provider.origin);
+          SocialShare.iframe.setAttribute("src", "data:text/plain;charset=utf8,");
+          SocialShare.iframe.setAttribute("origin", provider.origin);
           // get the right button selected
           SocialShare.populateProviderMenu();
           if (SocialShare.panel.state == "open") {
@@ -229,7 +236,7 @@ SocialShare = {
     return this.panel.lastChild.firstChild;
   },
 
-  uninit: function () {
+  uninit() {
     if (this.iframe) {
       let mm = this.messageManager;
       mm.removeMessageListener("PageVisibility:Show", this);
@@ -240,7 +247,7 @@ SocialShare = {
     }
   },
 
-  _createFrame: function() {
+  _createFrame() {
     let panel = this.panel;
     if (this.iframe)
       return;
@@ -273,9 +280,9 @@ SocialShare = {
     return this.iframe.QueryInterface(Components.interfaces.nsIFrameLoaderOwner).frameLoader.messageManager;
   },
 
-  receiveMessage: function(aMessage) {
+  receiveMessage(aMessage) {
     let iframe = this.iframe;
-    switch(aMessage.name) {
+    switch (aMessage.name) {
       case "PageVisibility:Show":
         SocialShare._dynamicResizer.start(iframe.parentNode, iframe);
         break;
@@ -288,7 +295,7 @@ SocialShare = {
     }
   },
 
-  handleEvent: function(event) {
+  handleEvent(event) {
     switch (event.type) {
       case "load": {
         this.iframe.parentNode.removeAttribute("loading");
@@ -298,7 +305,7 @@ SocialShare = {
     }
   },
 
-  getSelectedProvider: function() {
+  getSelectedProvider() {
     let provider;
     let lastProviderOrigin = this.iframe && this.iframe.getAttribute("origin");
     if (lastProviderOrigin) {
@@ -307,14 +314,14 @@ SocialShare = {
     return provider;
   },
 
-  createTooltip: function(event) {
+  createTooltip(event) {
     let tt = event.target;
     let provider = Social._getProviderFromOrigin(tt.triggerNode.getAttribute("origin"));
     tt.firstChild.setAttribute("value", provider.name);
     tt.lastChild.setAttribute("value", provider.origin);
   },
 
-  populateProviderMenu: function() {
+  populateProviderMenu() {
     if (!this.iframe)
       return;
     let providers = Social.providers.filter(p => p.shareURL);
@@ -359,16 +366,16 @@ SocialShare = {
     return widget.forWindow(window).node;
   },
 
-  _onclick: function() {
+  _onclick() {
     Services.telemetry.getHistogramById("SOCIAL_PANEL_CLICKS").add(0);
   },
 
-  onShowing: function() {
+  onShowing() {
     (this._currentAnchor || this.anchor).setAttribute("open", "true");
     this.iframe.addEventListener("click", this._onclick, true);
   },
 
-  onHidden: function() {
+  onHidden() {
     (this._currentAnchor || this.anchor).removeAttribute("open");
     this._currentAnchor = null;
     this.iframe.docShellIsActive = false;
@@ -381,7 +388,7 @@ SocialShare = {
     this.iframe.purgeSessionHistory();
   },
 
-  sharePage: function(providerOrigin, graphData, target, anchor) {
+  sharePage(providerOrigin, graphData, target, anchor) {
     // if providerOrigin is undefined, we use the last-used provider, or the
     // current/default provider.  The provider selection in the share panel
     // will call sharePage with an origin for us to switch to.
@@ -393,8 +400,8 @@ SocialShare = {
     // in mozSocial API, or via nsContentMenu calls. If it is present, it MUST
     // define at least url. If it is undefined, we're sharing the current url in
     // the browser tab.
-    let pageData = graphData ? graphData : this.currentShare;
-    let sharedURI = pageData ? Services.io.newURI(pageData.url) :
+    let sharedPageData = graphData || this.currentShare;
+    let sharedURI = sharedPageData ? Services.io.newURI(sharedPageData.url) :
                                 gBrowser.currentURI;
     if (!SocialUI.canSharePage(sharedURI))
       return;
@@ -406,7 +413,7 @@ SocialShare = {
     // socialapi functionality.  One tweak is that we shoot an event
     // containing the open graph data.
     let _dataFn;
-    if (!pageData || sharedURI == gBrowser.currentURI) {
+    if (!sharedPageData || sharedURI == gBrowser.currentURI) {
       browserMM.addMessageListener("PageMetadata:PageDataResult", _dataFn = (msg) => {
         browserMM.removeMessageListener("PageMetadata:PageDataResult", _dataFn);
         let pageData = msg.json;
@@ -422,16 +429,16 @@ SocialShare = {
       return;
     }
     // if this is a share of a selected item, get any microformats
-    if (!pageData.microformats && target) {
+    if (!sharedPageData.microformats && target) {
       browserMM.addMessageListener("PageMetadata:MicroformatsResult", _dataFn = (msg) => {
         browserMM.removeMessageListener("PageMetadata:MicroformatsResult", _dataFn);
-        pageData.microformats = msg.data;
-        this.sharePage(providerOrigin, pageData, target, anchor);
+        sharedPageData.microformats = msg.data;
+        this.sharePage(providerOrigin, sharedPageData, target, anchor);
       });
       browserMM.sendAsyncMessage("PageMetadata:GetMicroformats", null, { target });
       return;
     }
-    this.currentShare = pageData;
+    this.currentShare = sharedPageData;
 
     let provider;
     if (providerOrigin)
@@ -448,7 +455,7 @@ SocialShare = {
     if (btn)
       btn.checked = true;
 
-    let shareEndpoint = OpenGraphBuilder.generateEndpointURL(provider.shareURL, pageData);
+    let shareEndpoint = OpenGraphBuilder.generateEndpointURL(provider.shareURL, sharedPageData);
 
     this._dynamicResizer.stop();
     let size = provider.getPageSize("share");
@@ -474,13 +481,12 @@ SocialShare = {
     iframe.purgeSessionHistory();
 
     // always ensure that origin belongs to the endpoint
-    let uri = Services.io.newURI(shareEndpoint);
     iframe.setAttribute("origin", provider.origin);
     iframe.setAttribute("src", shareEndpoint);
     this._openPanel(anchor);
   },
 
-  showDirectory: function(anchor) {
+  showDirectory(anchor) {
     this._createFrame();
     let iframe = this.iframe;
     if (iframe.getAttribute("src") == "about:providerdirectory")
@@ -492,7 +498,7 @@ SocialShare = {
     this._openPanel(anchor);
   },
 
-  _openPanel: function(anchor) {
+  _openPanel(anchor) {
     this._currentAnchor = anchor || this.anchor;
     anchor = document.getAnonymousElementByAttribute(this._currentAnchor, "class", "toolbarbutton-icon");
     this.panel.openPopup(anchor, "bottomcenter topright", 0, 0, false, false);
@@ -500,4 +506,4 @@ SocialShare = {
   }
 };
 
-})();
+}).call(this);

@@ -26,10 +26,6 @@ VRDisplayHost::VRDisplayHost(VRDeviceType aType)
   mDisplayInfo.mType = aType;
   mDisplayInfo.mDisplayID = VRSystemManager::AllocateDisplayID();
   mDisplayInfo.mIsPresenting = false;
-
-  for (int i = 0; i < kMaxLatencyFrames; i++) {
-    mLastSensorState[i].Clear();
-  }
 }
 
 VRDisplayHost::~VRDisplayHost()
@@ -146,6 +142,7 @@ VRDisplayHost::CheckClearDisplayInfoDirty()
 }
 
 VRControllerHost::VRControllerHost(VRDeviceType aType)
+ : mVibrateIndex(0)
 {
   MOZ_COUNT_CTOR(VRControllerHost);
   mControllerInfo.mType = aType;
@@ -164,18 +161,6 @@ VRControllerHost::GetControllerInfo() const
 }
 
 void
-VRControllerHost::SetIndex(uint32_t aIndex)
-{
-  mIndex = aIndex;
-}
-
-uint32_t
-VRControllerHost::GetIndex()
-{
-  return mIndex;
-}
-
-void
 VRControllerHost::SetButtonPressed(uint64_t aBit)
 {
   mButtonPressed = aBit;
@@ -185,6 +170,18 @@ uint64_t
 VRControllerHost::GetButtonPressed()
 {
   return mButtonPressed;
+}
+
+void
+VRControllerHost::SetButtonTouched(uint64_t aBit)
+{
+  mButtonTouched = aBit;
+}
+
+uint64_t
+VRControllerHost::GetButtonTouched()
+{
+  return mButtonTouched;
 }
 
 void
@@ -199,3 +196,20 @@ VRControllerHost::GetPose()
   return mPose;
 }
 
+dom::GamepadHand
+VRControllerHost::GetHand()
+{
+  return mControllerInfo.mHand;
+}
+
+void
+VRControllerHost::SetVibrateIndex(uint64_t aIndex)
+{
+  mVibrateIndex = aIndex;
+}
+
+uint64_t
+VRControllerHost::GetVibrateIndex()
+{
+  return mVibrateIndex;
+}

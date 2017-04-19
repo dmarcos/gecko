@@ -16,7 +16,7 @@ namespace a11y {
 
 static StaticAutoPtr<PlatformChild> sPlatformChild;
 
-DocAccessibleChild::DocAccessibleChild(DocAccessible* aDoc)
+DocAccessibleChild::DocAccessibleChild(DocAccessible* aDoc, IProtocol* aManager)
   : DocAccessibleChildBase(aDoc)
   , mEmulatedWindowHandle(nullptr)
   , mIsRemoteConstructed(false)
@@ -26,6 +26,8 @@ DocAccessibleChild::DocAccessibleChild(DocAccessible* aDoc)
     sPlatformChild = new PlatformChild();
     ClearOnShutdown(&sPlatformChild, ShutdownPhase::Shutdown);
   }
+
+  SetManager(aManager);
 }
 
 DocAccessibleChild::~DocAccessibleChild()
@@ -46,13 +48,11 @@ DocAccessibleChild::Shutdown()
 }
 
 ipc::IPCResult
-DocAccessibleChild::RecvParentCOMProxy(const IAccessibleHolder& aParentCOMProxy,
-                                       const WindowsHandle& aEmulatedWindowHandle)
+DocAccessibleChild::RecvParentCOMProxy(const IAccessibleHolder& aParentCOMProxy)
 {
   MOZ_ASSERT(!mParentProxy && !aParentCOMProxy.IsNull());
   mParentProxy.reset(const_cast<IAccessibleHolder&>(aParentCOMProxy).Release());
   SetConstructedInParentProcess();
-  mEmulatedWindowHandle = reinterpret_cast<HWND>(aEmulatedWindowHandle);
 
   for (uint32_t i = 0, l = mDeferredEvents.Length(); i < l; ++i) {
     mDeferredEvents[i]->Dispatch();
@@ -61,6 +61,32 @@ DocAccessibleChild::RecvParentCOMProxy(const IAccessibleHolder& aParentCOMProxy,
   mDeferredEvents.Clear();
 
   return IPC_OK();
+}
+
+ipc::IPCResult
+DocAccessibleChild::RecvEmulatedWindow(const WindowsHandle& aEmulatedWindowHandle,
+                                       const IAccessibleHolder& aEmulatedWindowCOMProxy)
+{
+  mEmulatedWindowHandle = reinterpret_cast<HWND>(aEmulatedWindowHandle);
+  if (!aEmulatedWindowCOMProxy.IsNull()) {
+    MOZ_ASSERT(!mEmulatedWindowProxy);
+    mEmulatedWindowProxy.reset(
+      const_cast<IAccessibleHolder&>(aEmulatedWindowCOMProxy).Release());
+  }
+
+  return IPC_OK();
+}
+
+HWND
+DocAccessibleChild::GetNativeWindowHandle() const
+{
+  if (mEmulatedWindowHandle) {
+    return mEmulatedWindowHandle;
+  }
+
+  auto tab = static_cast<dom::TabChild*>(Manager());
+  MOZ_ASSERT(tab);
+  return reinterpret_cast<HWND>(tab->GetNativeWindowHandle());
 }
 
 void
@@ -164,6 +190,13 @@ DocAccessibleChild::SendTextChangeEvent(const uint64_t& aID,
                                         const bool& aFromUser)
 {
   if (IsConstructedInParentProcess()) {
+    if (aStr.Contains(L'\xfffc')) {
+      // The AT is going to need to reenter content while the event is being
+      // dispatched synchronously.
+      return PDocAccessibleChild::SendSyncTextChangeEvent(aID, aStr, aStart,
+                                                          aLen, aIsInsert,
+                                                          aFromUser);
+    }
     return PDocAccessibleChild::SendTextChangeEvent(aID, aStr, aStart,
                                                     aLen, aIsInsert, aFromUser);
   }

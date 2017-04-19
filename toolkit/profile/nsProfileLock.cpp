@@ -3,10 +3,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsProfileStringTypes.h"
 #include "nsProfileLock.h"
 #include "nsCOMPtr.h"
 #include "nsQueryObject.h"
+#include "nsString.h"
 
 #if defined(XP_WIN)
 #include "ProfileUnlockerWin.h"
@@ -26,8 +26,8 @@
 #include <stdlib.h>
 #include "prnetdb.h"
 #include "prsystem.h"
-#include "prprf.h"
 #include "prenv.h"
+#include "mozilla/Printf.h"
 #endif
 
 #if defined(MOZ_WIDGET_GONK) && !defined(MOZ_CRASHREPORTER)
@@ -353,8 +353,8 @@ nsresult nsProfileLock::LockWithSymlink(nsIFile *aLockFile, bool aHaveFcntlLock)
     }
 
     char *signature =
-        PR_smprintf("%s:%s%lu", inet_ntoa(inaddr), aHaveFcntlLock ? "+" : "",
-                    (unsigned long)getpid());
+        mozilla::Smprintf("%s:%s%lu", inet_ntoa(inaddr), aHaveFcntlLock ? "+" : "",
+                   (unsigned long)getpid());
     const char *fileName = lockFilePath.get();
     int symlink_rv, symlink_errno = 0, tries = 0;
 
@@ -375,7 +375,7 @@ nsresult nsProfileLock::LockWithSymlink(nsIFile *aLockFile, bool aHaveFcntlLock)
             break;
     }
 
-    PR_smprintf_free(signature);
+    mozilla::SmprintfFree(signature);
     signature = nullptr;
 
     if (symlink_rv == 0)
@@ -480,6 +480,11 @@ nsresult nsProfileLock::Lock(nsIFile* aProfileDir,
         return rv;
 
     rv = lockFile->Append(LOCKFILE_NAME);
+    if (NS_FAILED(rv))
+        return rv;
+
+    // Remember the name we're using so we can clean up
+    rv = lockFile->Clone(getter_AddRefs(mLockFile));
     if (NS_FAILED(rv))
         return rv;
 
@@ -658,4 +663,13 @@ nsresult nsProfileLock::Unlock(bool aFatalSignal)
     }
 
     return rv;
+}
+
+nsresult nsProfileLock::Cleanup()
+{
+    if (mLockFile) {
+        return mLockFile->Remove(false);
+    }
+
+    return NS_OK;
 }

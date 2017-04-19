@@ -7,10 +7,8 @@
  */
 
 .boxmodel-container {
-  /* The view will grow bigger as the window gets resized, until 400px */
-  max-width: 400px;
-  margin: 0px auto;
-  padding: 0;
+  overflow: auto;
+  padding-bottom: 4px;
 }
 
 /* Header */
@@ -22,10 +20,6 @@
   padding: 4px 17px;
 }
 
-.layout-geometry-editor {
-  visibility: hidden;
-}
-
 .layout-geometry-editor::before {
   background: url(images/geometry-editor.svg) no-repeat center center / 16px 16px;
 }
@@ -34,14 +28,20 @@
 
 .boxmodel-main {
   position: relative;
-  box-sizing: border-box;
+  color: var(--theme-selection-color);
+  /* Make sure there is some space between the window's edges and the regions */
+  margin: 14px auto;
+  width: calc(100% - 2 * 14px);
+  min-width: 240px;
+  /* The view will grow bigger as the window gets resized, until 400px */
+  max-width: 400px;
+}
+
+.boxmodel-box {
+  margin: 25px;
   /* The regions are semi-transparent, so the white background is partly
      visible */
   background-color: white;
-  color: var(--theme-selection-color);
-  /* Make sure there is some space between the window's edges and the regions */
-  margin: 14px 14px 4px 14px;
-  width: calc(100% - 2 * 14px);
 }
 
 .boxmodel-margin,
@@ -51,7 +51,7 @@
 
 /* Regions are 3 nested elements with wide borders and outlines */
 
-.boxmodel-content {
+.boxmodel-contents {
   height: 18px;
 }
 
@@ -83,14 +83,8 @@
   border-color: #6a5acd;
 }
 
-.boxmodel-content {
+.boxmodel-contents {
   background-color: #87ceeb;
-}
-
-.theme-firebug .boxmodel-main,
-.theme-firebug .boxmodel-borders,
-.theme-firebug .boxmodel-content {
-  border-style: solid;
 }
 
 .theme-firebug .boxmodel-main,
@@ -109,7 +103,8 @@
 
 /* Editable region sizes are contained in absolutely positioned <p> */
 
-.boxmodel-main > p {
+.boxmodel-main > p,
+.boxmodel-size {
   position: absolute;
   pointer-events: none;
   margin: 0;
@@ -117,7 +112,9 @@
 }
 
 .boxmodel-main > p > span,
-.boxmodel-main > p > input {
+.boxmodel-main > p > input,
+.boxmodel-content,
+.boxmodel-size > span {
   vertical-align: middle;
   pointer-events: auto;
 }
@@ -155,6 +152,8 @@
 }
 
 .boxmodel-size,
+.boxmodel-position.boxmodel-left,
+.boxmodel-position.boxmodel-right,
 .boxmodel-margin.boxmodel-left,
 .boxmodel-margin.boxmodel-right,
 .boxmodel-border.boxmodel-left,
@@ -169,37 +168,41 @@
   width: calc(100% - 2px);
 }
 
+.boxmodel-position.boxmodel-top,
+.boxmodel-position.boxmodel-bottom,
+.boxmodel-position.boxmodel-left,
+.boxmodel-position.boxmodel-right,
 .boxmodel-margin.boxmodel-right,
 .boxmodel-margin.boxmodel-left,
-.boxmodel-border.boxmodel-left,
 .boxmodel-border.boxmodel-right,
+.boxmodel-border.boxmodel-left,
 .boxmodel-padding.boxmodel-right,
 .boxmodel-padding.boxmodel-left {
   width: 21px;
 }
 
 .boxmodel-padding.boxmodel-left {
-  left: 35px;
+  left: 60px;
 }
 
 .boxmodel-padding.boxmodel-right {
-  right: 35px;
+  right: 60px;
 }
 
 .boxmodel-border.boxmodel-left {
-  left: 16px;
+  left: 41px;
 }
 
 .boxmodel-border.boxmodel-right {
-  right: 17px;
+  right: 42px;
 }
 
 .boxmodel-margin.boxmodel-right {
-  right: 0;
+  right: 25px;
 }
 
 .boxmodel-margin.boxmodel-left {
-  left: 0;
+  left: 25px;
 }
 
 .boxmodel-rotate.boxmodel-left:not(.boxmodel-editing) {
@@ -208,6 +211,63 @@
 
 .boxmodel-rotate.boxmodel-right:not(.boxmodel-editing) {
   transform: rotate(90deg);
+}
+
+.boxmodel-rotate.boxmodel-left.boxmodel-position:not(.boxmodel-editing) {
+  border-top: none;
+  border-right: 1px solid var(--theme-highlight-purple);
+  width: auto;
+  height: 30px;
+}
+
+.boxmodel-size > p {
+  display: inline-block;
+  margin: auto;
+  line-height: 0;
+}
+
+.boxmodel-rotate.boxmodel-right.boxmodel-position:not(.boxmodel-editing) {
+  border-top: none;
+  border-left: 1px solid var(--theme-highlight-purple);
+  width: auto;
+  height: 30px;
+}
+
+/* Box Model Positioning: contains top, right, bottom, left */
+
+.boxmodel-position {
+  color: var(--theme-highlight-purple);
+}
+
+.boxmodel-position.boxmodel-top,
+.boxmodel-position.boxmodel-bottom {
+  border-left: 1px solid var(--theme-highlight-purple);
+  left: calc(50% - 2px);
+  padding-left: 1px;
+}
+
+.boxmodel-position.boxmodel-right,
+.boxmodel-position.boxmodel-left {
+  border-top: 1px solid var(--theme-highlight-purple);
+  line-height: 15px;
+  top: calc(50% - 1px);
+  width: 30px;
+}
+
+.boxmodel-position.boxmodel-top {
+  top: -18px;
+}
+
+.boxmodel-position.boxmodel-right {
+  right: -9px;
+}
+
+.boxmodel-position.boxmodel-bottom {
+  bottom: -18px;
+}
+
+.boxmodel-position.boxmodel-left {
+  left: -9px;
 }
 
 /* Legend: displayed inside regions */
@@ -222,18 +282,21 @@
   color: var(--theme-highlight-blue);
 }
 
+.boxmodel-legend[data-box="position"] {
+  color: var(--theme-highlight-purple);
+  margin: -18px -9px;
+}
+
 /* Editable fields */
 
 .boxmodel-editable {
   border: 1px dashed transparent;
-  -moz-user-select: text;
+  -moz-user-select: none;
 }
 
 .boxmodel-editable:hover {
   border-bottom-color: hsl(0, 0%, 50%);
 }
-
-/* Make sure the content size doesn't appear as editable like the other sizes */
 
 .boxmodel-size > span {
   cursor: default;
@@ -248,4 +311,36 @@
 .boxmodel-position-group {
   display: flex;
   align-items: center;
+}
+
+/* Box Model Properties: contains a list of relevant box model properties */
+
+.boxmodel-properties-header {
+  padding: 2px 3px;
+}
+
+.boxmodel-properties-expander {
+  vertical-align: middle;
+  display: inline-block;
+}
+
+.boxmodel-properties-wrapper .property-view {
+  padding-inline-start: 17px;
+}
+
+.boxmodel-properties-wrapper .property-name-container {
+  flex: 1;
+}
+
+.boxmodel-properties-wrapper .property-value-container {
+  flex: 1;
+}
+
+/* Box Model Main - Offset Parent */
+
+.boxmodel-offset-parent {
+  position: absolute;
+  top: -20px;
+  right: -10px;
+  color: var(--theme-highlight-purple);
 }

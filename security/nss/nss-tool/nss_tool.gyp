@@ -13,14 +13,17 @@
       'sources' : [
         'nss_tool.cc',
         'common/argparse.cc',
+        'common/util.cc',
         'db/dbtool.cc',
+        'enc/enctool.cc',
       ],
       'include_dirs': [
         'common',
       ],
       'dependencies' : [
+        '<(DEPTH)/cpputil/cpputil.gyp:cpputil',
         '<(DEPTH)/exports.gyp:dbm_exports',
-        '<(DEPTH)/exports.gyp:nss_exports'
+        '<(DEPTH)/exports.gyp:nss_exports',
       ],
     }
   ],

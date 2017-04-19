@@ -3,35 +3,11 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 DIRS += [
-    'actions',
-    'components',
-    'har',
-    'middleware',
-    'reducers',
-    'selectors',
-    'shared',
-    'utils',
+    'src'
 ]
 
 DevToolsModules(
-    'constants.js',
-    'custom-request-view.js',
-    'events.js',
-    'filter-predicates.js',
-    'l10n.js',
-    'netmonitor-controller.js',
-    'netmonitor-view.js',
-    'panel.js',
-    'prefs.js',
-    'request-list-context-menu.js',
-    'request-utils.js',
-    'requests-menu-view.js',
-    'sidebar-view.js',
-    'sort-predicates.js',
-    'statistics-view.js',
-    'store.js',
-    'toolbar-view.js',
-    'waterfall-background.js',
+    'panel.js'
 )
 
 BROWSER_CHROME_MANIFESTS += ['test/browser.ini']

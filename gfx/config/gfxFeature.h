@@ -19,12 +19,12 @@ namespace gfx {
   /* Name,                        Type,         Description */                    \
   _(HW_COMPOSITING,               Feature,      "Compositing")                    \
   _(D3D11_COMPOSITING,            Feature,      "Direct3D11 Compositing")         \
-  _(D3D9_COMPOSITING,             Feature,      "Direct3D9 Compositing")          \
   _(OPENGL_COMPOSITING,           Feature,      "OpenGL Compositing")             \
   _(DIRECT2D,                     Feature,      "Direct2D")                       \
   _(D3D11_HW_ANGLE,               Feature,      "Direct3D11 hardware ANGLE")      \
   _(DIRECT_DRAW,                  Feature,      "DirectDraw")                     \
   _(GPU_PROCESS,                  Feature,      "GPU Process")                    \
+  _(WEBRENDER,                    Feature,      "WebRender")                      \
   /* Add new entries above this comment */
 
 enum class Feature : uint32_t {

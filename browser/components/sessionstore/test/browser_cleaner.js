@@ -24,11 +24,11 @@ function isRecent(stamp) {
   return Date.now() - stamp <= 60000;
 }
 
-function promiseCleanup () {
+function promiseCleanup() {
   info("Cleaning up browser");
 
   return promiseBrowserState(getClosedState());
-};
+}
 
 function getClosedState() {
   return Cu.cloneInto(CLOSED_STATE, {});
@@ -118,7 +118,7 @@ add_task(function* test_old_data() {
   yield promiseBrowserState(state);
 
   info("Sending idle-daily");
-  Services.obs.notifyObservers(null, "idle-daily", "");
+  Services.obs.notifyObservers(null, "idle-daily");
   info("Sent idle-daily");
 
   state = JSON.parse(ss.getBrowserState());
@@ -144,7 +144,7 @@ add_task(function* test_cleanup() {
   yield promiseBrowserState(state);
 
   info("Sending idle-daily");
-  Services.obs.notifyObservers(null, "idle-daily", "");
+  Services.obs.notifyObservers(null, "idle-daily");
   info("Sent idle-daily");
 
   state = JSON.parse(ss.getBrowserState());

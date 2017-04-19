@@ -47,7 +47,7 @@ config = {
     'secret_files': [
         {'filename': '/builds/gapi.data',
          'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/gapi.data',
-         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+         'min_scm_level': 1},
         {'filename': '/builds/mozilla-desktop-geoloc-api.key',
          'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/mozilla-desktop-geoloc-api.key',
          'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
@@ -66,6 +66,7 @@ config = {
     'enable_count_ctors': True,
     'enable_talos_sendchange': False,
     'enable_unittest_sendchange': True,
+    'skip_balrog_uploads': True, # If True, rely on Funsize to update Balrog
     #########################################################################
 
 
@@ -82,7 +83,7 @@ config = {
         'HG_SHARE_BASE_DIR': '/builds/hg-shared',
         'MOZ_OBJDIR': 'obj-firefox',
         'TINDERBOX_OUTPUT': '1',
-        'TOOLTOOL_CACHE': '/builds/tooltool_cache',
+        'TOOLTOOL_CACHE': '/home/worker/tooltool-cache',
         'TOOLTOOL_HOME': '/builds',
         'MOZ_CRASHREPORTER_NO_REPORT': '1',
         'CCACHE_DIR': '/builds/ccache',

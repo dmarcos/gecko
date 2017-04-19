@@ -8,6 +8,7 @@
 #define mozilla_tabs_TabParent_h
 
 #include "js/TypeDecls.h"
+#include "LiveResizeListener.h"
 #include "mozilla/ContentCache.h"
 #include "mozilla/dom/AudioChannelBinding.h"
 #include "mozilla/dom/ipc/IdType.h"
@@ -89,8 +90,8 @@ class TabParent final : public PBrowserParent
                       , public nsIKeyEventInPluginCallback
                       , public nsSupportsWeakReference
                       , public TabContext
-                      , public nsAPostRefreshObserver
                       , public nsIWebBrowserPersistable
+                      , public LiveResizeListener
 {
   typedef mozilla::dom::ClonedMessageData ClonedMessageData;
 
@@ -156,8 +157,6 @@ public:
 
   void AddWindowListeners();
 
-  void DidRefresh() override;
-
   virtual mozilla::ipc::IPCResult RecvMoveFocus(const bool& aForward,
                                                 const bool& aForDocumentNavigation) override;
 
@@ -183,7 +182,8 @@ public:
                                                              const nsString& aFeatures,
                                                              bool* aOutWindowOpened,
                                                              TextureFactoryIdentifier* aTextureFactoryIdentifier,
-                                                             uint64_t* aLayersId) override;
+                                                             uint64_t* aLayersId,
+                                                             CompositorOptions* aCompositorOptions) override;
 
   virtual mozilla::ipc::IPCResult
   RecvSyncMessage(const nsString& aMessage,
@@ -207,7 +207,7 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvNotifyIMEFocus(const ContentCache& aContentCache,
                      const widget::IMENotification& aEventMessage,
-                     nsIMEUpdatePreference* aPreference) override;
+                     widget::IMENotificationRequests* aRequests) override;
 
   virtual mozilla::ipc::IPCResult
   RecvNotifyIMETextChange(const ContentCache& aContentCache,
@@ -343,10 +343,6 @@ public:
 
   virtual bool
   DeallocPColorPickerParent(PColorPickerParent* aColorPicker) override;
-
-  virtual PDatePickerParent*
-  AllocPDatePickerParent(const nsString& aTitle, const nsString& aInitialDate) override;
-  virtual bool DeallocPDatePickerParent(PDatePickerParent* aDatePicker) override;
 
   virtual PDocAccessibleParent*
   AllocPDocAccessibleParent(PDocAccessibleParent*, const uint64_t&,
@@ -591,7 +587,13 @@ public:
   bool GetRenderFrameInfo(TextureFactoryIdentifier* aTextureFactoryIdentifier,
                           uint64_t* aLayersId);
 
-  mozilla::ipc::IPCResult RecvEnsureLayersConnected() override;
+  mozilla::ipc::IPCResult RecvEnsureLayersConnected(CompositorOptions* aCompositorOptions) override;
+
+  // LiveResizeListener implementation
+  void LiveResizeStarted() override;
+  void LiveResizeStopped() override;
+
+  void DispatchTabChildNotReadyEvent();
 
 protected:
   bool ReceiveMessage(const nsString& aMessage,
@@ -746,8 +748,6 @@ private:
   // cursor.  This happens whenever the cursor is in the tab's region.
   bool mTabSetsCursor;
 
-  RefPtr<nsIPresShell> mPresShellWithRefreshListener;
-
   bool mHasContentOpener;
 
 #ifdef DEBUG
@@ -771,6 +771,10 @@ private:
   // If this flag is set, then the tab's layers will be preserved even when
   // the tab's docshell is inactive.
   bool mPreserveLayers;
+
+  // True if this TabParent has had its layer tree sent to the compositor
+  // at least once.
+  bool mHasPresented;
 
 public:
   static TabParent* GetTabParentFromLayersId(uint64_t aLayersId);

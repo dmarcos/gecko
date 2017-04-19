@@ -407,6 +407,21 @@ public:
                                  nsIDocument* aDocument,
                                  char16_t*& aBufOut, size_t& aLengthOut);
 
+  static inline nsresult
+  ConvertToUTF16(nsIChannel* aChannel, const uint8_t* aData,
+                 uint32_t aLength, const nsAString& aHintCharset,
+                 nsIDocument* aDocument,
+                 JS::UniqueTwoByteChars& aBufOut, size_t& aLengthOut)
+  {
+    char16_t* bufOut;
+    nsresult rv = ConvertToUTF16(aChannel, aData, aLength, aHintCharset, aDocument,
+                                 bufOut, aLengthOut);
+    if (NS_SUCCEEDED(rv)) {
+      aBufOut.reset(bufOut);
+    }
+    return rv;
+  };
+
   /**
    * Handle the completion of a stream.  This is called by the
    * nsScriptLoadHandler object which observes the IncrementalStreamLoader
@@ -585,6 +600,8 @@ private:
   JS::SourceBufferHolder GetScriptSource(nsScriptLoadRequest* aRequest,
                                          nsAutoString& inlineData);
 
+  bool ModuleScriptsEnabled();
+
   void SetModuleFetchStarted(nsModuleLoadRequest *aRequest);
   void SetModuleFetchFinishedAndResumeWaitingRequests(nsModuleLoadRequest *aRequest,
                                                       nsresult aResult);
@@ -687,6 +704,9 @@ private:
   bool EnsureDecoder(nsIIncrementalStreamLoader *aLoader,
                      const uint8_t* aData, uint32_t aDataLength,
                      bool aEndOfStream);
+  bool EnsureDecoder(nsIIncrementalStreamLoader *aLoader,
+                     const uint8_t* aData, uint32_t aDataLength,
+                     bool aEndOfStream, nsCString& oCharset);
 
   // ScriptLoader which will handle the parsed script.
   RefPtr<nsScriptLoader>        mScriptLoader;

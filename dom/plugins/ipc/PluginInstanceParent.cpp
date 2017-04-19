@@ -1440,24 +1440,6 @@ PluginInstanceParent::NPP_GetValue(NPPVariable aVariable,
         return NPERR_NO_ERROR;
     }
 
-#ifdef MOZ_X11
-    case NPPVpluginNeedsXEmbed: {
-        bool needsXEmbed;
-        NPError rv;
-
-        if (!CallNPP_GetValue_NPPVpluginNeedsXEmbed(&needsXEmbed, &rv)) {
-            return NPERR_GENERIC_ERROR;
-        }
-
-        if (NPERR_NO_ERROR != rv) {
-            return rv;
-        }
-
-        (*(NPBool*)_retval) = needsXEmbed;
-        return NPERR_NO_ERROR;
-    }
-#endif
-
     case NPPVpluginScriptableNPObject: {
         PPluginScriptableObjectParent* actor;
         NPError rv;
@@ -2030,32 +2012,6 @@ PluginInstanceParent::AnswerNPN_SetValueForURL(const NPNURLVariable& variable,
 }
 
 mozilla::ipc::IPCResult
-PluginInstanceParent::AnswerNPN_GetAuthenticationInfo(const nsCString& protocol,
-                                                      const nsCString& host,
-                                                      const int32_t& port,
-                                                      const nsCString& scheme,
-                                                      const nsCString& realm,
-                                                      nsCString* username,
-                                                      nsCString* password,
-                                                      NPError* result)
-{
-    char* u;
-    uint32_t ulen;
-    char* p;
-    uint32_t plen;
-
-    *result = mNPNIface->getauthenticationinfo(mNPP, protocol.get(),
-                                               host.get(), port,
-                                               scheme.get(), realm.get(),
-                                               &u, &ulen, &p, &plen);
-    if (NPERR_NO_ERROR == *result) {
-        username->Adopt(u, ulen);
-        password->Adopt(p, plen);
-    }
-    return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
 PluginInstanceParent::AnswerNPN_ConvertPoint(const double& sourceX,
                                              const bool&   ignoreDestX,
                                              const double& sourceY,
@@ -2083,17 +2039,6 @@ PluginInstanceParent::RecvRedrawPlugin()
     }
 
     inst->RedrawPlugin();
-    return IPC_OK();
-}
-
-mozilla::ipc::IPCResult
-PluginInstanceParent::RecvNegotiatedCarbon()
-{
-    nsNPAPIPluginInstance *inst = static_cast<nsNPAPIPluginInstance*>(mNPP->ndata);
-    if (!inst) {
-        return IPC_FAIL_NO_REASON(this);
-    }
-    inst->CarbonNPAPIFailure();
     return IPC_OK();
 }
 

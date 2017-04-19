@@ -36,12 +36,15 @@ function serveManifest(request, response) {
   response.write(manifest.data);
 }
 
-
 function promiseInstallWebExtension(aData) {
   let addonFile = createTempWebExtensionFile(aData);
 
+  let startupPromise = promiseWebExtensionStartup();
+
   return promiseInstallAllFiles([addonFile]).then(() => {
-    Services.obs.notifyObservers(addonFile, "flush-cache-entry", null);
+    return startupPromise;
+  }).then(() => {
+    Services.obs.notifyObservers(addonFile, "flush-cache-entry");
     return promiseAddonByID(aData.id);
   });
 }
@@ -175,7 +178,10 @@ add_task(function* checkUpdateToWebExt() {
 
   equal(update.addon.version, "1.0", "add-on version");
 
-  yield promiseCompleteAllInstalls([update.updateAvailable]);
+  yield Promise.all([
+    promiseCompleteAllInstalls([update.updateAvailable]),
+    promiseWebExtensionStartup(),
+  ]);
 
   let addon = yield promiseAddonByID(update.addon.id);
   equal(addon.version, "1.2", "new add-on version");
@@ -232,7 +238,7 @@ add_task(function* checkIllegalUpdateURL() {
       });
 
       return AddonManager.getInstallForFile(addonFile).then(install => {
-        Services.obs.notifyObservers(addonFile, "flush-cache-entry", null);
+        Services.obs.notifyObservers(addonFile, "flush-cache-entry");
 
         if (!install || install.state != AddonManager.STATE_DOWNLOAD_FAILED)
           throw new Error("Unexpected state: " + (install && install.state));

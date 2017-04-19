@@ -153,8 +153,6 @@ public:
     // DeleteGlobalRef() when the context is no longer needed.
     jobject GetGlobalContextRef(void);
 
-    void HandleGeckoMessage(JSContext* cx, JS::HandleObject message);
-
     void GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo);
 
     void GetCurrentNetworkInformation(hal::NetworkInformation* aNetworkInfo);
@@ -197,8 +195,6 @@ public:
     static void InputStreamClose(jni::Object::Param obj);
     static uint32_t InputStreamAvailable(jni::Object::Param obj);
     static nsresult InputStreamRead(jni::Object::Param obj, char *aBuf, uint32_t aCount, uint32_t *aRead);
-
-    static nsresult GetExternalPublicDirectory(const nsAString& aType, nsAString& aPath);
 
 protected:
     static nsDataHashtable<nsStringHashKey, nsString> sStoragePaths;
@@ -409,9 +405,9 @@ private:
   void AddObservers();
   void RemoveObservers();
 
-  void UpdateAudioPlayingWindows(uint64_t aWindowId, bool aPlaying);
+  void UpdateAudioPlayingWindows(bool aPlaying);
 
-  nsTArray<uint64_t> mAudioPlayingWindows;
+  int32_t mAudibleWindowsNum;
   nsCOMPtr<nsIAndroidEventDispatcher> mEventDispatcher;
 
 protected:

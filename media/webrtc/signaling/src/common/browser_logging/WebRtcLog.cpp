@@ -12,13 +12,9 @@
 #include "webrtc/base/logging.h"
 
 #include "nscore.h"
-#ifdef MOZILLA_INTERNAL_API
 #include "nsString.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/Preferences.h"
-#else
-#include "nsStringAPI.h"
-#endif
 
 #include "nsIFile.h"
 #include "nsDirectoryServiceUtils.h"
@@ -63,7 +59,6 @@ static WebRtcTraceCallback gWebRtcCallback;
 // For LOG()
 static mozilla::StaticAutoPtr<LogSinkImpl> sSink;
 
-#ifdef MOZILLA_INTERNAL_API
 void GetWebRtcLogPrefs(uint32_t *aTraceMask, nsACString* aLogFile, nsACString *aAECLogDir, bool *aMultiLog)
 {
   *aMultiLog = mozilla::Preferences::GetBool("media.webrtc.debug.multi_log");
@@ -72,7 +67,6 @@ void GetWebRtcLogPrefs(uint32_t *aTraceMask, nsACString* aLogFile, nsACString *a
   mozilla::Preferences::GetCString("media.webrtc.debug.aec_log_dir", aAECLogDir);
   webrtc::Trace::set_aec_debug_size(mozilla::Preferences::GetUint("media.webrtc.debug.aec_dump_max_size"));
 }
-#endif
 
 mozilla::LogLevel
 CheckOverrides(uint32_t *aTraceMask, nsACString *aLogFile, bool *aMultiLog)
@@ -187,12 +181,10 @@ void ConfigWebRtcLog(mozilla::LogLevel level, uint32_t trace_mask,
   }
 #endif
 
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   if (XRE_IsParentProcess()) {
     // Capture the final choice for the trace setting.
     mozilla::Preferences::SetCString("media.webrtc.debug.log_file", aLogFile);
   }
-#endif
   return;
 }
 
@@ -215,9 +207,7 @@ void StartWebRtcLog(uint32_t log_level)
   nsAutoCString log_file;
   nsAutoCString aec_log_dir;
 
-#ifdef MOZILLA_INTERNAL_API
   GetWebRtcLogPrefs(&trace_mask, &log_file, &aec_log_dir, &multi_log);
-#endif
   mozilla::LogLevel level = CheckOverrides(&trace_mask, &log_file, &multi_log);
 
   if (trace_mask == 0) {
@@ -240,9 +230,7 @@ void EnableWebRtcLog()
   nsAutoCString log_file;
   nsAutoCString aec_log_dir;
 
-#ifdef MOZILLA_INTERNAL_API
   GetWebRtcLogPrefs(&trace_mask, &log_file, &aec_log_dir, &multi_log);
-#endif
   mozilla::LogLevel level = CheckOverrides(&trace_mask, &log_file, &multi_log);
   ConfigWebRtcLog(level, trace_mask, log_file, aec_log_dir, multi_log);
   return;
@@ -281,12 +269,10 @@ void ConfigAecLog(nsCString &aAECLogDir) {
   }
 #endif
   webrtc::Trace::set_aec_debug_filename(aAECLogDir.get());
-#if !defined(MOZILLA_EXTERNAL_LINKAGE)
   if (XRE_IsParentProcess()) {
     // Capture the final choice for the aec_log_dir setting.
     mozilla::Preferences::SetCString("media.webrtc.debug.aec_log_dir", aAECLogDir);
   }
-#endif
 }
 
 void StartAecLog()
@@ -299,9 +285,7 @@ void StartAecLog()
   nsAutoCString log_file;
   nsAutoCString aec_log_dir;
 
-#ifdef MOZILLA_INTERNAL_API
   GetWebRtcLogPrefs(&trace_mask, &log_file, &aec_log_dir, &multi_log);
-#endif
   CheckOverrides(&trace_mask, &log_file, &multi_log);
   ConfigAecLog(aec_log_dir);
 

@@ -5,7 +5,6 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=674770
 -->
 <head>
   <title>Test for Bug 674770</title>
-  <script type="application/javascript" src="/MochiKit/packed.js"></script>
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
   <script type="text/javascript" src="/tests/SimpleTest/EventUtils.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
@@ -24,7 +23,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=674770
 
 SimpleTest.waitForExplicitFinish();
 SimpleTest.waitForFocus(function() {
-  SpecialPowers.pushPrefEnv({"set":[["middlemouse.paste", true], ["dom.ipc.processCount", 1]]}, startTests);
+  SpecialPowers.pushPrefEnv({"set":[["middlemouse.paste", true]]}, startTests);
 });
 
 function startTests() {

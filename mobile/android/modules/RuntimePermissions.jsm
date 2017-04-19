@@ -9,9 +9,6 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 this.EXPORTED_SYMBOLS = ["RuntimePermissions"];
 
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Messaging", "resource://gre/modules/Messaging.jsm");
 
 // See: http://developer.android.com/reference/android/Manifest.permission.html
 const CAMERA = "android.permission.CAMERA";
@@ -33,8 +30,28 @@ var RuntimePermissions = {
     let permissions = [].concat(permission);
 
     let msg = {
-      type: 'RuntimePermissions:Prompt',
-      permissions: permissions
+      type: 'RuntimePermissions:Check',
+      permissions: permissions,
+      shouldPrompt: true
+    };
+
+    let window = Services.wm.getMostRecentWindow("navigator:browser");
+    return window.WindowEventDispatcher.sendRequestForResult(msg);
+  },
+
+  /**
+    * Check whether the specified permissions have already been granted or not.
+    *
+    * @returns A promise resolving to true if all the permissions are already granted or false if any of the
+    *          permissions are not granted.
+    */
+  checkPermissions: function(permission) {
+    let permissions = [].concat(permission);
+
+    let msg = {
+      type: 'RuntimePermissions:Check',
+      permissions: permissions,
+      shouldPrompt: false
     };
 
     let window = Services.wm.getMostRecentWindow("navigator:browser");

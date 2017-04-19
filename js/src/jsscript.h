@@ -52,7 +52,7 @@ class Debugger;
 class LazyScript;
 class ModuleObject;
 class RegExpObject;
-struct SourceCompressionTask;
+class SourceCompressionTask;
 class Shape;
 
 namespace frontend {
@@ -85,7 +85,7 @@ enum JSTryNoteKind {
     JSTRY_FOR_IN,
     JSTRY_FOR_OF,
     JSTRY_LOOP,
-    JSTRY_ITERCLOSE,
+    JSTRY_FOR_OF_ITERCLOSE,
     JSTRY_DESTRUCTURING_ITERCLOSE
 };
 
@@ -156,7 +156,7 @@ struct ScopeNoteArray {
     uint32_t   length;          // Count of indexed try notes.
 };
 
-class YieldOffsetArray {
+class YieldAndAwaitOffsetArray {
     friend bool
     detail::CopyScript(JSContext* cx, HandleScript src, HandleScript dst,
                        MutableHandle<GCVector<Scope*>> scopes);
@@ -355,13 +355,40 @@ class UncompressedSourceCache
 
 class ScriptSource
 {
-    friend struct SourceCompressionTask;
+    friend class SourceCompressionTask;
 
+  public:
+    // Any users that wish to manipulate the char buffer of the ScriptSource
+    // needs to do so via PinnedChars for GC safety. A GC may compress
+    // ScriptSources. If the source were initially uncompressed, then any raw
+    // pointers to the char buffer would now point to the freed, uncompressed
+    // chars. This is analogous to Rooted.
+    class PinnedChars
+    {
+        PinnedChars** stack_;
+        PinnedChars* prev_;
+
+        ScriptSource* source_;
+        const char16_t* chars_;
+
+      public:
+        PinnedChars(JSContext* cx, ScriptSource* source,
+                    UncompressedSourceCache::AutoHoldEntry& holder,
+                    size_t begin, size_t len);
+
+        ~PinnedChars();
+
+        const char16_t* get() const {
+            return chars_;
+        }
+    };
+
+  private:
     uint32_t refs;
 
     // Note: while ScriptSources may be compressed off thread, they are only
-    // modified by the main thread, and all members are always safe to access
-    // on the main thread.
+    // modified by the active thread, and all members are always safe to access
+    // on the active thread.
 
     // Indicate which field in the |data| union is active.
 
@@ -389,6 +416,12 @@ class ScriptSource
 
     using SourceType = mozilla::Variant<Missing, Uncompressed, Compressed>;
     SourceType data;
+
+    // If the GC attempts to call setCompressedSource with PinnedChars
+    // present, the first PinnedChars (that is, bottom of the stack) will set
+    // the compressed chars upon destruction.
+    PinnedChars* pinnedCharsStack_;
+    mozilla::Maybe<Compressed> pendingCompressed_;
 
     // The filename of this script.
     UniqueChars filename_;
@@ -437,6 +470,14 @@ class ScriptSource
     // function should be recorded before their first execution.
     UniquePtr<XDRIncrementalEncoder> xdrEncoder_;
 
+    // Instant at which the first parse of this source ended, or null
+    // if the source hasn't been parsed yet.
+    //
+    // Used for statistics purposes, to determine how much time code spends
+    // syntax parsed before being full parsed, to help determine whether
+    // our syntax parse vs. full parse heuristics are correct.
+    mozilla::TimeStamp parseEnded_;
+
     // True if we can call JSRuntime::sourceHook to load the source on
     // demand. If sourceRetrievable_ and hasSourceData() are false, it is not
     // possible to get source at all.
@@ -446,10 +487,21 @@ class ScriptSource
     const char16_t* chunkChars(JSContext* cx, UncompressedSourceCache::AutoHoldEntry& holder,
                                size_t chunk);
 
+    // Return a string containing the chars starting at |begin| and ending at
+    // |begin + len|.
+    //
+    // Warning: this is *not* GC-safe! Any chars to be handed out should use
+    // PinnedChars. See comment below.
+    const char16_t* chars(JSContext* cx, UncompressedSourceCache::AutoHoldEntry& asp,
+                          size_t begin, size_t len);
+
+    void movePendingCompressedSource();
+
   public:
     explicit ScriptSource()
       : refs(0),
         data(SourceType(Missing())),
+        pinnedCharsStack_(nullptr),
         filename_(nullptr),
         displayURL_(nullptr),
         sourceMapURL_(nullptr),
@@ -474,14 +526,14 @@ class ScriptSource
         if (--refs == 0)
             js_delete(this);
     }
-    bool initFromOptions(ExclusiveContext* cx, const ReadOnlyCompileOptions& options,
-                         mozilla::Maybe<uint32_t> parameterListEnd = mozilla::Nothing());
-    bool setSourceCopy(ExclusiveContext* cx,
-                       JS::SourceBufferHolder& srcBuf,
-                       SourceCompressionTask* tok);
+    MOZ_MUST_USE bool initFromOptions(JSContext* cx,
+                                      const ReadOnlyCompileOptions& options,
+                                      const mozilla::Maybe<uint32_t>& parameterListEnd = mozilla::Nothing());
+    MOZ_MUST_USE bool setSourceCopy(JSContext* cx, JS::SourceBufferHolder& srcBuf);
     void setSourceRetrievable() { sourceRetrievable_ = true; }
     bool sourceRetrievable() const { return sourceRetrievable_; }
     bool hasSourceData() const { return !data.is<Missing>(); }
+    bool hasUncompressedSource() const { return data.is<Uncompressed>(); }
     bool hasCompressedSource() const { return data.is<Compressed>(); }
 
     size_t length() const {
@@ -505,11 +557,6 @@ class ScriptSource
         return data.match(LengthMatcher());
     }
 
-    // Return a string containing the chars starting at |begin| and ending at
-    // |begin + len|.
-    const char16_t* chars(JSContext* cx, UncompressedSourceCache::AutoHoldEntry& asp,
-                          size_t begin, size_t len);
-
     JSFlatString* substring(JSContext* cx, size_t start, size_t stop);
     JSFlatString* substringDontDeflate(JSContext* cx, size_t start, size_t stop);
 
@@ -521,23 +568,22 @@ class ScriptSource
     void addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                 JS::ScriptSourceInfo* info) const;
 
-    MOZ_MUST_USE bool setSource(ExclusiveContext* cx,
-                                mozilla::UniquePtr<char16_t[], JS::FreePolicy>&& source,
+    MOZ_MUST_USE bool setSource(JSContext* cx,
+                                UniqueTwoByteChars&& source,
                                 size_t length);
     void setSource(SharedImmutableTwoByteString&& string);
 
-    MOZ_MUST_USE bool setCompressedSource(
-        ExclusiveContext* cx,
-        mozilla::UniquePtr<char[], JS::FreePolicy>&& raw,
-        size_t rawLength,
-        size_t sourceLength);
+    MOZ_MUST_USE bool setCompressedSource(JSContext* cx,
+                                          UniqueChars&& raw,
+                                          size_t rawLength,
+                                          size_t sourceLength);
     void setCompressedSource(SharedImmutableString&& raw, size_t sourceLength);
 
     // XDR handling
     template <XDRMode mode>
-    bool performXDR(XDRState<mode>* xdr);
+    MOZ_MUST_USE bool performXDR(XDRState<mode>* xdr);
 
-    bool setFilename(ExclusiveContext* cx, const char* filename);
+    MOZ_MUST_USE bool setFilename(JSContext* cx, const char* filename);
     const char* introducerFilename() const {
         return introducerFilename_ ? introducerFilename_.get() : filename_.get();
     }
@@ -553,7 +599,7 @@ class ScriptSource
     }
 
     // Display URLs
-    bool setDisplayURL(ExclusiveContext* cx, const char16_t* displayURL);
+    MOZ_MUST_USE bool setDisplayURL(JSContext* cx, const char16_t* displayURL);
     bool hasDisplayURL() const { return displayURL_ != nullptr; }
     const char16_t * displayURL() {
         MOZ_ASSERT(hasDisplayURL());
@@ -561,7 +607,7 @@ class ScriptSource
     }
 
     // Source maps
-    bool setSourceMapURL(ExclusiveContext* cx, const char16_t* sourceMapURL);
+    MOZ_MUST_USE bool setSourceMapURL(JSContext* cx, const char16_t* sourceMapURL);
     bool hasSourceMapURL() const { return sourceMapURL_ != nullptr; }
     const char16_t * sourceMapURL() {
         MOZ_ASSERT(hasSourceMapURL());
@@ -582,10 +628,6 @@ class ScriptSource
         hasIntroductionOffset_ = true;
     }
 
-    uint32_t parameterListEnd() const {
-        return parameterListEnd_;
-    }
-
     // Return wether an XDR encoder is present or not.
     bool hasEncoder() const { return bool(xdrEncoder_); }
 
@@ -593,7 +635,7 @@ class ScriptSource
     // of the encoding would be available in the |buffer| provided as argument,
     // as soon as |xdrFinalize| is called and all xdr function calls returned
     // successfully.
-    bool xdrEncodeTopLevel(ExclusiveContext* cx, JS::TranscodeBuffer& buffer, HandleScript script);
+    bool xdrEncodeTopLevel(JSContext* cx, JS::TranscodeBuffer& buffer, HandleScript script);
 
     // Encode a delazified JSFunction.  In case of errors, the XDR encoder is
     // freed and the |buffer| provided as argument to |xdrEncodeTopLevel| is
@@ -601,13 +643,22 @@ class ScriptSource
     //
     // The |sourceObject| argument is the object holding the current
     // ScriptSource.
-    bool xdrEncodeFunction(ExclusiveContext* cx, HandleFunction fun,
+    bool xdrEncodeFunction(JSContext* cx, HandleFunction fun,
                            HandleScriptSource sourceObject);
 
     // Linearize the encoded content in the |buffer| provided as argument to
     // |xdrEncodeTopLevel|, and free the XDR encoder.  In case of errors, the
     // |buffer| is considered undefined.
     bool xdrFinalizeEncoder();
+
+    const mozilla::TimeStamp parseEnded() const {
+        return parseEnded_;
+    }
+    // Inform `this` source that it has been fully parsed.
+    void recordParseEnded() {
+        MOZ_ASSERT(parseEnded_.IsNull());
+        parseEnded_ = mozilla::TimeStamp::Now();
+    }
 };
 
 class ScriptSourceHolder
@@ -628,10 +679,12 @@ class ScriptSourceHolder
             ss->decref();
     }
     void reset(ScriptSource* newss) {
+        // incref before decref just in case ss == newss.
+        if (newss)
+            newss->incref();
         if (ss)
             ss->decref();
         ss = newss;
-        ss->incref();
     }
     ScriptSource* get() const {
         return ss;
@@ -647,7 +700,7 @@ class ScriptSourceObject : public NativeObject
 
     static void trace(JSTracer* trc, JSObject* obj);
     static void finalize(FreeOp* fop, JSObject* obj);
-    static ScriptSourceObject* create(ExclusiveContext* cx, ScriptSource* source);
+    static ScriptSourceObject* create(JSContext* cx, ScriptSource* source);
 
     // Initialize those properties of this ScriptSourceObject whose values
     // are provided by |options|, re-wrapping as necessary.
@@ -743,7 +796,7 @@ class SharedScriptData
     uintptr_t data_[1];
 
   public:
-    static SharedScriptData* new_(ExclusiveContext* cx, uint32_t codeLength,
+    static SharedScriptData* new_(JSContext* cx, uint32_t codeLength,
                                   uint32_t srcnotesLength, uint32_t natoms);
 
     uint32_t refCount() const {
@@ -886,9 +939,44 @@ class JSScript : public js::gc::TenuredCell
 
     uint32_t        bodyScopeIndex_; /* index into the scopes array of the body scope */
 
-    /* Range of characters in scriptSource which contains this script's source. */
+    // Range of characters in scriptSource which contains this script's
+    // source, that is, the range used by the Parser to produce this script.
+    //
+    // Most scripted functions have sourceStart_ == toStringStart_ and
+    // sourceEnd_ == toStringEnd_. However, for functions with extra
+    // qualifiers (e.g. generators, async) and for class constructors (which
+    // need to return the entire class source), their values differ.
+    //
+    // Each field points the following locations.
+    //
+    //   function * f(a, b) { return a + b; }
+    //   ^          ^                        ^
+    //   |          |                        |
+    //   |          sourceStart_             sourceEnd_
+    //   |                                   |
+    //   toStringStart_                      toStringEnd_
+    //
+    // And, in the case of class constructors, an additional toStringEnd
+    // offset is used.
+    //
+    //   class C { constructor() { this.field = 42; } }
+    //   ^         ^                                 ^ ^
+    //   |         |                                 | `---------`
+    //   |         sourceStart_                      sourceEnd_  |
+    //   |                                                       |
+    //   toStringStart_                                          toStringEnd_
     uint32_t        sourceStart_;
     uint32_t        sourceEnd_;
+    uint32_t        toStringStart_;
+    uint32_t        toStringEnd_;
+
+#ifdef MOZ_VTUNE
+    // Unique Method ID passed to the VTune profiler, or 0 if unset.
+    // Allows attribution of different jitcode to the same source script.
+    uint32_t        vtuneMethodId_;
+    // Extra padding to maintain JSScript as a multiple of gc::CellSize.
+    uint32_t        __vtune_unused_padding_;
+#endif
 
     // Number of times the script has been called or has had backedges taken.
     // When running in ion, also increased for any inlined scripts. Reset if
@@ -1058,34 +1146,35 @@ class JSScript : public js::gc::TenuredCell
     //
 
   public:
-    static JSScript* Create(js::ExclusiveContext* cx,
+    static JSScript* Create(JSContext* cx,
                             const JS::ReadOnlyCompileOptions& options,
-                            js::HandleObject sourceObject, uint32_t sourceStart,
-                            uint32_t sourceEnd);
+                            js::HandleObject sourceObject,
+                            uint32_t sourceStart, uint32_t sourceEnd,
+                            uint32_t toStringStart, uint32_t toStringEnd);
 
-    void initCompartment(js::ExclusiveContext* cx);
+    void initCompartment(JSContext* cx);
 
     // Three ways ways to initialize a JSScript. Callers of partiallyInit()
     // are responsible for notifying the debugger after successfully creating
     // any kind (function or other) of new JSScript.  However, callers of
     // fullyInitFromEmitter() do not need to do this.
-    static bool partiallyInit(js::ExclusiveContext* cx, JS::Handle<JSScript*> script,
+    static bool partiallyInit(JSContext* cx, JS::Handle<JSScript*> script,
                               uint32_t nscopes, uint32_t nconsts, uint32_t nobjects,
                               uint32_t ntrynotes, uint32_t nscopenotes, uint32_t nyieldoffsets,
                               uint32_t nTypeSets);
 
   private:
-    static void initFromFunctionBox(js::ExclusiveContext* cx, js::HandleScript script,
+    static void initFromFunctionBox(JSContext* cx, js::HandleScript script,
                                     js::frontend::FunctionBox* funbox);
-    static void initFromModuleContext(js::ExclusiveContext* cx, js::HandleScript script,
+    static void initFromModuleContext(JSContext* cx, js::HandleScript script,
                                       js::frontend::ModuleSharedContext* modulesc);
 
   public:
-    static bool fullyInitFromEmitter(js::ExclusiveContext* cx, js::HandleScript script,
+    static bool fullyInitFromEmitter(JSContext* cx, js::HandleScript script,
                                      js::frontend::BytecodeEmitter* bce);
 
     // Initialize the Function.prototype script.
-    static bool initFunctionPrototype(js::ExclusiveContext* cx, js::HandleScript script,
+    static bool initFunctionPrototype(JSContext* cx, js::HandleScript script,
                                       JS::HandleFunction functionProto);
 
 #ifdef DEBUG
@@ -1212,6 +1301,14 @@ class JSScript : public js::gc::TenuredCell
         return sourceEnd_;
     }
 
+    uint32_t toStringStart() const {
+        return toStringStart_;
+    }
+
+    uint32_t toStringEnd() const {
+        return toStringEnd_;
+    }
+
     bool noScriptRval() const {
         return noScriptRval_;
     }
@@ -1328,18 +1425,20 @@ class JSScript : public js::gc::TenuredCell
     js::GeneratorKind generatorKind() const {
         return js::GeneratorKindFromBits(generatorKindBits_);
     }
-    bool isGenerator() const { return generatorKind() != js::NotGenerator; }
     bool isLegacyGenerator() const { return generatorKind() == js::LegacyGenerator; }
     bool isStarGenerator() const { return generatorKind() == js::StarGenerator; }
     void setGeneratorKind(js::GeneratorKind kind) {
         // A script only gets its generator kind set as part of initialization,
         // so it can only transition from not being a generator.
-        MOZ_ASSERT(!isGenerator());
+        MOZ_ASSERT(!isStarGenerator() && !isLegacyGenerator());
         generatorKindBits_ = GeneratorKindAsBits(kind);
     }
 
     js::FunctionAsyncKind asyncKind() const {
         return isAsync_ ? js::AsyncFunction : js::SyncFunction;
+    }
+    bool isAsync() const {
+        return isAsync_;
     }
 
     void setAsyncKind(js::FunctionAsyncKind kind) {
@@ -1494,7 +1593,8 @@ class JSScript : public js::gc::TenuredCell
 
     bool isRelazifiable() const {
         return (selfHosted() || lazyScript) && !hasInnerFunctions_ && !types_ &&
-               !isGenerator() && !hasBaselineScript() && !hasAnyIonScript() &&
+               !isStarGenerator() && !isLegacyGenerator() && !isAsync() &&
+               !hasBaselineScript() && !hasAnyIonScript() &&
                !doNotRelazify_;
     }
     void setLazyScript(js::LazyScript* lazy) {
@@ -1542,6 +1642,7 @@ class JSScript : public js::gc::TenuredCell
     bool mayReadFrameArgsDirectly();
 
     static JSFlatString* sourceData(JSContext* cx, JS::HandleScript script);
+    static JSFlatString* sourceDataForToString(JSContext* cx, JS::HandleScript script);
 
     static bool loadSource(JSContext* cx, js::ScriptSource* ss, bool* worked);
 
@@ -1552,9 +1653,16 @@ class JSScript : public js::gc::TenuredCell
     js::ScriptSourceObject& scriptSourceUnwrap() const;
     js::ScriptSource* scriptSource() const;
     js::ScriptSource* maybeForwardedScriptSource() const;
+
+    void setDefaultClassConstructorSpan(JSObject* sourceObject, uint32_t start, uint32_t end);
+
     bool mutedErrors() const { return scriptSource()->mutedErrors(); }
     const char* filename() const { return scriptSource()->filename(); }
     const char* maybeForwardedFilename() const { return maybeForwardedScriptSource()->filename(); }
+
+#ifdef MOZ_VTUNE
+    uint32_t vtuneMethodID() const { return vtuneMethodId_; }
+#endif
 
   public:
 
@@ -1623,6 +1731,15 @@ class JSScript : public js::gc::TenuredCell
         MOZ_CRASH("Function extra body var scope not found");
     }
 
+    bool needsBodyEnvironment() const {
+        for (uint32_t i = 0; i < scopes()->length; i++) {
+            js::Scope* scope = getScope(i);
+            if (ScopeKindIsInBody(scope->kind()) && scope->hasEnvironment())
+                return true;
+        }
+        return false;
+    }
+
     inline js::LexicalScope* maybeNamedLambdaScope() const;
 
     js::Scope* enclosingScope() const {
@@ -1632,9 +1749,9 @@ class JSScript : public js::gc::TenuredCell
   private:
     bool makeTypes(JSContext* cx);
 
-    bool createScriptData(js::ExclusiveContext* cx, uint32_t codeLength, uint32_t srcnotesLength,
+    bool createScriptData(JSContext* cx, uint32_t codeLength, uint32_t srcnotesLength,
                           uint32_t natoms);
-    bool shareScriptData(js::ExclusiveContext* cx);
+    bool shareScriptData(JSContext* cx);
     void freeScriptData();
     void setScriptData(js::SharedScriptData* data);
 
@@ -1692,7 +1809,9 @@ class JSScript : public js::gc::TenuredCell
     bool hasObjects() const      { return hasArray(OBJECTS); }
     bool hasTrynotes() const     { return hasArray(TRYNOTES); }
     bool hasScopeNotes() const   { return hasArray(SCOPENOTES); }
-    bool hasYieldOffsets() const { return isGenerator(); }
+    bool hasYieldAndAwaitOffsets() const {
+        return isStarGenerator() || isLegacyGenerator() || isAsync();
+    }
 
 #define OFF(fooOff, hasFoo, t)   (fooOff() + (hasFoo() ? sizeof(t) : 0))
 
@@ -1701,7 +1820,9 @@ class JSScript : public js::gc::TenuredCell
     size_t objectsOffset() const      { return OFF(constsOffset,     hasConsts,     js::ConstArray); }
     size_t trynotesOffset() const     { return OFF(objectsOffset,    hasObjects,    js::ObjectArray); }
     size_t scopeNotesOffset() const   { return OFF(trynotesOffset,   hasTrynotes,   js::TryNoteArray); }
-    size_t yieldOffsetsOffset() const { return OFF(scopeNotesOffset, hasScopeNotes, js::ScopeNoteArray); }
+    size_t yieldAndAwaitOffsetsOffset() const {
+        return OFF(scopeNotesOffset, hasScopeNotes, js::ScopeNoteArray);
+    }
 
 #undef OFF
 
@@ -1731,9 +1852,10 @@ class JSScript : public js::gc::TenuredCell
         return reinterpret_cast<js::ScopeNoteArray*>(data + scopeNotesOffset());
     }
 
-    js::YieldOffsetArray& yieldOffsets() {
-        MOZ_ASSERT(hasYieldOffsets());
-        return *reinterpret_cast<js::YieldOffsetArray*>(data + yieldOffsetsOffset());
+    js::YieldAndAwaitOffsetArray& yieldAndAwaitOffsets() {
+        MOZ_ASSERT(hasYieldAndAwaitOffsets());
+        return *reinterpret_cast<js::YieldAndAwaitOffsetArray*>(data +
+                                                                yieldAndAwaitOffsetsOffset());
     }
 
     bool hasLoops();
@@ -2006,20 +2128,26 @@ class LazyScript : public gc::TenuredCell
     };
 
     // Source location for the script.
+    // See the comment in JSScript for the details
     uint32_t begin_;
     uint32_t end_;
+    uint32_t toStringStart_;
+    uint32_t toStringEnd_;
+    // Line and column of |begin_| position, that is the position where we
+    // start parsing.
     uint32_t lineno_;
     uint32_t column_;
 
     LazyScript(JSFunction* fun, void* table, uint64_t packedFields,
-               uint32_t begin, uint32_t end, uint32_t lineno, uint32_t column);
+               uint32_t begin, uint32_t end, uint32_t toStringStart,
+               uint32_t lineno, uint32_t column);
 
     // Create a LazyScript without initializing the closedOverBindings and the
     // innerFunctions. To be GC-safe, the caller must initialize both vectors
     // with valid atoms and functions.
-    static LazyScript* CreateRaw(ExclusiveContext* cx, HandleFunction fun,
+    static LazyScript* CreateRaw(JSContext* cx, HandleFunction fun,
                                  uint64_t packedData, uint32_t begin, uint32_t end,
-                                 uint32_t lineno, uint32_t column);
+                                 uint32_t toStringStart, uint32_t lineno, uint32_t column);
 
   public:
     static const uint32_t NumClosedOverBindingsLimit = 1 << NumClosedOverBindingsBits;
@@ -2027,11 +2155,11 @@ class LazyScript : public gc::TenuredCell
 
     // Create a LazyScript and initialize closedOverBindings and innerFunctions
     // with the provided vectors.
-    static LazyScript* Create(ExclusiveContext* cx, HandleFunction fun,
+    static LazyScript* Create(JSContext* cx, HandleFunction fun,
                               const frontend::AtomVector& closedOverBindings,
                               Handle<GCVector<JSFunction*, 8>> innerFunctions,
                               JSVersion version, uint32_t begin, uint32_t end,
-                              uint32_t lineno, uint32_t column);
+                              uint32_t toStringStart, uint32_t lineno, uint32_t column);
 
     // Create a LazyScript and initialize the closedOverBindings and the
     // innerFunctions with dummy values to be replaced in a later initialization
@@ -2042,11 +2170,11 @@ class LazyScript : public gc::TenuredCell
     //
     // The sourceObject and enclosingScope arguments may be null if the
     // enclosing function is also lazy.
-    static LazyScript* Create(ExclusiveContext* cx, HandleFunction fun,
+    static LazyScript* Create(JSContext* cx, HandleFunction fun,
                               HandleScript script, HandleScope enclosingScope,
                               HandleScriptSource sourceObject,
                               uint64_t packedData, uint32_t begin, uint32_t end,
-                              uint32_t lineno, uint32_t column);
+                              uint32_t toStringStart, uint32_t lineno, uint32_t column);
 
     void initRuntimeFields(uint64_t packedFields);
 
@@ -2103,8 +2231,6 @@ class LazyScript : public gc::TenuredCell
 
     GeneratorKind generatorKind() const { return GeneratorKindFromBits(p_.generatorKindBits); }
 
-    bool isGenerator() const { return generatorKind() != NotGenerator; }
-
     bool isLegacyGenerator() const { return generatorKind() == LegacyGenerator; }
 
     bool isStarGenerator() const { return generatorKind() == StarGenerator; }
@@ -2112,7 +2238,7 @@ class LazyScript : public gc::TenuredCell
     void setGeneratorKind(GeneratorKind kind) {
         // A script only gets its generator kind set as part of initialization,
         // so it can only transition from NotGenerator.
-        MOZ_ASSERT(!isGenerator());
+        MOZ_ASSERT(!isStarGenerator() && !isLegacyGenerator());
         // Legacy generators cannot currently be lazy.
         MOZ_ASSERT(kind != LegacyGenerator);
         p_.generatorKindBits = GeneratorKindAsBits(kind);
@@ -2120,6 +2246,9 @@ class LazyScript : public gc::TenuredCell
 
     FunctionAsyncKind asyncKind() const {
         return p_.isAsync ? AsyncFunction : SyncFunction;
+    }
+    bool isAsync() const {
+        return p_.isAsync;
     }
 
     void setAsyncKind(FunctionAsyncKind kind) {
@@ -2226,11 +2355,23 @@ class LazyScript : public gc::TenuredCell
     uint32_t end() const {
         return end_;
     }
+    uint32_t toStringStart() const {
+        return toStringStart_;
+    }
+    uint32_t toStringEnd() const {
+        return toStringEnd_;
+    }
     uint32_t lineno() const {
         return lineno_;
     }
     uint32_t column() const {
         return column_;
+    }
+
+    void setToStringEnd(uint32_t toStringEnd) {
+        MOZ_ASSERT(toStringStart_ <= toStringEnd);
+        MOZ_ASSERT(toStringEnd_ >= end_);
+        toStringEnd_ = toStringEnd;
     }
 
     bool hasUncompiledEnclosingScript() const;
@@ -2252,7 +2393,8 @@ class LazyScript : public gc::TenuredCell
 };
 
 /* If this fails, add/remove padding within LazyScript. */
-JS_STATIC_ASSERT(sizeof(LazyScript) % js::gc::CellSize == 0);
+static_assert(sizeof(LazyScript) % js::gc::CellSize == 0,
+              "Size of LazyScript must be an integral multiple of js::gc::CellSize");
 
 struct ScriptAndCounts
 {

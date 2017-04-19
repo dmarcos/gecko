@@ -39,11 +39,11 @@
   /* Url and search bars */
   --url-and-searchbar-background-color: #171B1F;
   --urlbar-separator-color: #5F6670;
-  --urlbar-dropmarker-url: url("chrome://browser/skin/devedition/urlbar-history-dropmarker.svg");
+  --urlbar-dropmarker-url: url("chrome://browser/skin/compacttheme/urlbar-history-dropmarker.svg");
   --urlbar-dropmarker-region: rect(0px, 11px, 14px, 0px);
   --urlbar-dropmarker-hover-region: rect(0, 22px, 14px, 11px);
   --urlbar-dropmarker-active-region: rect(0px, 33px, 14px, 22px);
-  --urlbar-dropmarker-2x-url: url("chrome://browser/skin/devedition/urlbar-history-dropmarker.svg");
+  --urlbar-dropmarker-2x-url: url("chrome://browser/skin/compacttheme/urlbar-history-dropmarker.svg");
   --urlbar-dropmarker-2x-region: rect(0px, 11px, 14px, 0px);
   --urlbar-dropmarker-hover-2x-region: rect(0, 22px, 14px, 11px);
   --urlbar-dropmarker-active-2x-region: rect(0px, 33px, 14px, 22px);
@@ -212,6 +212,15 @@ window:not([chromehidden~="toolbar"]) #urlbar-wrapper {
   margin-inline-start: 0;
 }
 
+window:not([chromehidden~="toolbar"]) #urlbar-wrapper:-moz-locale-dir(rtl),
+window:not([chromehidden~="toolbar"]) #urlbar-wrapper > #urlbar:-moz-locale-dir(rtl) {
+  /* Resolves text blurring issue when hovering, see bug 1340206 */
+  transform: none;
+  /* For some reason, this property must be specified here, even though the same
+     value is set in the previous rule set. o_O */
+  margin-inline-start: 0;
+}
+
 #urlbar-zoom-button:-moz-lwtheme-brighttext:hover {
   background-color: rgba(255,255,255,.2);
 }
@@ -290,6 +299,16 @@ window:not([chromehidden~="toolbar"]) #urlbar-wrapper {
 .tabbrowser-tab[visuallyselected] {
   color: var(--tab-selection-color) !important; /* Override color: inherit */
   background-color: var(--tab-selection-background-color);
+}
+
+.tab-throbber[selected][progress] {
+  list-style-image: url("chrome://browser/skin/compacttheme/loading-inverted.png");
+}
+
+@media (min-resolution: 1.1dppx) {
+  .tab-throbber[selected][progress] {
+    list-style-image: url("chrome://browser/skin/compacttheme/loading-inverted@2x.png");
+  }
 }
 
 .tab-icon-sound[soundplaying],

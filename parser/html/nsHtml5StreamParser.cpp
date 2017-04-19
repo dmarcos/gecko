@@ -178,6 +178,7 @@ nsHtml5StreamParser::nsHtml5StreamParser(nsHtml5TreeOpExecutor* aExecutor,
   , mFeedChardet(false)
   , mInitialEncodingWasFromParentFrame(false)
   , mFlushTimer(do_CreateInstance("@mozilla.org/timer;1"))
+  , mFlushTimerMutex("nsHtml5StreamParser mFlushTimerMutex")
   , mFlushTimerArmed(false)
   , mFlushTimerEverFired(false)
   , mMode(aMode)
@@ -220,8 +221,11 @@ nsHtml5StreamParser::~nsHtml5StreamParser()
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
   mTokenizer->end();
-  NS_ASSERTION(!mFlushTimer, "Flush timer was not dropped before dtor!");
 #ifdef DEBUG
+  {
+    mozilla::MutexAutoLock flushTimerLock(mFlushTimerMutex);
+    MOZ_ASSERT(!mFlushTimer, "Flush timer was not dropped before dtor!");
+  }
   mRequest = nullptr;
   mObserver = nullptr;
   mUnicodeDecoder = nullptr;
@@ -958,7 +962,7 @@ nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mRequest, &rv));
   if (NS_SUCCEEDED(rv)) {
     nsAutoCString method;
-    httpChannel->GetRequestMethod(method);
+    Unused << httpChannel->GetRequestMethod(method);
     // XXX does Necko have a way to renavigate POST, etc. without hitting
     // the network?
     if (!method.EqualsLiteral("GET")) {
@@ -978,11 +982,7 @@ nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
   }
 
   if (NS_FAILED(rv)) {
-    // for now skip warning if we're on child process, since we don't support
-    // off-main thread delivery there yet.  This will change with bug 1015466
-    if (!XRE_IsContentProcess()) {
-      NS_WARNING("Failed to retarget HTML data delivery to the parser thread.");
-    }
+    NS_WARNING("Failed to retarget HTML data delivery to the parser thread.");
   }
 
   if (mCharsetSource == kCharsetFromParentFrame) {
@@ -1133,12 +1133,15 @@ nsHtml5StreamParser::DoDataAvailable(const uint8_t* aBuffer, uint32_t aLength)
     return;
   }
 
-  mFlushTimer->InitWithFuncCallback(nsHtml5StreamParser::TimerCallback,
-                                    static_cast<void*> (this),
-                                    mFlushTimerEverFired ?
-                                        sTimerInitialDelay :
-                                        sTimerSubsequentDelay,
-                                    nsITimer::TYPE_ONE_SHOT);
+  {
+    mozilla::MutexAutoLock flushTimerLock(mFlushTimerMutex);
+    mFlushTimer->InitWithFuncCallback(nsHtml5StreamParser::TimerCallback,
+                                      static_cast<void*> (this),
+                                      mFlushTimerEverFired ?
+                                          sTimerInitialDelay :
+                                          sTimerSubsequentDelay,
+                                      nsITimer::TYPE_ONE_SHOT);
+  }
   mFlushTimerArmed = true;
 }
 
@@ -1277,7 +1280,7 @@ nsHtml5StreamParser::PreferredForInternalEncodingDecl(nsACString& aEncoding)
 }
 
 bool
-nsHtml5StreamParser::internalEncodingDeclaration(nsString* aEncoding)
+nsHtml5StreamParser::internalEncodingDeclaration(nsHtml5String aEncoding)
 {
   // This code needs to stay in sync with
   // nsHtml5MetaScanner::tryCharset. Unfortunately, the
@@ -1287,8 +1290,10 @@ nsHtml5StreamParser::internalEncodingDeclaration(nsString* aEncoding)
     return false;
   }
 
+  nsString newEncoding16; // Not Auto, because using it to hold nsStringBuffer*
+  aEncoding.ToString(newEncoding16);
   nsAutoCString newEncoding;
-  CopyUTF16toUTF8(*aEncoding, newEncoding);
+  CopyUTF16toUTF8(newEncoding16, newEncoding);
 
   if (!PreferredForInternalEncodingDecl(newEncoding)) {
     return false;
@@ -1328,7 +1333,10 @@ nsHtml5StreamParser::FlushTreeOpsAndDisarmTimer()
   if (mFlushTimerArmed) {
     // avoid calling Cancel if the flush timer isn't armed to avoid acquiring
     // a mutex
-    mFlushTimer->Cancel();
+    {
+      mozilla::MutexAutoLock flushTimerLock(mFlushTimerMutex);
+      mFlushTimer->Cancel();
+    }
     mFlushTimerArmed = false;
   }
   if (mMode == VIEW_SOURCE_HTML || mMode == VIEW_SOURCE_XML) {
@@ -1643,6 +1651,7 @@ public:
   {}
   NS_IMETHOD Run() override
   {
+    mozilla::MutexAutoLock flushTimerLock(mStreamParser->mFlushTimerMutex);
     if (mStreamParser->mFlushTimer) {
       mStreamParser->mFlushTimer->Cancel();
       mStreamParser->mFlushTimer = nullptr;
@@ -1673,6 +1682,7 @@ nsHtml5StreamParser::DropTimer()
    * and lets nsHtml5RefPtr send a runnable back to the main thread to
    * release the stream parser.
    */
+  mozilla::MutexAutoLock flushTimerLock(mFlushTimerMutex);
   if (mFlushTimer) {
     nsCOMPtr<nsIRunnable> event = new nsHtml5TimerKungFu(this);
     if (NS_FAILED(mThread->Dispatch(event, nsIThread::DISPATCH_NORMAL))) {

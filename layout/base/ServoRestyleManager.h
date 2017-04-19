@@ -9,7 +9,7 @@
 
 #include "mozilla/DocumentStyleRootIterator.h"
 #include "mozilla/EventStates.h"
-#include "mozilla/RestyleManagerBase.h"
+#include "mozilla/RestyleManager.h"
 #include "mozilla/ServoBindings.h"
 #include "mozilla/ServoElementSnapshot.h"
 #include "nsChangeHint.h"
@@ -34,13 +34,11 @@ namespace mozilla {
 /**
  * Restyle manager for a Servo-backed style system.
  */
-class ServoRestyleManager : public RestyleManagerBase
+class ServoRestyleManager : public RestyleManager
 {
   friend class ServoStyleSet;
 public:
-  typedef RestyleManagerBase base_type;
-
-  NS_INLINE_DECL_REFCOUNTING(ServoRestyleManager)
+  typedef RestyleManager base_type;
 
   explicit ServoRestyleManager(nsPresContext* aPresContext);
 
@@ -65,8 +63,7 @@ public:
                                 nsIContent* aChild);
   void RestyleForAppend(nsIContent* aContainer,
                         nsIContent* aFirstNewContent);
-  nsresult ContentStateChanged(nsIContent* aContent,
-                               EventStates aStateMask);
+  void ContentStateChanged(nsIContent* aContent, EventStates aStateMask);
   void AttributeWillChange(dom::Element* aElement,
                            int32_t aNameSpaceID,
                            nsIAtom* aAttribute,
@@ -78,9 +75,6 @@ public:
                         const nsAttrValue* aOldValue);
 
   nsresult ReparentStyleContext(nsIFrame* aFrame);
-
-  inline bool HasPendingRestyles();
-
 
   /**
    * Gets the appropriate frame given a content and a pseudo-element tag.
@@ -98,27 +92,41 @@ public:
   static void ClearServoDataFromSubtree(Element* aElement);
 
   /**
-   * Clears HasDirtyDescendants from all elements in the subtree rooted at
-   * aElement.
+   * Clears HasDirtyDescendants and RestyleData from all elements in the
+   * subtree rooted at aElement.
    */
-  static void ClearDirtyDescendantsFromSubtree(Element* aElement);
+  static void ClearRestyleStateFromSubtree(Element* aElement);
 
+  /**
+   * Posts restyle hints for animations.
+   * This is only called for the second traversal for CSS animations during
+   * updating CSS animations in a SequentialTask.
+   * This function does neither register a refresh observer nor flag that a
+   * style flush is needed since this function is supposed to be called during
+   * restyling process and this restyle event will be processed in the second
+   * traversal of the same restyling process.
+   */
+  static void PostRestyleEventForAnimations(dom::Element* aElement,
+                                            nsRestyleHint aRestyleHint);
 protected:
-  ~ServoRestyleManager() { MOZ_ASSERT(!mReentrantChanges); }
+  ~ServoRestyleManager() override
+  {
+    MOZ_ASSERT(!mReentrantChanges);
+  }
 
 private:
   /**
-   * Traverses a tree of content that Servo has just restyled, recreating style
-   * contexts for their frames with the new style data.
+   * Performs post-Servo-traversal processing on this element and its descendants.
    */
-  void RecreateStyleContexts(Element* aElement,
-                             nsStyleContext* aParentContext,
-                             ServoStyleSet* aStyleSet,
-                             nsStyleChangeList& aChangeList);
+  void ProcessPostTraversal(Element* aElement,
+                            nsStyleContext* aParentContext,
+                            ServoStyleSet* aStyleSet,
+                            nsStyleChangeList& aChangeList);
 
-  void RecreateStyleContextsForText(nsIContent* aTextNode,
-                                    nsStyleContext* aParentContext,
-                                    ServoStyleSet* aStyleSet);
+  void ProcessPostTraversalForText(nsIContent* aTextNode,
+                                   nsStyleContext* aParentContext,
+                                   ServoStyleSet* aStyleSet,
+                                   nsStyleChangeList& aChangeList);
 
   inline ServoStyleSet* StyleSet() const
   {

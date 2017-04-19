@@ -18,7 +18,8 @@ class DecoderDoctorDiagnostics;
 class PDMFactoryImpl;
 template<class T> class StaticAutoPtr;
 
-class PDMFactory final {
+class PDMFactory final
+{
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(PDMFactory)
 
@@ -52,9 +53,9 @@ public:
 private:
   virtual ~PDMFactory();
   void CreatePDMs();
-  void CreateBlankPDM();
+  void CreateNullPDM();
   // Startup the provided PDM and add it to our list if successful.
-  bool StartupPDM(PlatformDecoderModule* aPDM);
+  bool StartupPDM(PlatformDecoderModule* aPDM, bool aInsertAtBeginning = false);
   // Returns the first PDM in our list supporting the mimetype.
   already_AddRefed<PlatformDecoderModule>
   GetDecoder(const TrackInfo& aTrackInfo,
@@ -66,7 +67,7 @@ private:
 
   nsTArray<RefPtr<PlatformDecoderModule>> mCurrentPDMs;
   RefPtr<PlatformDecoderModule> mEMEPDM;
-  RefPtr<PlatformDecoderModule> mBlankPDM;
+  RefPtr<PlatformDecoderModule> mNullPDM;
 
   bool mWMFFailedToLoad = false;
   bool mFFmpegFailedToLoad = false;

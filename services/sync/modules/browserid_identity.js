@@ -14,7 +14,6 @@ Cu.import("resource://services-common/utils.js");
 Cu.import("resource://services-common/tokenserverclient.js");
 Cu.import("resource://services-crypto/utils.js");
 Cu.import("resource://services-sync/util.js");
-Cu.import("resource://services-common/tokenserverclient.js");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://gre/modules/Promise.jsm");
@@ -122,7 +121,7 @@ this.BrowserIDManager.prototype = {
 
   initialize() {
     for (let topic of OBSERVER_TOPICS) {
-      Services.obs.addObserver(this, topic, false);
+      Services.obs.addObserver(this, topic);
     }
   },
 
@@ -216,7 +215,7 @@ this.BrowserIDManager.prototype = {
         if (isInitialSync) {
           this._log.info("Doing initial sync actions");
           Svc.Prefs.set("firstSync", "resetClient");
-          Services.obs.notifyObservers(null, "weave:service:setup-complete", null);
+          Services.obs.notifyObservers(null, "weave:service:setup-complete");
           Weave.Utils.nextTick(Weave.Service.sync, Weave.Service);
         }
       }).catch(authErr => {
@@ -254,18 +253,37 @@ this.BrowserIDManager.prototype = {
   observe(subject, topic, data) {
     this._log.debug("observed " + topic);
     switch (topic) {
-    case fxAccountsCommon.ONLOGIN_NOTIFICATION:
+    case fxAccountsCommon.ONLOGIN_NOTIFICATION: {
       // This should only happen if we've been initialized without a current
       // user - otherwise we'd have seen the LOGOUT notification and been
       // thrown away.
       // The exception is when we've initialized with a user that needs to
       // reauth with the server - in that case we will also get here, but
-      // should have the same identity.
+      // should have the same identity, and so we pass `false` into
+      // initializeWithCurrentIdentity so that we won't do a full sync for our
+      // first sync if we can avoid it.
       // initializeWithCurrentIdentity will throw and log if these constraints
       // aren't met (indirectly, via _updateSignedInUser()), so just go ahead
       // and do the init.
-      this.initializeWithCurrentIdentity(true);
-      break;
+      let firstLogin = !this.username;
+      this.initializeWithCurrentIdentity(firstLogin);
+
+      if (!firstLogin) {
+        // We still want to trigger these even if it isn't our first login.
+        // Note that the promise returned by `initializeWithCurrentIdentity`
+        // is resolved at the start of authentication, but we don't want to fire
+        // this event or start the next sync until after authentication is done
+        // (which is signaled by `this.whenReadyToAuthenticate.promise` resolving).
+        this.whenReadyToAuthenticate.promise.then(() => {
+          Services.obs.notifyObservers(null, "weave:service:setup-complete");
+          return new Promise(resolve => { Weave.Utils.nextTick(resolve, null); })
+        }).then(() => {
+          Weave.Service.sync();
+        }).catch(e => {
+          this._log.warn("Failed to trigger setup complete notification", e);
+        });
+      }
+    } break;
 
     case fxAccountsCommon.ONLOGOUT_NOTIFICATION:
       Weave.Service.startOver();
@@ -527,7 +545,7 @@ this.BrowserIDManager.prototype = {
       // This is called at login time and every time we need a new token - in
       // the latter case we already have kA and kB, so optimise that case.
       if (userData.kA && userData.kB) {
-        return;
+        return null;
       }
       log.info("Fetching new keys");
       return this._fxaService.getKeys().then(
@@ -634,7 +652,7 @@ this.BrowserIDManager.prototype = {
       return Promise.resolve();
     }
     const notifyStateChanged =
-      () => Services.obs.notifyObservers(null, "weave:service:login:change", null);
+      () => Services.obs.notifyObservers(null, "weave:service:login:change");
     // reset this._token as a safety net to reduce the possibility of us
     // repeatedly attempting to use an invalid token if _fetchTokenForUser throws.
     this._token = null;

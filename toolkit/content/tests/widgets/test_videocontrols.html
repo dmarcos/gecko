@@ -30,7 +30,7 @@ const playButtonWidth = 30;
 const playButtonHeight = 40;
 const muteButtonWidth = 30;
 const muteButtonHeight = 40;
-const positionAndDurationWidth = 85;
+const positionAndDurationWidth = 75;
 const fullscreenButtonWidth = 30;
 const fullscreenButtonHeight = 40;
 const volumeSliderWidth = 48;
@@ -258,7 +258,7 @@ function runTest(event) {
       // it's timing depending if the <scale> things it's click-and-hold, or a
       // single click. So, just make sure we end up less that the previous
       // position.
-      lastPosition = (videoDuration / 2) - 0.1;
+      var lastPosition = (videoDuration / 2) - 0.1;
       ok(video.currentTime < lastPosition, "checking expected playback position");
 
       // Set volume to 0.1 so one down arrow hit will decrease it to 0.
@@ -373,9 +373,27 @@ function runTest(event) {
       is(video.volume, 0.5, "Volume should be decreased by 0.1");
       SimpleTest.executeSoon(function() {
         isVolumeSliderShowingCorrectVolume(video.volume);
+        synthesizeMouse(video, playButtonCenterX, playButtonCenterY, { });
+      });
+      break;
+
+    case 27:
+      is(event.type, "play", "checking event type");
+
+      SimpleTest.executeSoon(() => {
+        synthesizeKey(" ", {});
+      });
+      break;
+
+    case 28:
+      is(event.type, "pause", "checking event type");
+
+      SimpleTest.executeSoon(() => {
         SimpleTest.finish();
       });
       break;
+
+
 
     default:
       throw "unexpected test #" + testnum + " w/ event " + event.type;

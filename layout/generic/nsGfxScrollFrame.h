@@ -257,7 +257,13 @@ public:
    */
   void ScrollToRestoredPosition();
 
-  bool PageIsStillLoading();
+  enum class LoadingState {
+    Loading,
+    Stopped,
+    Loaded
+  };
+
+  LoadingState GetPageLoadingState();
 
   /**
    * GetSnapPointForDestination determines which point to snap to after
@@ -397,7 +403,6 @@ public:
   }
   void SetScrollableByAPZ(bool aScrollable);
   void SetZoomableByAPZ(bool aZoomable);
-  void SetScrollsClipOnUnscrolledOutOfFlow();
 
   bool UsesContainerScrolling() const;
 
@@ -406,7 +411,7 @@ public:
   bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
                              nsRect* aDirtyRect,
                              bool aAllowCreateDisplayPort);
-  void NotifyApproximateFrameVisibilityUpdate();
+  void NotifyApproximateFrameVisibilityUpdate(bool aIgnoreDisplayPort);
   bool GetDisplayPortAtLastApproximateFrameVisibilityUpdate(nsRect* aDisplayPort);
 
   bool AllowDisplayPortExpiration();
@@ -461,6 +466,10 @@ public:
   }
 
   bool DragScroll(WidgetEvent* aEvent);
+
+  void AsyncScrollbarDragRejected();
+
+  bool IsRootScrollFrameOfDocument() const { return mIsRoot; }
 
   // owning references to the nsIAnonymousContentCreator-built content
   nsCOMPtr<nsIContent> mHScrollbarContent;
@@ -597,8 +606,6 @@ public:
   // True if we don't want the scrollbar to repaint itself right now.
   bool mSuppressScrollbarRepaints:1;
 
-  bool mScrollsClipOnUnscrolledOutOfFlow:1;
-
   mozilla::layout::ScrollVelocityQueue mVelocityQueue;
 
 protected:
@@ -676,14 +683,6 @@ public:
 
   NS_DECL_QUERYFRAME
   NS_DECL_FRAMEARENA_HELPERS
-
-  virtual mozilla::WritingMode GetWritingMode() const override
-  {
-    if (mHelper.mScrolledFrame) {
-      return mHelper.mScrolledFrame->GetWritingMode();
-    }
-    return nsIFrame::GetWritingMode();
-  }
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
@@ -950,8 +949,8 @@ public:
                                      bool aAllowCreateDisplayPort) override {
     return mHelper.DecideScrollableLayer(aBuilder, aDirtyRect, aAllowCreateDisplayPort);
   }
-  virtual void NotifyApproximateFrameVisibilityUpdate() override {
-    mHelper.NotifyApproximateFrameVisibilityUpdate();
+  virtual void NotifyApproximateFrameVisibilityUpdate(bool aIgnoreDisplayPort) override {
+    mHelper.NotifyApproximateFrameVisibilityUpdate(aIgnoreDisplayPort);
   }
   virtual bool GetDisplayPortAtLastApproximateFrameVisibilityUpdate(nsRect* aDisplayPort) override {
     return mHelper.GetDisplayPortAtLastApproximateFrameVisibilityUpdate(aDisplayPort);
@@ -1033,9 +1032,6 @@ public:
   void SetZoomableByAPZ(bool aZoomable) override {
     mHelper.SetZoomableByAPZ(aZoomable);
   }
-  void SetScrollsClipOnUnscrolledOutOfFlow() override {
-    mHelper.SetScrollsClipOnUnscrolledOutOfFlow();
-  }
   
   ScrollSnapInfo GetScrollSnapInfo() const override {
     return mHelper.GetScrollSnapInfo();
@@ -1043,6 +1039,22 @@ public:
 
   virtual bool DragScroll(mozilla::WidgetEvent* aEvent) override {
     return mHelper.DragScroll(aEvent);
+  }
+
+  virtual void AsyncScrollbarDragRejected() override {
+    return mHelper.AsyncScrollbarDragRejected();
+  }
+
+  virtual bool IsRootScrollFrameOfDocument() const override {
+    return mHelper.IsRootScrollFrameOfDocument();
+  }
+
+  // Update the style on our scrolled frame.
+  virtual void DoUpdateStyleOfOwnedAnonBoxes(mozilla::ServoStyleSet& aStyleSet,
+                                             nsStyleChangeList& aChangeList,
+                                             nsChangeHint aHintForThisFrame) override {
+    UpdateStyleOfChildAnonBox(mHelper.GetScrolledFrame(), aStyleSet,
+                              aChangeList, aHintForThisFrame);
   }
 
 #ifdef DEBUG_FRAME_DUMP
@@ -1452,16 +1464,13 @@ public:
   void SetZoomableByAPZ(bool aZoomable) override {
     mHelper.SetZoomableByAPZ(aZoomable);
   }
-  void SetScrollsClipOnUnscrolledOutOfFlow() override {
-    mHelper.SetScrollsClipOnUnscrolledOutOfFlow();
-  }
   virtual bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
                                      nsRect* aDirtyRect,
                                      bool aAllowCreateDisplayPort) override {
     return mHelper.DecideScrollableLayer(aBuilder, aDirtyRect, aAllowCreateDisplayPort);
   }
-  virtual void NotifyApproximateFrameVisibilityUpdate() override {
-    mHelper.NotifyApproximateFrameVisibilityUpdate();
+  virtual void NotifyApproximateFrameVisibilityUpdate(bool aIgnoreDisplayPort) override {
+    mHelper.NotifyApproximateFrameVisibilityUpdate(aIgnoreDisplayPort);
   }
   virtual bool GetDisplayPortAtLastApproximateFrameVisibilityUpdate(nsRect* aDisplayPort) override {
     return mHelper.GetDisplayPortAtLastApproximateFrameVisibilityUpdate(aDisplayPort);
@@ -1476,6 +1485,21 @@ public:
 
   virtual bool DragScroll(mozilla::WidgetEvent* aEvent) override {
     return mHelper.DragScroll(aEvent);
+  }
+
+  virtual void AsyncScrollbarDragRejected() override {
+    return mHelper.AsyncScrollbarDragRejected();
+  }
+
+  virtual bool IsRootScrollFrameOfDocument() const override {
+    return mHelper.IsRootScrollFrameOfDocument();
+  }
+
+  virtual void DoUpdateStyleOfOwnedAnonBoxes(mozilla::ServoStyleSet& aStyleSet,
+                                             nsStyleChangeList& aChangeList,
+                                             nsChangeHint aHintForThisFrame) override {
+    UpdateStyleOfChildAnonBox(mHelper.GetScrolledFrame(), aStyleSet,
+                              aChangeList, aHintForThisFrame);
   }
 
 #ifdef DEBUG_FRAME_DUMP

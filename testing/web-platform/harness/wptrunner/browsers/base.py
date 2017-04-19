@@ -87,13 +87,16 @@ class Browser(object):
         """Used for browser-specific setup that happens at the start of a test run"""
         pass
 
+    def settings(self, test):
+        return {}
+
     @abstractmethod
-    def start(self):
+    def start(self, **kwargs):
         """Launch the browser object and get it into a state where is is ready to run tests"""
         pass
 
     @abstractmethod
-    def stop(self):
+    def stop(self, force=False):
         """Stop the running browser process."""
         pass
 
@@ -127,13 +130,16 @@ class Browser(object):
 
 
 class NullBrowser(Browser):
-    def start(self):
+    def __init__(self, logger, **kwargs):
+        super(NullBrowser, self).__init__(logger)
+
+    def start(self, **kwargs):
         """No-op browser to use in scenarios where the TestRunnerManager shouldn't
         actually own the browser process (e.g. Servo where we start one browser
         per test)"""
         pass
 
-    def stop(self):
+    def stop(self, force=False):
         pass
 
     def pid(self):

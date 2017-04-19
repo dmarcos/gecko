@@ -27,11 +27,11 @@ add_task(function* test_json_parser() {
 
   let extension = new ExtensionData(uri);
 
-  yield extension.readManifest();
+  yield extension.parseManifest();
 
   Assert.deepEqual(extension.rawManifest, expectedManifest,
                    "Manifest with correctly-filtered comments");
 
-  Services.obs.notifyObservers(xpi, "flush-cache-entry", null);
+  Services.obs.notifyObservers(xpi, "flush-cache-entry");
   xpi.remove(false);
 });

@@ -62,8 +62,9 @@ enum {
     JOF_NAME            = 1 << 5,   /* name operation */
     JOF_PROP            = 2 << 5,   /* obj.prop operation */
     JOF_ELEM            = 3 << 5,   /* obj[index] operation */
-    JOF_MODEMASK        = 7 << 5,   /* mask for above addressing modes */
-    JOF_SET             = 1 << 8,   /* set (i.e., assignment) operation */
+    JOF_MODEMASK        = 3 << 5,   /* mask for above addressing modes */
+    JOF_PROPSET         = 1 << 7,   /* property/element/name set operation */
+    JOF_PROPINIT        = 1 << 8,   /* property/element/name init operation */
     /* 1 << 9 is unused */
     /* 1 << 10 is unused */
     /* 1 << 11 is unused */
@@ -655,7 +656,8 @@ IsValidBytecodeOffset(JSContext* cx, JSScript* script, size_t offset);
 inline bool
 FlowsIntoNext(JSOp op)
 {
-    /* JSOP_YIELD is considered to flow into the next instruction, like JSOP_CALL. */
+    // JSOP_YIELD/JSOP_AWAIT is considered to flow into the next instruction,
+    // like JSOP_CALL.
     switch (op) {
       case JSOP_RETRVAL:
       case JSOP_RETURN:
@@ -691,6 +693,18 @@ inline bool
 IsGlobalOp(JSOp op)
 {
     return CodeSpec[op].format & JOF_GNAME;
+}
+
+inline bool
+IsPropertySetOp(JSOp op)
+{
+    return CodeSpec[op].format & JOF_PROPSET;
+}
+
+inline bool
+IsPropertyInitOp(JSOp op)
+{
+    return CodeSpec[op].format & JOF_PROPINIT;
 }
 
 inline bool
@@ -769,6 +783,12 @@ IsSetElemPC(jsbytecode* pc)
 }
 
 inline bool
+IsElemPC(jsbytecode* pc)
+{
+    return CodeSpec[*pc].format & JOF_ELEM;
+}
+
+inline bool
 IsCallPC(jsbytecode* pc)
 {
     return CodeSpec[*pc].format & JOF_INVOKE;
@@ -779,6 +799,27 @@ IsStrictEvalPC(jsbytecode* pc)
 {
     JSOp op = JSOp(*pc);
     return op == JSOP_STRICTEVAL || op == JSOP_STRICTSPREADEVAL;
+}
+
+inline bool
+IsConstructorCallPC(jsbytecode* pc)
+{
+    JSOp op = JSOp(*pc);
+    return op == JSOP_NEW ||
+           op == JSOP_SUPERCALL ||
+           op == JSOP_SPREADNEW ||
+           op == JSOP_SPREADSUPERCALL;
+}
+
+inline bool
+IsSpreadCallPC(jsbytecode* pc)
+{
+    JSOp op = JSOp(*pc);
+    return op == JSOP_SPREADCALL ||
+           op == JSOP_SPREADNEW ||
+           op == JSOP_SPREADSUPERCALL ||
+           op == JSOP_SPREADEVAL ||
+           op == JSOP_STRICTSPREADEVAL;
 }
 
 static inline int32_t

@@ -33,7 +33,8 @@ public:
   NS_DECL_ISUPPORTS
 
   static already_AddRefed<Promise>
-  Fetch(Worklet* aWorklet, const nsAString& aModuleURL, ErrorResult& aRv)
+  Fetch(Worklet* aWorklet, const nsAString& aModuleURL, CallerType aCallerType,
+        ErrorResult& aRv)
   {
     MOZ_ASSERT(aWorklet);
 
@@ -85,7 +86,8 @@ public:
 
     RequestInit init;
 
-    RefPtr<Promise> fetchPromise = FetchRequest(global, request, init, aRv);
+    RefPtr<Promise> fetchPromise =
+      FetchRequest(global, request, init, aCallerType, aRv);
     if (NS_WARN_IF(aRv.Failed())) {
       promise->MaybeReject(aRv);
       return promise.forget();
@@ -203,9 +205,6 @@ public:
     compileOptions.setFileAndLine(NS_ConvertUTF16toUTF8(mURL).get(), 0);
     compileOptions.setVersion(JSVERSION_DEFAULT);
     compileOptions.setIsRunOnce(true);
-
-    // We only need the setNoScriptRval bit when compiling off-thread here,
-    // since otherwise nsJSUtils::EvaluateString will set it up for us.
     compileOptions.setNoScriptRval(true);
 
     JSAutoCompartment comp(cx, globalObj);
@@ -350,9 +349,10 @@ Worklet::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 }
 
 already_AddRefed<Promise>
-Worklet::Import(const nsAString& aModuleURL, ErrorResult& aRv)
+Worklet::Import(const nsAString& aModuleURL, CallerType aCallerType,
+                ErrorResult& aRv)
 {
-  return WorkletFetchHandler::Fetch(this, aModuleURL, aRv);
+  return WorkletFetchHandler::Fetch(this, aModuleURL, aCallerType, aRv);
 }
 
 WorkletGlobalScope*

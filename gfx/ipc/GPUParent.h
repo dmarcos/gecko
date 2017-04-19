@@ -32,7 +32,8 @@ public:
 
   mozilla::ipc::IPCResult RecvInit(nsTArray<GfxPrefSetting>&& prefs,
                                    nsTArray<GfxVarUpdate>&& vars,
-                                   const DevicePrefs& devicePrefs) override;
+                                   const DevicePrefs& devicePrefs,
+                                   nsTArray<LayerTreeIdMapping>&& mappings) override;
   mozilla::ipc::IPCResult RecvInitVsyncBridge(Endpoint<PVsyncBridgeParent>&& aVsyncEndpoint) override;
   mozilla::ipc::IPCResult RecvInitImageBridge(Endpoint<PImageBridgeParent>&& aEndpoint) override;
   mozilla::ipc::IPCResult RecvInitVRManager(Endpoint<PVRManagerParent>&& aEndpoint) override;
@@ -51,9 +52,13 @@ public:
   mozilla::ipc::IPCResult RecvNewContentVRManager(Endpoint<PVRManagerParent>&& aEndpoint) override;
   mozilla::ipc::IPCResult RecvNewContentVideoDecoderManager(Endpoint<PVideoDecoderManagerParent>&& aEndpoint) override;
   mozilla::ipc::IPCResult RecvGetDeviceStatus(GPUDeviceData* aOutStatus) override;
-  mozilla::ipc::IPCResult RecvAddLayerTreeIdMapping(nsTArray<LayerTreeIdMapping>&& aMappings) override;
+  mozilla::ipc::IPCResult RecvAddLayerTreeIdMapping(const LayerTreeIdMapping& aMapping) override;
   mozilla::ipc::IPCResult RecvRemoveLayerTreeIdMapping(const LayerTreeIdMapping& aMapping) override;
   mozilla::ipc::IPCResult RecvNotifyGpuObservers(const nsCString& aTopic) override;
+  mozilla::ipc::IPCResult RecvStartProfiler(const ProfilerInitParams& params) override;
+  mozilla::ipc::IPCResult RecvPauseProfiler(const bool& aPause) override;
+  mozilla::ipc::IPCResult RecvStopProfiler() override;
+  mozilla::ipc::IPCResult RecvGatherProfile() override;
   mozilla::ipc::IPCResult RecvRequestMemoryReport(
     const uint32_t& generation,
     const bool& anonymize,

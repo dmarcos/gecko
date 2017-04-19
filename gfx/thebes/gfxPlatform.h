@@ -175,6 +175,12 @@ public:
      */
     static void Shutdown();
 
+    /**
+     * Initialize gfxPlatform (if not already done) in a child process, with
+     * the provided ContentDeviceData.
+     */
+    static void InitChild(const mozilla::gfx::ContentDeviceData& aData);
+
     static void InitLayersIPC();
     static void ShutdownLayersIPC();
 
@@ -184,6 +190,8 @@ public:
     static void InitNullMetadata();
 
     static void InitMoz2DLogging();
+
+    static bool IsHeadless();
 
     /**
      * Create an offscreen surface of the given dimensions
@@ -354,6 +362,16 @@ public:
      * If the name doesn't in the system, aFamilyName will be empty string, but not failed.
      */
     virtual nsresult GetStandardFamilyName(const nsAString& aFontName, nsAString& aFamilyName);
+
+    /**
+     * Returns default font name (localized family name) for aLangGroup and
+     * aGenericFamily.  The result is typically the first font in
+     * font.name-list.<aGenericFamily>.<aLangGroup>.  However, if it's not
+     * available in the system, this may return second or later font in the
+     * pref.  If there are no available fonts in the pref, returns empty string.
+     */
+    nsString GetDefaultFontName(const nsACString& aLangGroup,
+                                const nsACString& aGenericFamily);
 
     /**
      * Create the appropriate platform font group
@@ -626,9 +644,7 @@ public:
     virtual bool SupportsApzWheelInput() const {
       return false;
     }
-    virtual bool SupportsApzTouchInput() const {
-      return false;
-    }
+    bool SupportsApzTouchInput() const;
     bool SupportsApzDragInput() const;
 
     virtual void FlushContentDrawing() {}
@@ -651,6 +667,8 @@ public:
      * Extracted into a function to avoid including gfxPrefs.h from this file.
      */
     static bool PerfWarnings();
+
+    static void NotifyGPUProcessDisabled();
 
     void NotifyCompositorCreated(mozilla::layers::LayersBackend aBackend);
     mozilla::layers::LayersBackend GetCompositorBackend() const {
@@ -820,6 +838,7 @@ private:
 
     void InitCompositorAccelerationPrefs();
     void InitGPUProcessPrefs();
+    void InitWebRenderConfig();
 
     static bool IsDXInterop2Blocked();
 

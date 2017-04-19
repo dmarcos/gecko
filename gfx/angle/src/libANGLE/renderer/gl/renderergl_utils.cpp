@@ -16,6 +16,7 @@
 #include "libANGLE/Caps.h"
 #include "libANGLE/formatutils.h"
 #include "libANGLE/renderer/gl/FunctionsGL.h"
+#include "libANGLE/renderer/gl/QueryGL.h"
 #include "libANGLE/renderer/gl/WorkaroundsGL.h"
 #include "libANGLE/renderer/gl/formatutilsgl.h"
 
@@ -162,7 +163,8 @@ static GLfloat QueryGLFloatRange(const FunctionsGL *functions, GLenum name, size
 static gl::TypePrecision QueryTypePrecision(const FunctionsGL *functions, GLenum shaderType, GLenum precisionType)
 {
     gl::TypePrecision precision;
-    functions->getShaderPrecisionFormat(shaderType, precisionType, precision.range, &precision.precision);
+    functions->getShaderPrecisionFormat(shaderType, precisionType, precision.range.data(),
+                                        &precision.precision);
     return precision;
 }
 
@@ -547,16 +549,11 @@ void GenerateCaps(const FunctionsGL *functions, gl::Caps *caps, gl::TextureCapsM
         LimitVersion(maxSupportedESVersion, gl::Version(2, 0));
     }
 
-    // Check if index constant sampler array indexing is supported
-    if (!functions->isAtLeastGL(gl::Version(4, 0)) &&
-        !functions->isAtLeastGLES(gl::Version(2, 0)) &&
-        !functions->hasExtension("GL_ARB_gpu_shader5"))
-    {
-        // This should also be required for ES2 but there are some driver support index constant
-        // sampler array indexing without meeting the requirements above. Don't limit their ES
-        // version as it would break WebGL for some users.
-        LimitVersion(maxSupportedESVersion, gl::Version(2, 0));
-    }
+    // Non-constant sampler array indexing is required for OpenGL ES 2 and OpenGL ES after 3.2.
+    // However having it available on OpenGL ES 2 is a specification bug, and using this
+    // indexing in WebGL is undefined. Requiring this feature would break WebGL 1 for some users
+    // so we don't check for it. (it is present with ESSL 100, ESSL >= 320, GLSL >= 400 and
+    // GL_ARB_gpu_shader5)
 
     // Check if sampler objects are supported
     if (!functions->isAtLeastGL(gl::Version(3, 3)) &&
@@ -796,11 +793,7 @@ void GenerateCaps(const FunctionsGL *functions, gl::Caps *caps, gl::TextureCapsM
                               functions->isAtLeastGLES(gl::Version(3, 0)) || functions->hasGLESExtension("GL_EXT_draw_buffers");
     extensions->textureStorage = true;
     extensions->textureFilterAnisotropic = functions->hasGLExtension("GL_EXT_texture_filter_anisotropic") || functions->hasGLESExtension("GL_EXT_texture_filter_anisotropic");
-    extensions->occlusionQueryBoolean =
-        functions->isAtLeastGL(gl::Version(1, 5)) ||
-        functions->hasGLExtension("GL_ARB_occlusion_query2") ||
-        functions->isAtLeastGLES(gl::Version(3, 0)) ||
-        functions->hasGLESExtension("GL_EXT_occlusion_query_boolean");
+    extensions->occlusionQueryBoolean    = nativegl::SupportsOcclusionQueries(functions);
     extensions->maxTextureAnisotropy = extensions->textureFilterAnisotropic ? QuerySingleGLFloat(functions, GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 0.0f;
     extensions->fence = functions->hasGLExtension("GL_NV_fence") || functions->hasGLESExtension("GL_NV_fence");
     extensions->blendMinMax = functions->isAtLeastGL(gl::Version(1, 5)) || functions->hasGLExtension("GL_EXT_blend_minmax") ||
@@ -858,6 +851,9 @@ void GenerateCaps(const FunctionsGL *functions, gl::Caps *caps, gl::TextureCapsM
                              functions->hasGLESExtension("GL_KHR_robustness") ||
                              functions->hasGLESExtension("GL_EXT_robustness");
 
+    extensions->copyTexture = true;
+    extensions->syncQuery   = SyncQueryGL::IsSupported(functions);
+
     // NV_path_rendering
     // We also need interface query which is available in
     // >= 4.3 core or ARB_interface_query or >= GLES 3.1
@@ -896,6 +892,14 @@ void GenerateCaps(const FunctionsGL *functions, gl::Caps *caps, gl::TextureCapsM
     // Disabling GL_FRAMEBUFFER_SRGB will then convert in the wrong direction.
     extensions->sRGBWriteControl = false;
 #endif
+
+    // EXT_discard_framebuffer can be implemented as long as glDiscardFramebufferEXT or
+    // glInvalidateFramebuffer is available
+    extensions->discardFramebuffer = functions->isAtLeastGL(gl::Version(4, 3)) ||
+                                     functions->hasGLExtension("GL_ARB_invalidate_subdata") ||
+                                     functions->isAtLeastGLES(gl::Version(3, 0)) ||
+                                     functions->hasGLESExtension("GL_EXT_discard_framebuffer") ||
+                                     functions->hasGLESExtension("GL_ARB_invalidate_subdata");
 }
 
 void GenerateWorkarounds(const FunctionsGL *functions, WorkaroundsGL *workarounds)
@@ -945,9 +949,28 @@ void GenerateWorkarounds(const FunctionsGL *functions, WorkaroundsGL *workaround
     workarounds->packLastRowSeparatelyForPaddingInclusion   = IsNvidia(vendor);
 #endif
 
-    workarounds->removeInvariantAndCentroidForESSL3 = functions->isAtMostGL(gl::Version(4, 1));
+    workarounds->removeInvariantAndCentroidForESSL3 =
+        functions->isAtMostGL(gl::Version(4, 1)) ||
+        (functions->standard == STANDARD_GL_DESKTOP && IsAMD(vendor));
 }
 
+}
+
+namespace nativegl
+{
+bool SupportsFenceSync(const FunctionsGL *functions)
+{
+    return functions->isAtLeastGL(gl::Version(3, 2)) || functions->hasGLExtension("GL_ARB_sync") ||
+           functions->isAtLeastGLES(gl::Version(3, 0));
+}
+
+bool SupportsOcclusionQueries(const FunctionsGL *functions)
+{
+    return functions->isAtLeastGL(gl::Version(1, 5)) ||
+           functions->hasGLExtension("GL_ARB_occlusion_query2") ||
+           functions->isAtLeastGLES(gl::Version(3, 0)) ||
+           functions->hasGLESExtension("GL_EXT_occlusion_query_boolean");
+}
 }
 
 bool CanMapBufferForRead(const FunctionsGL *functions)

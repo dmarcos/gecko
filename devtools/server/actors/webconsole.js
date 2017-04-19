@@ -73,7 +73,7 @@ function WebConsoleActor(aConnection, aParentActor)
   this._onObserverNotification = this._onObserverNotification.bind(this);
   if (this.parentActor.isRootActor) {
     Services.obs.addObserver(this._onObserverNotification,
-                             "last-pb-context-exited", false);
+                             "last-pb-context-exited");
   }
 
   this.traits = {
@@ -193,7 +193,7 @@ WebConsoleActor.prototype =
           Services.obs.removeObserver(onChromeWindowOpened, "domwindowopened");
           this._lastChromeWindow = null;
         };
-        Services.obs.addObserver(onChromeWindowOpened, "domwindowopened", false);
+        Services.obs.addObserver(onChromeWindowOpened, "domwindowopened");
       }
 
       this._handleNewWindow(window);
@@ -899,7 +899,8 @@ WebConsoleActor.prototype =
     let evalResult = evalInfo.result;
     let helperResult = evalInfo.helperResult;
 
-    let result, errorDocURL, errorMessage, errorGrip = null, frame = null;
+    let result, errorDocURL, errorMessage, errorNotes = null, errorGrip = null,
+        frame = null;
     if (evalResult) {
       if ("return" in evalResult) {
         result = evalResult.return;
@@ -954,6 +955,23 @@ WebConsoleActor.prototype =
             };
           }
         } catch (ex) {}
+
+        try {
+          let notes = error.errorNotes;
+          if (notes && notes.length) {
+            errorNotes = [];
+            for (let note of notes) {
+              errorNotes.push({
+                messageBody: this._createStringGrip(note.message),
+                frame: {
+                  source: note.fileName,
+                  line: note.lineNumber,
+                  column: note.columnNumber,
+                }
+              });
+            }
+          }
+        } catch (ex) {}
       }
     }
 
@@ -978,6 +996,7 @@ WebConsoleActor.prototype =
       exceptionDocURL: errorDocURL,
       frame,
       helperResult: helperResult,
+      notes: errorNotes,
     };
   },
 
@@ -1493,7 +1512,9 @@ WebConsoleActor.prototype =
   {
     let stack = null;
     // Convert stack objects to the JSON attributes expected by client code
-    if (aPageError.stack) {
+    // Bug 1348885: If the global from which this error came from has been
+    // nuked, stack is going to be a dead wrapper.
+    if (aPageError.stack && !Cu.isDeadWrapper(aPageError.stack)) {
       stack = [];
       let s = aPageError.stack;
       while (s !== null) {
@@ -1509,6 +1530,23 @@ WebConsoleActor.prototype =
     let lineText = aPageError.sourceLine;
     if (lineText && lineText.length > DebuggerServer.LONG_STRING_INITIAL_LENGTH) {
       lineText = lineText.substr(0, DebuggerServer.LONG_STRING_INITIAL_LENGTH);
+    }
+
+    let notesArray = null;
+    let notes = aPageError.notes;
+    if (notes && notes.length) {
+      notesArray = [];
+      for (let i = 0, len = notes.length; i < len; i++) {
+        let note = notes.queryElementAt(i, Ci.nsIScriptErrorNote);
+        notesArray.push({
+          messageBody: this._createStringGrip(note.errorMessage),
+          frame: {
+            source: note.sourceName,
+            line: note.lineNumber,
+            column: note.columnNumber,
+          }
+        });
+      }
     }
 
     return {
@@ -1527,7 +1565,8 @@ WebConsoleActor.prototype =
       strict: !!(aPageError.flags & aPageError.strictFlag),
       info: !!(aPageError.flags & aPageError.infoFlag),
       private: aPageError.isFromPrivateWindow,
-      stacktrace: stack
+      stacktrace: stack,
+      notes: notesArray,
     };
   },
 

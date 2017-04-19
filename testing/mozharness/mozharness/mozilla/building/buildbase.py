@@ -348,8 +348,12 @@ class BuildOptionParser(object):
         'asan-tc': 'builds/releng_sub_%s_configs/%s_asan_tc.py',
         'tsan': 'builds/releng_sub_%s_configs/%s_tsan.py',
         'cross-debug': 'builds/releng_sub_%s_configs/%s_cross_debug.py',
+        'cross-debug-st-an': 'builds/releng_sub_%s_configs/%s_cross_debug_st_an.py',
+        'cross-debug-artifact': 'builds/releng_sub_%s_configs/%s_cross_debug_artifact.py',
         'cross-opt-st-an': 'builds/releng_sub_%s_configs/%s_cross_opt_st_an.py',
-        'cross-universal': 'builds/releng_sub_%s_configs/%s_cross_universal.py',
+        'cross-artifact': 'builds/releng_sub_%s_configs/%s_cross_artifact.py',
+        'cross-qr-debug': 'builds/releng_sub_%s_configs/%s_cross_qr_debug.py',
+        'cross-qr-opt': 'builds/releng_sub_%s_configs/%s_cross_qr_opt.py',
         'debug': 'builds/releng_sub_%s_configs/%s_debug.py',
         'asan-and-debug': 'builds/releng_sub_%s_configs/%s_asan_and_debug.py',
         'asan-tc-and-debug': 'builds/releng_sub_%s_configs/%s_asan_tc_and_debug.py',
@@ -375,6 +379,8 @@ class BuildOptionParser(object):
         'valgrind' : 'builds/releng_sub_%s_configs/%s_valgrind.py',
         'artifact': 'builds/releng_sub_%s_configs/%s_artifact.py',
         'debug-artifact': 'builds/releng_sub_%s_configs/%s_debug_artifact.py',
+        'qr-debug': 'builds/releng_sub_%s_configs/%s_qr_debug.py',
+        'qr-opt': 'builds/releng_sub_%s_configs/%s_qr_opt.py',
     }
     build_pool_cfg_file = 'builds/build_pool_specifics.py'
     branch_cfg_file = 'builds/branch_specifics.py'
@@ -930,11 +936,6 @@ or run without that action (ie: --no-{action})"
                 mach_env['UPLOAD_SSH_KEY'] = mach_env['UPLOAD_SSH_KEY'] % {
                     'stage_ssh_key': c['stage_ssh_key']
                 }
-
-        if self.query_is_nightly():
-            mach_env['LATEST_MAR_DIR'] = c['latest_mar_dir'] % {
-                'branch': self.branch
-            }
 
         # this prevents taskcluster from overwriting the target files with
         # the multilocale files. Put everything from the en-US build in a
@@ -1883,6 +1884,38 @@ or run without that action (ie: --no-{action})"
 
         return data
 
+
+    def _load_sccache_stats(self):
+        stats_file = os.path.join(
+            self.query_abs_dirs()['abs_obj_dir'], 'sccache-stats.json'
+        )
+        if not os.path.exists(stats_file):
+            self.info('%s does not exist; not loading sccache stats' % stats_file)
+            return
+
+        with open(stats_file, 'rb') as fh:
+            stats = json.load(fh)
+
+        total = stats['stats']['requests_executed']
+        hits = stats['stats']['cache_hits']
+        if total > 0:
+            hits /= float(total)
+
+        yield {
+            'name': 'sccache hit rate',
+            'value': hits,
+            'extraOptions': self.perfherder_resource_options(),
+            'subtests': [],
+        }
+
+        for stat in ['cache_write_errors', 'requests_not_cacheable']:
+            yield {
+                'name': 'sccache %s' % stat,
+                'value': stats['stats'][stat],
+                'extraOptions': self.perfherder_resource_options(),
+                'subtests': [],
+            }
+
     def get_firefox_version(self):
         versionFilePath = os.path.join(
             self.query_abs_dirs()['abs_src_dir'], 'browser/config/version.txt')
@@ -1997,8 +2030,9 @@ or run without that action (ie: --no-{action})"
         build_metrics = self._load_build_resources()
         if build_metrics:
             perfherder_data['suites'].append(build_metrics)
+        perfherder_data['suites'].extend(self._load_sccache_stats())
 
-        if self.query_is_nightly:
+        if self.query_is_nightly():
             for suite in perfherder_data['suites']:
                 if 'extraOptions' in suite:
                     suite['extraOptions'] = ['nightly'] + suite['extraOptions']
@@ -2123,6 +2157,10 @@ or run without that action (ie: --no-{action})"
             props_path = os.path.join(env["UPLOAD_PATH"],
                     'balrog_props.json')
             self.generate_balrog_props(props_path)
+            return
+
+        if self.config.get('skip_balrog_uploads'):
+            self.info("Funsize will submit to balrog, skipping submission here.")
             return
 
         if not self.config.get("balrog_servers"):

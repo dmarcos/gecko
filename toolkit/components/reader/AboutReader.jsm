@@ -17,8 +17,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "NarrateControls", "resource://gre/modul
 XPCOMUtils.defineLazyModuleGetter(this, "Rect", "resource://gre/modules/Geometry.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task", "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry", "resource://gre/modules/UITelemetry.jsm");
-XPCOMUtils.defineLazyServiceGetter(this, "gChromeRegistry",
-                                   "@mozilla.org/chrome/chrome-registry;1", Ci.nsIXULChromeRegistry);
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
 
 var gStrings = Services.strings.createBundle("chrome://global/locale/aboutReader.properties");
@@ -75,7 +73,7 @@ var AboutReader = function(mm, win, articlePromise) {
   win.addEventListener("scroll", this);
   win.addEventListener("resize", this);
 
-  Services.obs.addObserver(this, "inner-window-destroyed", false);
+  Services.obs.addObserver(this, "inner-window-destroyed");
 
   doc.addEventListener("visibilitychange", this);
 
@@ -733,24 +731,9 @@ AboutReader.prototype = {
       this._headerElement.setAttribute("dir", article.dir);
 
       // The native locale could be set differently than the article's text direction.
-      var localeDirection = gChromeRegistry.isLocaleRTL("global") ? "rtl" : "ltr";
+      var localeDirection = Services.locale.isAppLocaleRTL ? "rtl" : "ltr";
       this._readTimeElement.setAttribute("dir", localeDirection);
       this._readTimeElement.style.textAlign = article.dir == "rtl" ? "right" : "left";
-    }
-  },
-
-  _fixLocalLinks() {
-    // We need to do this because preprocessing the content through nsIParserUtils
-    // gives back a DOM with a <base> element. That influences how these URLs get
-    // resolved, making them no longer match the document URI (which is
-    // about:reader?url=...). To fix this, make all the hash URIs absolute. This
-    // is hacky, but the alternative of removing the base element has potential
-    // security implications if Readability has not successfully made all the URLs
-    // absolute, so we pick just fixing these in-document links explicitly.
-    let localLinks = this._contentElement.querySelectorAll("a[href^='#']");
-    for (let localLink of localLinks) {
-      // Have to get the attribute because .href provides an absolute URI.
-      localLink.href = this._doc.documentURI + localLink.getAttribute("href");
     }
   },
 
@@ -777,7 +760,12 @@ AboutReader.prototype = {
 
     this._doc.title = errorMessage;
 
+    this._doc.documentElement.dataset.isError = true;
+
     this._error = true;
+
+    this._doc.dispatchEvent(
+      new this._win.CustomEvent("AboutReaderContentError", { bubbles: true, cancelable: false }));
   },
 
   // This function is the JS version of Java's StringUtils.stripCommonSubdomains.
@@ -819,7 +807,6 @@ AboutReader.prototype = {
       false, articleUri, this._contentElement);
     this._contentElement.innerHTML = "";
     this._contentElement.appendChild(contentFragment);
-    this._fixLocalLinks();
     this._maybeSetTextDirection(article);
     this._foundLanguage(article.language);
 
@@ -831,7 +818,7 @@ AboutReader.prototype = {
 
     this._goToReference(articleUri.ref);
 
-    Services.obs.notifyObservers(this._win, "AboutReader:Ready", "");
+    Services.obs.notifyObservers(this._win, "AboutReader:Ready");
 
     this._doc.dispatchEvent(
       new this._win.CustomEvent("AboutReaderContentReady", { bubbles: true, cancelable: false }));

@@ -141,7 +141,8 @@ UDPSocketParent::BindInternal(const nsCString& aHost, const uint16_t& aPort,
 {
   nsresult rv;
 
-  UDPSOCKET_LOG(("%s: [this=%p] %s:%u addressReuse: %d loopback: %d recvBufferSize: %lu, sendBufferSize: %lu",
+  UDPSOCKET_LOG(("%s: [this=%p] %s:%u addressReuse: %d loopback: %d recvBufferSize: %"
+                 PRIu32 ", sendBufferSize: %" PRIu32,
                 __FUNCTION__, this, nsCString(aHost).get(), aPort,
                 aAddressReuse, aLoopback, recvBufferSize, sendBufferSize));
 
@@ -193,13 +194,13 @@ UDPSocketParent::BindInternal(const nsCString& aHost, const uint16_t& aPort,
   if (recvBufferSize != 0) {
     rv = sock->SetRecvBufferSize(recvBufferSize);
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      UDPSOCKET_LOG(("%s: [this=%p] %s:%u failed to set recv buffer size to: %lu", __FUNCTION__, this, nsCString(aHost).get(), aPort, recvBufferSize));
+      UDPSOCKET_LOG(("%s: [this=%p] %s:%u failed to set recv buffer size to: %" PRIu32, __FUNCTION__, this, nsCString(aHost).get(), aPort, recvBufferSize));
     }
   }
   if (sendBufferSize != 0) {
     rv = sock->SetSendBufferSize(sendBufferSize);
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      UDPSOCKET_LOG(("%s: [this=%p] %s:%u failed to set send buffer size to: %lu", __FUNCTION__, this, nsCString(aHost).get(), aPort, sendBufferSize));
+      UDPSOCKET_LOG(("%s: [this=%p] %s:%u failed to set send buffer size to: %" PRIu32, __FUNCTION__, this, nsCString(aHost).get(), aPort, sendBufferSize));
     }
   }
 
@@ -243,7 +244,7 @@ UDPSocketParent::RecvConnect(const UDPAddressInfo& aAddressInfo)
   nsCOMPtr<nsIEventTarget> thread(NS_GetCurrentThread());
   Unused <<
     NS_WARN_IF(NS_FAILED(GetSTSThread()->Dispatch(WrapRunnable(
-                                                    this,
+                                                    RefPtr<UDPSocketParent>(this),
                                                     &UDPSocketParent::DoConnect,
                                                     mSocket,
                                                     thread,
@@ -265,7 +266,7 @@ UDPSocketParent::SendConnectResponse(nsIEventTarget *aThread,
 {
   Unused <<
     NS_WARN_IF(NS_FAILED(aThread->Dispatch(WrapRunnable(
-                                             this,
+                                             RefPtr<UDPSocketParent>(this),
                                              &UDPSocketParent::DoSendConnectResponse,
                                              aAddressInfo),
                                            NS_DISPATCH_NORMAL)));
@@ -309,6 +310,11 @@ UDPSocketParent::ConnectInternal(const nsCString& aHost, const uint16_t& aPort)
   nsresult rv;
 
   UDPSOCKET_LOG(("%s: %s:%u", __FUNCTION__, nsCString(aHost).get(), aPort));
+
+  if (!mSocket) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
   PRNetAddr prAddr;
   memset(&prAddr, 0, sizeof(prAddr));
   PR_InitializeNetAddr(PR_IpAddrAny, aPort, &prAddr);
@@ -332,7 +338,11 @@ mozilla::ipc::IPCResult
 UDPSocketParent::RecvOutgoingData(const UDPData& aData,
                                   const UDPSocketAddr& aAddr)
 {
-  MOZ_ASSERT(mSocket);
+  if (!mSocket) {
+    NS_WARNING("sending socket is closed");
+    FireInternalError(__LINE__);
+    return IPC_OK();
+  }
 
   nsresult rv;
   if (mFilter) {
@@ -361,8 +371,8 @@ UDPSocketParent::RecvOutgoingData(const UDPData& aData,
     case UDPData::TArrayOfuint8_t:
       Send(aData.get_ArrayOfuint8_t(), aAddr);
       break;
-    case UDPData::TInputStreamParams:
-      Send(aData.get_InputStreamParams(), aAddr);
+    case UDPData::TIPCStream:
+      Send(aData.get_IPCStream(), aAddr);
       break;
     default:
       MOZ_ASSERT(false, "Invalid data type!");
@@ -402,11 +412,10 @@ UDPSocketParent::Send(const InfallibleTArray<uint8_t>& aData,
 }
 
 void
-UDPSocketParent::Send(const InputStreamParams& aStream,
+UDPSocketParent::Send(const IPCStream& aStream,
                       const UDPSocketAddr& aAddr)
 {
-  nsTArray<mozilla::ipc::FileDescriptor> fds;
-  nsCOMPtr<nsIInputStream> stream = DeserializeInputStream(aStream, fds);
+  nsCOMPtr<nsIInputStream> stream = DeserializeIPCStream(aStream);
 
   if (NS_WARN_IF(!stream)) {
     return;
@@ -576,7 +585,7 @@ UDPSocketParent::SendInternalError(nsIEventTarget *aThread,
   UDPSOCKET_LOG(("SendInternalError: %u", aLineNo));
   Unused <<
     NS_WARN_IF(NS_FAILED(aThread->Dispatch(WrapRunnable(
-                                             this,
+                                             RefPtr<UDPSocketParent>(this),
                                              &UDPSocketParent::FireInternalError,
                                              aLineNo),
                                            NS_DISPATCH_NORMAL)));

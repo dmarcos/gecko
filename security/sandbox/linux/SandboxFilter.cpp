@@ -169,6 +169,7 @@ public:
       Arg<clockid_t> clk_id(0);
       return If(clk_id == CLOCK_MONOTONIC, Allow())
 #ifdef CLOCK_MONOTONIC_COARSE
+        // Used by SandboxReporter, among other things.
         .ElseIf(clk_id == CLOCK_MONOTONIC_COARSE, Allow())
 #endif
         .ElseIf(clk_id == CLOCK_PROCESS_CPUTIME_ID, Allow())
@@ -654,8 +655,15 @@ public:
     CASES_FOR_fchown:
     case __NR_fchmod:
     case __NR_flock:
-#endif
       return Allow();
+
+      // Bug 1354731: proprietary GL drivers try to mknod() their devices
+    case __NR_mknod: {
+      Arg<mode_t> mode(1);
+      return If((mode & S_IFMT) == S_IFCHR, Error(EPERM))
+        .Else(InvalidSyscall());
+    }
+#endif
 
     case __NR_readlinkat:
 #ifdef DESKTOP
@@ -695,10 +703,8 @@ public:
     case __NR_mprotect:
     case __NR_brk:
     case __NR_madvise:
-#if !defined(MOZ_MEMORY)
-      // libc's realloc uses mremap (Bug 1286119).
+      // libc's realloc uses mremap (Bug 1286119); wasm does too (bug 1342385).
     case __NR_mremap:
-#endif
       return Allow();
 
     case __NR_sigaltstack:
@@ -773,6 +779,7 @@ public:
       return Allow();
 
     case __NR_eventfd2:
+    case __NR_inotify_init:
     case __NR_inotify_init1:
     case __NR_inotify_add_watch:
     case __NR_inotify_rm_watch:

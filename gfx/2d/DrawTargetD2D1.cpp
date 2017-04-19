@@ -8,6 +8,7 @@
 #include "FilterNodeSoftware.h"
 #include "GradientStopsD2D.h"
 #include "SourceSurfaceD2D1.h"
+#include "SourceSurfaceDual.h"
 #include "RadialGradientEffectD2D1.h"
 
 #include "HelpersD2D.h"
@@ -229,7 +230,7 @@ DrawTargetD2D1::DrawSurfaceWithShadow(SourceSurface *aSurface,
   mTransformDirty = true;
 
   Matrix mat;
-  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP);
+  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP, nullptr, false);
 
   if (!image) {
     gfxWarning() << "Couldn't get image for surface.";
@@ -378,7 +379,7 @@ DrawTargetD2D1::CopySurface(SourceSurface *aSurface,
   mTransformDirty = true;
 
   Matrix mat = Matrix::Translation(aDestination.x - aSourceRect.x, aDestination.y - aSourceRect.y);
-  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP);
+  RefPtr<ID2D1Image> image = GetImageForSurface(aSurface, mat, ExtendMode::CLAMP, nullptr, false);
 
   if (!image) {
     gfxWarning() << "Couldn't get image for surface.";
@@ -1358,6 +1359,9 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
     // We don't need to preserve the current content of this layer as the output
     // of the blend effect should completely replace it.
     RefPtr<ID2D1Image> tmpImage = GetImageForLayerContent(false);
+    if (!tmpImage) {
+      return;
+    }
 
     blendEffect->SetInput(0, tmpImage);
     blendEffect->SetInput(1, source);
@@ -1461,9 +1465,13 @@ DrawTargetD2D1::GetImageForLayerContent(bool aShouldPreserveContent)
     HRESULT hr = mDC->CreateBitmap(D2DIntSize(mSize), D2D1::BitmapProperties(D2DPixelFormat(mFormat)), getter_AddRefs(tmpBitmap));
     if (FAILED(hr)) {
       gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(mSize))) << "[D2D1.1] 6CreateBitmap failure " << mSize << " Code: " << hexa(hr) << " format " << (int)mFormat;
-      // For now, crash in this scenario; this should happen because tmpBitmap is
+      // If it's a recreate target error, return and handle it elsewhere.
+      if (hr == D2DERR_RECREATE_TARGET) {
+        mDC->Flush();
+        return nullptr;
+      }
+      // For now, crash in other scenarios; this should happen because tmpBitmap is
       // null and CopyFromBitmap call below dereferences it.
-      // return;
     }
     mDC->Flush();
 
@@ -1850,7 +1858,8 @@ DrawTargetD2D1::CreateBrushForPattern(const Pattern &aPattern, Float aAlpha)
 
 already_AddRefed<ID2D1Image>
 DrawTargetD2D1::GetImageForSurface(SourceSurface *aSurface, Matrix &aSourceTransform,
-                                   ExtendMode aExtendMode, const IntRect* aSourceRect)
+                                   ExtendMode aExtendMode, const IntRect* aSourceRect,
+                                   bool aUserSpace)
 {
   RefPtr<ID2D1Image> image;
 
@@ -1862,6 +1871,21 @@ DrawTargetD2D1::GetImageForSurface(SourceSurface *aSurface, Matrix &aSourceTrans
       AddDependencyOnSource(surf);
     }
     break;
+  case SurfaceType::DUAL_DT:
+    {
+      // Sometimes we have a dual drawtarget but the underlying targets
+      // are d2d surfaces. Let's not readback and reupload in those cases.
+      SourceSurfaceDual* surface = static_cast<SourceSurfaceDual*>(aSurface);
+      SourceSurface* first = surface->GetFirstSurface();
+      if (first->GetType() == SurfaceType::D2D1_1_IMAGE) {
+        MOZ_ASSERT(surface->SameSurfaceTypes());
+        SourceSurfaceD2D1* d2dSurface = static_cast<SourceSurfaceD2D1*>(first);
+        image = d2dSurface->GetImage();
+        AddDependencyOnSource(d2dSurface); 
+        break;
+      }
+      // Otherwise fall through
+  }
   default:
     {
       RefPtr<DataSourceSurface> dataSurf = aSurface->GetDataSurface();
@@ -1869,7 +1893,8 @@ DrawTargetD2D1::GetImageForSurface(SourceSurface *aSurface, Matrix &aSourceTrans
         gfxWarning() << "Invalid surface type.";
         return nullptr;
       }
-      return CreatePartialBitmapForSurface(dataSurf, mTransform, mSize, aExtendMode,
+      Matrix transform = aUserSpace ? mTransform : Matrix();
+      return CreatePartialBitmapForSurface(dataSurf, transform, mSize, aExtendMode,
                                            aSourceTransform, mDC, aSourceRect);
     }
     break;

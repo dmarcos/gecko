@@ -45,7 +45,8 @@ function run_test() {
   checkService("focus", Ci.nsIFocusManager);
   checkService("io", Ci.nsIIOService);
   checkService("io", Ci.nsIIOService2);
-  checkService("locale", Ci.nsILocaleService);
+  checkService("intl", Ci.mozIMozIntl);
+  checkService("locale", Ci.mozILocaleService);
   checkService("logins", Ci.nsILoginManager);
   checkService("obs", Ci.nsIObserverService);
   checkService("perms", Ci.nsIPermissionManager);

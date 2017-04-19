@@ -18,7 +18,6 @@ import java.util.Locale;
 import android.content.SharedPreferences;
 
 import org.mozilla.gecko.EventDispatcher;
-import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
@@ -263,7 +262,7 @@ public class BrowserSearch extends HomeFragment
                 getLoaderManager().destroyLoader(LOADER_ID_SUGGESTION);
             }
 
-            GeckoAppShell.notifyObservers("SearchEngines:GetVisible", null);
+            EventDispatcher.getInstance().dispatch("SearchEngines:GetVisible", null);
         }
         super.onHiddenChanged(hidden);
     }
@@ -277,7 +276,7 @@ public class BrowserSearch extends HomeFragment
 
         // Fetch engines if we need to.
         if (mSearchEngines.isEmpty() || !Locale.getDefault().equals(mLastLocale)) {
-            GeckoAppShell.notifyObservers("SearchEngines:GetVisible", null);
+            EventDispatcher.getInstance().dispatch("SearchEngines:GetVisible", null);
         } else {
             updateSearchEngineBar();
         }
@@ -497,7 +496,9 @@ public class BrowserSearch extends HomeFragment
         }
 
         // Prefetch auto-completed domain since it's a likely target
-        GeckoAppShell.notifyObservers("Session:Prefetch", "http://" + autocompletion);
+        final GeckoBundle data = new GeckoBundle(1);
+        data.putString("url", "http://" + autocompletion);
+        EventDispatcher.getInstance().dispatch("Session:Prefetch", data);
 
         mAutocompleteHandler.onAutocomplete(autocompletion);
         mAutocompleteHandler = null;
@@ -597,7 +598,9 @@ public class BrowserSearch extends HomeFragment
 
             if (searchCount == 0) {
                 // Prefetch the first item in the list since it's weighted the highest
-                GeckoAppShell.notifyObservers("Session:Prefetch", url);
+                final GeckoBundle data = new GeckoBundle(1);
+                data.putString("url", url);
+                EventDispatcher.getInstance().dispatch("Session:Prefetch", data);
             }
 
             // Does the completion match against the whole URL? This will match
@@ -667,16 +670,22 @@ public class BrowserSearch extends HomeFragment
         }
 
         // Suggestions from search engine
-        if (mSearchEngineSuggestionLoaderCallbacks == null) {
-            mSearchEngineSuggestionLoaderCallbacks = new SearchEngineSuggestionLoaderCallbacks();
+        if (mSuggestionsEnabled) {
+            if (mSearchEngineSuggestionLoaderCallbacks == null) {
+                mSearchEngineSuggestionLoaderCallbacks = new SearchEngineSuggestionLoaderCallbacks();
+            }
+            getLoaderManager().restartLoader(LOADER_ID_SUGGESTION, null, mSearchEngineSuggestionLoaderCallbacks);
         }
-        getLoaderManager().restartLoader(LOADER_ID_SUGGESTION, null, mSearchEngineSuggestionLoaderCallbacks);
 
         // Saved suggestions
-        if (mSearchHistorySuggestionLoaderCallback == null) {
-            mSearchHistorySuggestionLoaderCallback = new SearchHistorySuggestionLoaderCallbacks();
+        if (mSavedSearchesEnabled) {
+            if (mSearchHistorySuggestionLoaderCallback == null) {
+                mSearchHistorySuggestionLoaderCallback = new SearchHistorySuggestionLoaderCallbacks();
+            }
+            getLoaderManager().restartLoader(LOADER_ID_SAVED_SUGGESTION, null, mSearchHistorySuggestionLoaderCallback);
+        } else {
+            mSearchHistorySuggestions.clear();
         }
-        getLoaderManager().restartLoader(LOADER_ID_SAVED_SUGGESTION, null, mSearchHistorySuggestionLoaderCallback);
     }
 
     private void setSuggestions(ArrayList<String> suggestions) {
@@ -725,8 +734,8 @@ public class BrowserSearch extends HomeFragment
         }
 
         final GeckoBundle suggest = data.getBundle("suggest");
-        final String suggestEngine = suggest.getString("engine", null);
-        final String suggestTemplate = suggest.getString("template", null);
+        final String suggestEngine = suggest.getString("engine");
+        final String suggestTemplate = suggest.getString("template");
         final boolean suggestionsPrompted = suggest.getBoolean("prompted");
         final GeckoBundle[] engines = data.getBundleArray("searchEngines");
 
@@ -873,14 +882,14 @@ public class BrowserSearch extends HomeFragment
             @Override
             public void run() {
                 SuggestClient client = mSuggestClient;
-                if (client != null) {
+                if (client != null && enabled) {
                     client.query(mSearchTerm);
                 }
             }
         });
 
         PrefsHelper.setPref("browser.search.suggest.prompted", true);
-        PrefsHelper.setPref("browser.search.suggest.enabled", enabled);
+        PrefsHelper.setPref(GeckoPreferences.PREFS_SEARCH_SUGGESTIONS_ENABLED, enabled);
 
         Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.BUTTON, (enabled ? "suggestions_optin_yes" : "suggestions_optin_no"));
 

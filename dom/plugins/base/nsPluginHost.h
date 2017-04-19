@@ -139,7 +139,6 @@ public:
                    uint32_t postHeadersLength,
                    const char* postHeaders);
 
-  nsresult FindProxyForURL(const char* url, char* *result);
   nsresult UserAgent(const char **retstring);
   nsresult ParsePostBufferToFixHeaders(const char *inPostData,
                                        uint32_t inPostDataLen,
@@ -191,17 +190,24 @@ public:
   // Always returns false if plugin.load_in_parent_process.<mime> is not set.
   static bool ShouldLoadTypeInParent(const nsACString& aMimeType);
 
+  /**
+   * Returns true if a plugin can be used to load the requested MIME type. Used
+   * for short circuiting before sending things to plugin code.
+   */
+  static bool
+  CanUsePluginForMIMEType(const nsACString& aMIMEType);
+
   // checks whether aType is a type we recognize for potential special handling
-  enum SpecialType { eSpecialType_None,
-                     // Needed to whitelist for async init support
-                     eSpecialType_Test,
-                     // Informs some decisions about OOP and quirks
-                     eSpecialType_Flash,
-                     // Binds to the <applet> tag, has various special
-                     // rules around opening channels, codebase, ...
-                     eSpecialType_Java,
-                     // Native widget quirks
-                     eSpecialType_Unity };
+  enum SpecialType {
+    eSpecialType_None,
+    // Needed to whitelist for async init support
+    eSpecialType_Test,
+    // Informs some decisions about OOP and quirks
+    eSpecialType_Flash,
+    // Binds to the <applet> tag, has various special
+    // rules around opening channels, codebase, ...
+    eSpecialType_Java
+  };
   static SpecialType GetSpecialType(const nsACString & aMIMEType);
 
   static nsresult PostPluginUnloadEvent(PRLibrary* aLibrary);
@@ -360,10 +366,6 @@ private:
   void SetChromeEpochForContent(uint32_t aEpoch);
 
   void UpdateInMemoryPluginInfo(nsPluginTag* aPluginTag);
-
-  // On certain platforms, we only want to load certain plugins. This function
-  // centralizes loading rules.
-  bool ShouldAddPlugin(nsPluginTag* aPluginTag);
 
   RefPtr<nsPluginTag> mPlugins;
   RefPtr<nsPluginTag> mCachedPlugins;

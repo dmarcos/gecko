@@ -140,7 +140,6 @@ static bool getObjectValue(NPObject* npobj, const NPVariant* args, uint32_t argC
 static bool getJavaCodebase(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool checkObjectValue(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool enableFPExceptions(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
-static bool getAuthInfo(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool asyncCallbackTest(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool checkGCRace(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool hangPlugin(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
@@ -149,6 +148,7 @@ static bool getClipboardText(NPObject* npobj, const NPVariant* args, uint32_t ar
 static bool callOnDestroy(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool reinitWidget(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool crashPluginInNestedLoop(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
+static bool triggerXError(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool destroySharedGfxStuff(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool propertyAndMethod(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
 static bool getTopLevelWindowActivationState(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result);
@@ -213,7 +213,6 @@ static const NPUTF8* sPluginMethodIdentifierNames[] = {
   "getJavaCodebase",
   "checkObjectValue",
   "enableFPExceptions",
-  "getAuthInfo",
   "asyncCallbackTest",
   "checkGCRace",
   "hang",
@@ -222,6 +221,7 @@ static const NPUTF8* sPluginMethodIdentifierNames[] = {
   "callOnDestroy",
   "reinitWidget",
   "crashInNestedLoop",
+  "triggerXError",
   "destroySharedGfxStuff",
   "propertyAndMethod",
   "getTopLevelWindowActivationState",
@@ -287,7 +287,6 @@ static const ScriptableFunction sPluginMethodFunctions[] = {
   getJavaCodebase,
   checkObjectValue,
   enableFPExceptions,
-  getAuthInfo,
   asyncCallbackTest,
   checkGCRace,
   hangPlugin,
@@ -296,6 +295,7 @@ static const ScriptableFunction sPluginMethodFunctions[] = {
   callOnDestroy,
   reinitWidget,
   crashPluginInNestedLoop,
+  triggerXError,
   destroySharedGfxStuff,
   propertyAndMethod,
   getTopLevelWindowActivationState,
@@ -873,12 +873,6 @@ NPP_New(NPMIMEType pluginType, NPP instance, uint16_t mode, int16_t argc, char* 
 
   instanceData->instanceCountWatchGeneration = sCurrentInstanceCountWatchGeneration;
 
-  if (NP_FULL == mode) {
-    instanceData->streamMode = NP_SEEK;
-    instanceData->frame = "testframe";
-    addRange(instanceData, "100,100");
-  }
-
   AsyncDrawing requestAsyncDrawing = AD_NONE;
 
   bool requestWindow = false;
@@ -1012,7 +1006,16 @@ NPP_New(NPMIMEType pluginType, NPP instance, uint16_t mode, int16_t argc, char* 
     if (strcmp(argn[i], "salign") == 0) {
       alreadyHasSalign = true;
     }
-}
+
+    // We don't support NP_FULL any more, but name="plugin" is an indication
+    // that we're a full-page plugin. We use default seek parameters for
+    // test_fullpage.html
+    if (strcmp(argn[i], "name") == 0 && strcmp(argv[i], "plugin") == 0) {
+      instanceData->streamMode = NP_SEEK;
+      instanceData->frame = "testframe";
+      addRange(instanceData, "100,100");
+    }
+  }
 
   if (!browserSupportsWindowless || !pluginSupportsWindowlessMode()) {
     requestWindow = true;
@@ -1974,20 +1977,6 @@ NPError
 NPN_GetValueForURL(NPP instance, NPNURLVariable variable, const char *url, char **value, uint32_t *len)
 {
   return sBrowserFuncs->getvalueforurl(instance, variable, url, value, len);
-}
-
-NPError
-NPN_GetAuthenticationInfo(NPP instance,
-                          const char *protocol,
-                          const char *host, int32_t port,
-                          const char *scheme,
-                          const char *realm,
-                          char **username, uint32_t *ulen,
-                          char **password,
-                          uint32_t *plen)
-{
-  return sBrowserFuncs->getauthenticationinfo(instance, protocol, host, port, scheme, realm,
-      username, ulen, password, plen);
 }
 
 void
@@ -3006,58 +2995,6 @@ static bool enableFPExceptions(NPObject* npobj, const NPVariant* args, uint32_t 
 #endif
 }
 
-static bool
-getAuthInfo(NPObject* npobj, const NPVariant* args, uint32_t argCount, NPVariant* result)
-{
-  if (argCount != 5)
-    return false;
-
-  NPP npp = static_cast<TestNPObject*>(npobj)->npp;
-
-  if (!NPVARIANT_IS_STRING(args[0]) || !NPVARIANT_IS_STRING(args[1]) ||
-      !NPVARIANT_IS_INT32(args[2]) || !NPVARIANT_IS_STRING(args[3]) ||
-      !NPVARIANT_IS_STRING(args[4]))
-    return false;
-
-  const NPString* protocol = &NPVARIANT_TO_STRING(args[0]);
-  const NPString* host = &NPVARIANT_TO_STRING(args[1]);
-  uint32_t port = NPVARIANT_TO_INT32(args[2]);
-  const NPString* scheme = &NPVARIANT_TO_STRING(args[3]);
-  const NPString* realm = &NPVARIANT_TO_STRING(args[4]);
-
-  char* username = nullptr;
-  char* password = nullptr;
-  uint32_t ulen = 0, plen = 0;
-
-  NPError err = NPN_GetAuthenticationInfo(npp,
-      protocol->UTF8Characters,
-      host->UTF8Characters,
-      port,
-      scheme->UTF8Characters,
-      realm->UTF8Characters,
-      &username,
-      &ulen,
-      &password,
-      &plen);
-
-  if (err != NPERR_NO_ERROR) {
-    return false;
-  }
-
-  char* outstring = (char*)NPN_MemAlloc(ulen + plen + 2);
-  memset(outstring, 0, ulen + plen + 2);
-  strncpy(outstring, username, ulen);
-  strcat(outstring, "|");
-  strncat(outstring, password, plen);
-
-  STRINGZ_TO_NPVARIANT(outstring, *result);
-
-  NPN_MemFree(username);
-  NPN_MemFree(password);
-
-  return true;
-}
-
 static void timerCallback(NPP npp, uint32_t timerID)
 {
   InstanceData* id = static_cast<InstanceData*>(npp->pdata);
@@ -3363,6 +3300,15 @@ crashPluginInNestedLoop(NPObject* npobj, const NPVariant* args,
 }
 
 bool
+triggerXError(NPObject* npobj, const NPVariant* args,
+              uint32_t argCount, NPVariant* result)
+{
+  NPP npp = static_cast<TestNPObject*>(npobj)->npp;
+  InstanceData* id = static_cast<InstanceData*>(npp->pdata);
+  return pluginTriggerXError(id);
+}
+
+bool
 destroySharedGfxStuff(NPObject* npobj, const NPVariant* args,
                         uint32_t argCount, NPVariant* result)
 {
@@ -3383,6 +3329,14 @@ getClipboardText(NPObject* npobj, const NPVariant* args, uint32_t argCount,
 bool
 crashPluginInNestedLoop(NPObject* npobj, const NPVariant* args,
                         uint32_t argCount, NPVariant* result)
+{
+  // XXX Not implemented!
+  return false;
+}
+
+bool
+triggerXError(NPObject* npobj, const NPVariant* args,
+              uint32_t argCount, NPVariant* result)
 {
   // XXX Not implemented!
   return false;

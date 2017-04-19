@@ -224,7 +224,8 @@ nsNativeTheme::IsButtonTypeMenu(nsIFrame* aFrame)
     return false;
 
   nsIContent* content = aFrame->GetContent();
-  return content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+  return content->IsXULElement(nsGkAtoms::button) &&
+         content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
                               NS_LITERAL_STRING("menu"), eCaseMatters);
 }
 
@@ -286,7 +287,7 @@ nsNativeTheme::IsWidgetStyled(nsPresContext* aPresContext, nsIFrame* aFrame,
       parentFrame = parentFrame->GetParent();
       if (parentFrame) {
         return IsWidgetStyled(aPresContext, parentFrame,
-                              parentFrame->StyleDisplay()->mAppearance);
+                              parentFrame->StyleDisplay()->UsedAppearance());
       }
     }
   }
@@ -646,6 +647,9 @@ nsNativeTheme::QueueAnimatedContentForRefresh(nsIContent* aContent,
       NS_ENSURE_SUCCESS(rv, false);
     }
 
+    if (XRE_IsContentProcess() && NS_IsMainThread()) {
+      mAnimatedContentTimer->SetTarget(aContent->OwnerDoc()->EventTargetFor(TaskCategory::Other));
+    }
     rv = mAnimatedContentTimer->InitWithCallback(this, timeout,
                                                  nsITimer::TYPE_ONE_SHOT);
     NS_ENSURE_SUCCESS(rv, false);
@@ -697,7 +701,7 @@ nsNativeTheme::GetAdjacentSiblingFrameWithSameAppearance(nsIFrame* aFrame,
 
   // Check same appearance and adjacency.
   if (!sibling ||
-      sibling->StyleDisplay()->mAppearance != aFrame->StyleDisplay()->mAppearance ||
+      sibling->StyleDisplay()->UsedAppearance() != aFrame->StyleDisplay()->UsedAppearance() ||
       (sibling->GetRect().XMost() != aFrame->GetRect().x &&
        aFrame->GetRect().XMost() != sibling->GetRect().x))
     return nullptr;

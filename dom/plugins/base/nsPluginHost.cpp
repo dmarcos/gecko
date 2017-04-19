@@ -30,7 +30,6 @@
 #include "nsIURL.h"
 #include "nsTArray.h"
 #include "nsReadableUtils.h"
-#include "nsProtocolProxyService.h"
 #include "nsIStreamConverterService.h"
 #include "nsIFile.h"
 #if defined(XP_MACOSX)
@@ -95,7 +94,7 @@
 #include "nsIImageLoadingContent.h"
 #include "mozilla/Preferences.h"
 #include "nsVersionComparator.h"
-#include "nsNullPrincipal.h"
+#include "NullPrincipal.h"
 
 #if defined(XP_WIN)
 #include "nsIWindowMediator.h"
@@ -152,11 +151,9 @@ static const char kDirectoryServiceContractID[] = "@mozilla.org/file/directory_s
 
 #define kPluginRegistryFilename NS_LITERAL_CSTRING("pluginreg.dat")
 
-#ifdef PLUGIN_LOGGING
 LazyLogModule nsPluginLogging::gNPNLog(NPN_LOG_NAME);
 LazyLogModule nsPluginLogging::gNPPLog(NPP_LOG_NAME);
 LazyLogModule nsPluginLogging::gPluginLog(PLUGIN_LOG_NAME);
-#endif
 
 // #defines for plugin cache and prefs
 #define NS_PREF_MAX_NUM_CACHED_INSTANCES "browser.plugins.max_num_cached_plugins"
@@ -187,13 +184,10 @@ busy_beaver_PR_Read(PRFileDesc *fd, void * start, int32_t len)
                 return -1;
             break;
         }
-        else
-        {
-            remaining -= n;
-            char *cp = (char *) start;
-            cp += n;
-            start = cp;
-        }
+        remaining -= n;
+        char *cp = (char *) start;
+        cp += n;
+        start = cp;
     }
     return len - remaining;
 }
@@ -276,12 +270,6 @@ nsPluginHost::nsPluginHost()
   // this manually.
   if (XRE_IsParentProcess()) {
     IncrementChromeEpoch();
-  } else {
-    // When NPAPI requests the proxy setting by calling |FindProxyForURL|,
-    // the service is requested and initialized asynchronously, but
-    // |FindProxyForURL| is synchronous, so we should initialize this earlier.
-    nsCOMPtr<nsIProtocolProxyService> proxyService =
-      do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
   }
 
   // check to see if pref is set at startup to let plugins take over in
@@ -597,88 +585,6 @@ nsresult nsPluginHost::PostURL(nsISupports* pluginInst,
   return rv;
 }
 
-/* This method queries the prefs for proxy information.
- * It has been tested and is known to work in the following three cases
- * when no proxy host or port is specified
- * when only the proxy host is specified
- * when only the proxy port is specified
- * This method conforms to the return code specified in
- * http://developer.netscape.com/docs/manuals/proxy/adminnt/autoconf.htm#1020923
- * with the exception that multiple values are not implemented.
- */
-
-nsresult nsPluginHost::FindProxyForURL(const char* url, char* *result)
-{
-  if (!url || !result) {
-    return NS_ERROR_INVALID_ARG;
-  }
-  nsresult res;
-
-  nsCOMPtr<nsIProtocolProxyService> proxyService =
-    do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID, &res);
-  if (NS_FAILED(res) || !proxyService)
-    return res;
-
-  RefPtr<nsProtocolProxyService> rawProxyService = do_QueryObject(proxyService);
-  if (!rawProxyService) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // make a temporary channel from the argument url
-  nsCOMPtr<nsIURI> uri;
-  res = NS_NewURI(getter_AddRefs(uri), nsDependentCString(url));
-  NS_ENSURE_SUCCESS(res, res);
-
-  nsCOMPtr<nsIPrincipal> nullPrincipal = nsNullPrincipal::Create();
-  // The following channel is never openend, so it does not matter what
-  // securityFlags we pass; let's follow the principle of least privilege.
-  nsCOMPtr<nsIChannel> tempChannel;
-  res = NS_NewChannel(getter_AddRefs(tempChannel), uri, nullPrincipal,
-                      nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED,
-                      nsIContentPolicy::TYPE_OTHER);
-  NS_ENSURE_SUCCESS(res, res);
-
-  nsCOMPtr<nsIProxyInfo> pi;
-
-  // Remove this deprecated call in the future (see Bug 778201):
-  res = rawProxyService->DeprecatedBlockingResolve(tempChannel, 0, getter_AddRefs(pi));
-  if (NS_FAILED(res))
-    return res;
-
-  nsAutoCString host, type;
-  int32_t port = -1;
-
-  // These won't fail, and even if they do... we'll be ok.
-  if (pi) {
-    pi->GetType(type);
-    pi->GetHost(host);
-    pi->GetPort(&port);
-  }
-
-  if (!pi || host.IsEmpty() || port <= 0 || host.EqualsLiteral("direct")) {
-    *result = PL_strdup("DIRECT");
-  } else if (type.EqualsLiteral("http")) {
-    *result = PR_smprintf("PROXY %s:%d", host.get(), port);
-  } else if (type.EqualsLiteral("socks4")) {
-    *result = PR_smprintf("SOCKS %s:%d", host.get(), port);
-  } else if (type.EqualsLiteral("socks")) {
-    // XXX - this is socks5, but there is no API for us to tell the
-    // plugin that fact. SOCKS for now, in case the proxy server
-    // speaks SOCKS4 as well. See bug 78176
-    // For a long time this was returning an http proxy type, so
-    // very little is probably broken by this
-    *result = PR_smprintf("SOCKS %s:%d", host.get(), port);
-  } else {
-    NS_ASSERTION(false, "Unknown proxy type!");
-    *result = PL_strdup("DIRECT");
-  }
-
-  if (nullptr == *result)
-    res = NS_ERROR_OUT_OF_MEMORY;
-
-  return res;
-}
-
 nsresult nsPluginHost::UnloadPlugins()
 {
   PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("nsPluginHost::UnloadPlugins Called\n"));
@@ -861,8 +767,8 @@ nsPluginHost::InstantiatePluginInstance(const nsACString& aMimeType, nsIURI* aUR
   if (aURL != nullptr) aURL->GetAsciiSpec(urlSpec2);
 
   MOZ_LOG(nsPluginLogging::gPluginLog, PLUGIN_LOG_NORMAL,
-        ("nsPluginHost::InstantiatePlugin Finished mime=%s, rv=%d, url=%s\n",
-         PromiseFlatCString(aMimeType).get(), rv, urlSpec2.get()));
+        ("nsPluginHost::InstantiatePlugin Finished mime=%s, rv=%" PRIu32 ", url=%s\n",
+         PromiseFlatCString(aMimeType).get(), static_cast<uint32_t>(rv), urlSpec2.get()));
 
   PR_LogFlush();
 #endif
@@ -998,8 +904,8 @@ nsPluginHost::TrySetUpPluginInstance(const nsACString &aMimeType,
 
 #ifdef PLUGIN_LOGGING
   MOZ_LOG(nsPluginLogging::gPluginLog, PLUGIN_LOG_BASIC,
-        ("nsPluginHost::TrySetupPluginInstance Finished mime=%s, rv=%d, owner=%p, url=%s\n",
-         PromiseFlatCString(aMimeType).get(), rv, aOwner,
+        ("nsPluginHost::TrySetupPluginInstance Finished mime=%s, rv=%" PRIu32 ", owner=%p, url=%s\n",
+         PromiseFlatCString(aMimeType).get(), static_cast<uint32_t>(rv), aOwner,
          aURL ? aURL->GetSpecOrDefault().get() : ""));
 
   PR_LogFlush();
@@ -1127,6 +1033,15 @@ nsPluginHost::HavePluginForExtension(const nsACString & aExtension,
                                      /* out */ nsACString & aMimeType,
                                      PluginFilter aFilter)
 {
+  // As of FF 52, we only support flash and test plugins, so if the extension types
+  // don't match for that, exit before we start loading plugins.
+  //
+  // XXX: Remove tst case when bug 1351885 lands.
+  if (!aExtension.LowerCaseEqualsLiteral("swf") &&
+      !aExtension.LowerCaseEqualsLiteral("tst")) {
+    return false;
+  }
+
   bool checkEnabled = aFilter & eExcludeDisabled;
   bool allowFake = !(aFilter & eExcludeFake);
   return FindNativePluginForExtension(aExtension, aMimeType, checkEnabled) ||
@@ -1268,6 +1183,12 @@ nsPluginHost::FindNativePluginForType(const nsACString & aMimeType,
     return nullptr;
   }
 
+  // As of FF 52, we only support flash and test plugins, so if the mime types
+  // don't match for that, exit before we start loading plugins.
+  if (!nsPluginHost::CanUsePluginForMIMEType(aMimeType)) {
+    return nullptr;
+  }
+
   LoadPlugins();
 
   InfallibleTArray<nsPluginTag*> matchingPlugins;
@@ -1393,7 +1314,10 @@ nsPluginHost::GetPluginForContentProcess(uint32_t aPluginId, nsNPAPIPlugin** aPl
 class nsPluginUnloadRunnable : public Runnable
 {
 public:
-  explicit nsPluginUnloadRunnable(uint32_t aPluginId) : mPluginId(aPluginId) {}
+  explicit nsPluginUnloadRunnable(uint32_t aPluginId) :
+    Runnable("nsPluginUnloadRunnable"),
+    mPluginId(aPluginId)
+  {}
 
   NS_IMETHOD Run() override
   {
@@ -1465,8 +1389,8 @@ nsresult nsPluginHost::GetPlugin(const nsACString &aMimeType,
   }
 
   PLUGIN_LOG(PLUGIN_LOG_NORMAL,
-  ("nsPluginHost::GetPlugin End mime=%s, rv=%d, plugin=%p name=%s\n",
-   PromiseFlatCString(aMimeType).get(), rv, *aPlugin,
+  ("nsPluginHost::GetPlugin End mime=%s, rv=%" PRIu32 ", plugin=%p name=%s\n",
+   PromiseFlatCString(aMimeType).get(), static_cast<uint32_t>(rv), *aPlugin,
    (pluginTag ? pluginTag->FileName().get() : "(not found)")));
 
   return rv;
@@ -2005,40 +1929,39 @@ struct CompareFilesByTime
 
 } // namespace
 
+static
 bool
-nsPluginHost::ShouldAddPlugin(nsPluginTag* aPluginTag)
+ShouldAddPlugin(const nsPluginInfo& info, bool flashOnly)
 {
-#if defined(XP_WIN) && (defined(__x86_64__) || defined(_M_X64))
-  // On 64-bit Windows, the only plugin we should load is Flash. Use library
-  // filename and MIME type to check.
-  if (StringBeginsWith(aPluginTag->FileName(), NS_LITERAL_CSTRING("NPSWF"), nsCaseInsensitiveCStringComparator()) &&
-      (aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-shockwave-flash")) ||
-       aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-shockwave-flash-test")))) {
-    return true;
+  if (!info.fName || (strcmp(info.fName, "Shockwave Flash") != 0 && flashOnly)) {
+    return false;
   }
-
-  // Accept the test plugin MIME types, so mochitests still work.
-  if (aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-test")) ||
-      aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-Second-Test")) ||
-      aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-java-test"))) {
-    return true;
+  for (uint32_t i = 0; i < info.fVariantCount; ++i) {
+    if (info.fMimeTypeArray[i] &&
+        (!strcmp(info.fMimeTypeArray[i], "application/x-shockwave-flash") ||
+         !strcmp(info.fMimeTypeArray[i], "application/x-shockwave-flash-test"))) {
+      return true;
+    }
+    if (flashOnly) {
+      continue;
+    }
+    if (info.fMimeTypeArray[i] &&
+        (!strcmp(info.fMimeTypeArray[i], "application/x-test") ||
+         !strcmp(info.fMimeTypeArray[i], "application/x-Second-Test") ||
+         !strcmp(info.fMimeTypeArray[i], "application/x-java-test"))) {
+      return true;
+    }
   }
 #ifdef PLUGIN_LOGGING
   PLUGIN_LOG(PLUGIN_LOG_NORMAL,
              ("ShouldAddPlugin : Ignoring non-flash plugin library %s\n", aPluginTag->FileName().get()));
 #endif // PLUGIN_LOGGING
   return false;
-#else
-  return true;
-#endif // defined(XP_WIN) && (defined(__x86_64__) || defined(_M_X64))
 }
 
 void
 nsPluginHost::AddPluginTag(nsPluginTag* aPluginTag)
 {
-  if (!ShouldAddPlugin(aPluginTag)) {
-    return;
-  }
   aPluginTag->mNext = mPlugins;
   mPlugins = aPluginTag;
 
@@ -2052,22 +1975,6 @@ nsPluginHost::AddPluginTag(nsPluginTag* aPluginTag)
       }
     }
   }
-}
-
-static bool
-PluginInfoIsFlash(const nsPluginInfo& info)
-{
-  if (!info.fName || strcmp(info.fName, "Shockwave Flash") != 0) {
-    return false;
-  }
-  for (uint32_t i = 0; i < info.fVariantCount; ++i) {
-    if (info.fMimeTypeArray[i] &&
-        (!strcmp(info.fMimeTypeArray[i], "application/x-shockwave-flash") ||
-         !strcmp(info.fMimeTypeArray[i], "application/x-shockwave-flash-test"))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 typedef NS_NPAPIPLUGIN_CALLBACK(char *, NP_GETMIMEDESCRIPTION)(void);
@@ -2195,7 +2102,7 @@ nsresult nsPluginHost::ScanPluginsDirectory(nsIFile *pluginsDir,
       }
       // if we don't have mime type don't proceed, this is not a plugin
       if (NS_FAILED(res) || !info.fMimeTypeArray ||
-          (flashOnly && !PluginInfoIsFlash(info))) {
+          (!ShouldAddPlugin(info, flashOnly))) {
         RefPtr<nsInvalidPluginTag> invalidTag = new nsInvalidPluginTag(filePath.get(),
                                                                          fileModTime);
         pluginFile.FreePluginInfo(info);
@@ -2937,8 +2844,8 @@ nsPluginHost::ReadPluginInfo()
                           getter_AddRefs(mPluginRegFile));
     if (!mPluginRegFile)
       return NS_ERROR_FAILURE;
-    else
-      return NS_ERROR_NOT_AVAILABLE;
+
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
   PRFileDesc* fd = nullptr;
@@ -3135,9 +3042,7 @@ nsPluginHost::ReadPluginInfo()
     }
 
     if (mtr != mimetypecount) {
-      if (heapalloced) {
-        delete [] heapalloced;
-      }
+      delete [] heapalloced;
       return rv;
     }
 
@@ -3150,16 +3055,12 @@ nsPluginHost::ReadPluginInfo()
       (const char* const*)mimedescriptions,
       (const char* const*)extensions,
       mimetypecount, lastmod, fromExtension, true);
-    if (heapalloced)
-      delete [] heapalloced;
+
+    delete [] heapalloced;
 
     // Import flags from registry into prefs for old registry versions
     MOZ_LOG(nsPluginLogging::gPluginLog, PLUGIN_LOG_BASIC,
       ("LoadCachedPluginsInfo : Loading Cached plugininfo for %s\n", tag->FileName().get()));
-
-    if (!ShouldAddPlugin(tag)) {
-      continue;
-    }
 
     tag->mNext = mCachedPlugins;
     mCachedPlugins = tag;
@@ -4051,6 +3952,25 @@ nsPluginHost::DestroyRunningInstances(nsPluginTag* aPluginTag)
   }
 }
 
+/* static */
+bool
+nsPluginHost::CanUsePluginForMIMEType(const nsACString& aMIMEType)
+{
+  // We only support flash as a plugin, so if the mime types don't match for
+  // those, exit before we start loading plugins.
+  //
+  // XXX: Remove test/java cases when bug 1351885 lands.
+  if (nsPluginHost::GetSpecialType(aMIMEType) == nsPluginHost::eSpecialType_Flash ||
+      aMIMEType.LowerCaseEqualsLiteral("application/x-test") ||
+      aMIMEType.LowerCaseEqualsLiteral("application/x-second-test") ||
+      aMIMEType.LowerCaseEqualsLiteral("application/x-third-test") ||
+      aMIMEType.LowerCaseEqualsLiteral("application/x-java-test")) {
+    return true;
+  }
+
+  return false;
+}
+
 // Runnable that does an async destroy of a plugin.
 
 class nsPluginDestroyRunnable : public Runnable,
@@ -4058,7 +3978,8 @@ class nsPluginDestroyRunnable : public Runnable,
 {
 public:
   explicit nsPluginDestroyRunnable(nsNPAPIPluginInstance *aInstance)
-    : mInstance(aInstance)
+    : Runnable("nsPluginDestroyRunnable"),
+      mInstance(aInstance)
   {
     PR_INIT_CLIST(this);
     PR_APPEND_LINK(this, &sRunnableListHead);

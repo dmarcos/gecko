@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/MediaKeySystemAccess.h"
 #include "mozilla/dom/MediaKeySystemAccessBinding.h"
+#include "mozilla/dom/MediaKeySession.h"
 #include "mozilla/Preferences.h"
 #include "MediaContainerType.h"
 #include "MediaPrefs.h"
@@ -98,8 +99,11 @@ MediaKeySystemAccess::CreateMediaKeys(ErrorResult& aRv)
 static bool
 HavePluginForKeySystem(const nsCString& aKeySystem)
 {
-  bool havePlugin = HaveGMPFor(NS_LITERAL_CSTRING(GMP_API_DECRYPTOR),
-                               { aKeySystem });
+  nsCString api = MediaPrefs::EMEChromiumAPIEnabled()
+                    ? NS_LITERAL_CSTRING(CHROMIUM_CDM_API)
+                    : NS_LITERAL_CSTRING(GMP_API_DECRYPTOR);
+
+  bool havePlugin = HaveGMPFor(api, { aKeySystem });
 #ifdef MOZ_WIDGET_ANDROID
   // Check if we can use MediaDrm for this keysystem.
   if (!havePlugin) {
@@ -272,21 +276,19 @@ GetSupportedKeySystems()
         clearkey.mSessionTypes.AppendElement(MediaKeySessionType::Persistent_license);
       }
 #if defined(XP_WIN)
-      // Clearkey CDM uses WMF decoders on Windows.
-      if (WMFDecoderModule::HasAAC()) {
-        clearkey.mMP4.SetCanDecryptAndDecode(EME_CODEC_AAC);
-      } else {
-        clearkey.mMP4.SetCanDecrypt(EME_CODEC_AAC);
-      }
+      // Clearkey CDM uses WMF's H.264 decoder on Windows.
       if (WMFDecoderModule::HasH264()) {
         clearkey.mMP4.SetCanDecryptAndDecode(EME_CODEC_H264);
       } else {
         clearkey.mMP4.SetCanDecrypt(EME_CODEC_H264);
       }
 #else
-      clearkey.mMP4.SetCanDecrypt(EME_CODEC_AAC);
       clearkey.mMP4.SetCanDecrypt(EME_CODEC_H264);
 #endif
+      clearkey.mMP4.SetCanDecrypt(EME_CODEC_AAC);
+      if (Preferences::GetBool("media.eme.vp9-in-mp4.enabled", false)) {
+        clearkey.mMP4.SetCanDecrypt(EME_CODEC_VP9);
+      }
       clearkey.mWebM.SetCanDecrypt(EME_CODEC_VORBIS);
       clearkey.mWebM.SetCanDecrypt(EME_CODEC_OPUS);
       clearkey.mWebM.SetCanDecrypt(EME_CODEC_VP8);
@@ -336,6 +338,7 @@ GetSupportedKeySystems()
 
       DataForValidation validationList[] = {
         { nsCString("video/mp4"), EME_CODEC_H264, MediaDrmProxy::AVC, &widevine.mMP4 },
+        { nsCString("video/mp4"), EME_CODEC_VP9, MediaDrmProxy::AVC, &widevine.mMP4 },
         { nsCString("audio/mp4"), EME_CODEC_AAC, MediaDrmProxy::AAC, &widevine.mMP4 },
         { nsCString("video/webm"), EME_CODEC_VP8, MediaDrmProxy::VP8, &widevine.mWebM },
         { nsCString("video/webm"), EME_CODEC_VP9, MediaDrmProxy::VP9, &widevine.mWebM},
@@ -355,6 +358,9 @@ GetSupportedKeySystems()
       }
 #else
       widevine.mMP4.SetCanDecryptAndDecode(EME_CODEC_H264);
+      if (Preferences::GetBool("media.eme.vp9-in-mp4.enabled", false)) {
+        widevine.mMP4.SetCanDecryptAndDecode(EME_CODEC_VP9);
+      }
       widevine.mWebM.SetCanDecrypt(EME_CODEC_VORBIS);
       widevine.mWebM.SetCanDecrypt(EME_CODEC_OPUS);
       widevine.mWebM.SetCanDecryptAndDecode(EME_CODEC_VP8);
@@ -446,16 +452,11 @@ CanDecryptAndDecode(const nsString& aKeySystem,
 static bool
 ToSessionType(const nsAString& aSessionType, MediaKeySessionType& aOutType)
 {
-  using MediaKeySessionTypeValues::strings;
-  const char* temporary =
-    strings[static_cast<uint32_t>(MediaKeySessionType::Temporary)].value;
-  if (aSessionType.EqualsASCII(temporary)) {
+  if (aSessionType.Equals(ToString(MediaKeySessionType::Temporary))) {
     aOutType = MediaKeySessionType::Temporary;
     return true;
   }
-  const char* persistentLicense =
-    strings[static_cast<uint32_t>(MediaKeySessionType::Persistent_license)].value;
-  if (aSessionType.EqualsASCII(persistentLicense)) {
+  if (aSessionType.Equals(ToString(MediaKeySessionType::Persistent_license))) {
     aOutType = MediaKeySessionType::Persistent_license;
     return true;
   }
@@ -820,10 +821,9 @@ UnboxSessionTypes(const Optional<Sequence<nsString>>& aSessionTypes)
   if (aSessionTypes.WasPassed()) {
     sessionTypes = aSessionTypes.Value();
   } else {
-    using MediaKeySessionTypeValues::strings;
-    const char* temporary = strings[static_cast<uint32_t>(MediaKeySessionType::Temporary)].value;
     // Note: fallible. Results in an empty array.
-    sessionTypes.AppendElement(NS_ConvertUTF8toUTF16(nsDependentCString(temporary)), mozilla::fallible);
+    sessionTypes.AppendElement(ToString(MediaKeySessionType::Temporary),
+                               mozilla::fallible);
   }
   return sessionTypes;
 }

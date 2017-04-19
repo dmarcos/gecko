@@ -75,6 +75,7 @@
           src="chrome://browser/content/utilityOverlay.js"/>
   <script type="application/javascript"
           src="chrome://browser/content/preferences/in-content/preferences.js"/>
+  <script src="chrome://browser/content/preferences/in-content/findInPage.js"/>
   <script src="chrome://browser/content/preferences/in-content/subdialogs.js"/>
 
   <stringbundle id="bundleBrand"
@@ -92,6 +93,17 @@
 
     <!-- category list -->
     <richlistbox id="categories">
+      <richlistitem id="category-search-results"
+                    class="category"
+                    value="paneSearchResults"
+                    helpTopic="prefs-main"
+                    tooltiptext="&paneSearchResults.title;"
+                    align="center"
+                    hidden="true">
+        <image class="category-icon"/>
+        <label class="category-name" flex="1">&paneSearchResults.title;</label>
+      </richlistitem>
+
       <richlistitem id="category-general"
                     class="category"
                     value="paneGeneral"
@@ -102,44 +114,14 @@
         <label class="category-name" flex="1">&paneGeneral.title;</label>
       </richlistitem>
 
-      <richlistitem id="category-search"
-                    class="category"
-                    value="paneSearch"
-                    helpTopic="prefs-search"
-                    tooltiptext="&paneSearch.title;"
-                    align="center">
-        <image class="category-icon"/>
-        <label class="category-name" flex="1">&paneSearch.title;</label>
-      </richlistitem>
-
-      <richlistitem id="category-content"
-                    class="category"
-                    value="paneContent"
-                    helpTopic="prefs-content"
-                    tooltiptext="&paneContent.title;"
-                    align="center">
-        <image class="category-icon"/>
-        <label class="category-name" flex="1">&paneContent.title;</label>
-      </richlistitem>
-
       <richlistitem id="category-application"
                     class="category"
                     value="paneApplications"
                     helpTopic="prefs-applications"
-                    tooltiptext="&paneApplications.title;"
+                    tooltiptext="&paneFilesApplications.title;"
                     align="center">
         <image class="category-icon"/>
-        <label class="category-name" flex="1">&paneApplications.title;</label>
-      </richlistitem>
-
-      <richlistitem id="category-privacy"
-                    class="category"
-                    value="panePrivacy"
-                    helpTopic="prefs-privacy"
-                    tooltiptext="&panePrivacy.title;"
-                    align="center">
-        <image class="category-icon"/>
-        <label class="category-name" flex="1">&panePrivacy.title;</label>
+        <label class="category-name" flex="1">&paneFilesApplications.title;</label>
       </richlistitem>
 
       <richlistitem id="category-containers"
@@ -148,34 +130,34 @@
                     helpTopic="prefs-containers"
                     hidden="true"/>
 
-      <richlistitem id="category-security"
-                    class="category"
-                    value="paneSecurity"
-                    helpTopic="prefs-security"
-                    tooltiptext="&paneSecurity.title;"
-                    align="center">
-        <image class="category-icon"/>
-        <label class="category-name" flex="1">&paneSecurity.title;</label>
-      </richlistitem>
-
       <richlistitem id="category-sync"
                     class="category"
                     value="paneSync"
                     helpTopic="prefs-weave"
-                    tooltiptext="&paneSync.title;"
+                    tooltiptext="&paneSync1.title;"
                     align="center">
         <image class="category-icon"/>
-        <label class="category-name" flex="1">&paneSync.title;</label>
+        <label class="category-name" flex="1">&paneSync1.title;</label>
+      </richlistitem>
+
+      <richlistitem id="category-privacy"
+                    class="category"
+                    value="panePrivacy"
+                    helpTopic="prefs-privacy"
+                    tooltiptext="&panePrivacySecurity.title;"
+                    align="center">
+        <image class="category-icon"/>
+        <label class="category-name" flex="1">&panePrivacySecurity.title;</label>
       </richlistitem>
 
       <richlistitem id="category-advanced"
                     class="category"
                     value="paneAdvanced"
                     helpTopic="prefs-advanced-general"
-                    tooltiptext="&paneAdvanced.title;"
+                    tooltiptext="&paneUpdates.title;"
                     align="center">
         <image class="category-icon"/>
-        <label class="category-name" flex="1">&paneAdvanced.title;</label>
+        <label class="category-name" flex="1">&paneUpdates.title;</label>
       </richlistitem>
     </richlistbox>
 
@@ -187,19 +169,19 @@
     </keyset>
 
     <vbox class="main-content" flex="1">
+      <hbox pack="end">
+        <textbox type="search" id="searchInput" placeholder="&searchInput.label;" hidden="true"/>
+      </hbox>
       <prefpane id="mainPrefPane">
+#include searchResults.xul
 #include main.xul
-#include search.xul
 #include privacy.xul
 #include containers.xul
 #include advanced.xul
 #include applications.xul
-#include content.xul
-#include security.xul
 #include sync.xul
       </prefpane>
     </vbox>
-
   </hbox>
 
     <vbox id="dialogOverlay" align="center" pack="center">

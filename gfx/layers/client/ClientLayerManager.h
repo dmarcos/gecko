@@ -26,13 +26,20 @@
 #include "mozilla/layers/TransactionIdAllocator.h"
 #include "nsIWidget.h"                  // For plugin window configuration information structs
 
+class nsDisplayListBuilder;
+
 namespace mozilla {
+
+namespace dom {
+class TabGroup;
+}
 namespace layers {
+
+using dom::TabGroup;
 
 class ClientPaintedLayer;
 class CompositorBridgeChild;
 class ImageLayer;
-class PLayerChild;
 class FrameUniformityData;
 
 class ClientLayerManager final : public LayerManager
@@ -53,10 +60,17 @@ public:
     return mForwarder;
   }
 
+  virtual KnowsCompositor* AsKnowsCompositor() override
+  {
+    return mForwarder;
+  }
+
   virtual ClientLayerManager* AsClientLayerManager() override
   {
     return this;
   }
+
+  TabGroup* GetTabGroup();
 
   virtual int32_t GetMaxTextureSize() const override;
 
@@ -92,15 +106,15 @@ public:
   virtual already_AddRefed<BorderLayer> CreateBorderLayer() override;
   virtual already_AddRefed<RefLayer> CreateRefLayer() override;
 
-  void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
-                                      uint64_t aDeviceResetSeqNo);
-  TextureFactoryIdentifier GetTextureFactoryIdentifier()
+  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
+											  uint64_t aDeviceResetSeqNo) override;
+  virtual TextureFactoryIdentifier GetTextureFactoryIdentifier() override
   {
     return AsShadowForwarder()->GetTextureFactoryIdentifier();
   }
 
   virtual void FlushRendering() override;
-  void SendInvalidRegion(const nsIntRegion& aRegion);
+  virtual void SendInvalidRegion(const nsIntRegion& aRegion) override;
 
   virtual uint32_t StartFrameTimeRecording(int32_t aBufferSize) override;
 
@@ -154,7 +168,7 @@ public:
 
   CompositorBridgeChild* GetRemoteRenderer();
 
-  CompositorBridgeChild* GetCompositorBridgeChild();
+  virtual CompositorBridgeChild* GetCompositorBridgeChild() override;
 
   // Disable component alpha layers with the software compositor.
   virtual bool ShouldAvoidComponentAlphaLayers() override { return !IsCompositingCheap(); }
@@ -166,18 +180,18 @@ public:
 #endif
   bool InTransaction() { return mPhase != PHASE_NONE; }
 
-  void SetNeedsComposite(bool aNeedsComposite)
+  virtual void SetNeedsComposite(bool aNeedsComposite) override
   {
     mNeedsComposite = aNeedsComposite;
   }
-  bool NeedsComposite() const { return mNeedsComposite; }
+  virtual bool NeedsComposite() const override { return mNeedsComposite; }
 
   virtual void Composite() override;
   virtual void GetFrameUniformity(FrameUniformityData* aFrameUniformityData) override;
 
-  void DidComposite(uint64_t aTransactionId,
-                    const mozilla::TimeStamp& aCompositeStart,
-                    const mozilla::TimeStamp& aCompositeEnd);
+  virtual void DidComposite(uint64_t aTransactionId,
+                            const mozilla::TimeStamp& aCompositeStart,
+                            const mozilla::TimeStamp& aCompositeEnd) override;
 
   virtual bool AreComponentAlphaLayersEnabled() override;
 
@@ -216,7 +230,9 @@ public:
   // Get a copy of the compositor-side APZ test data for our layers ID.
   void GetCompositorSideAPZTestData(APZTestData* aData) const;
 
-  void SetTransactionIdAllocator(TransactionIdAllocator* aAllocator) { mTransactionIdAllocator = aAllocator; }
+  virtual void SetTransactionIdAllocator(TransactionIdAllocator* aAllocator) override;
+
+  virtual uint64_t GetLastTransactionId() override { return mLatestTransactionId; }
 
   float RequestProperty(const nsAString& aProperty) override;
 
@@ -224,18 +240,23 @@ public:
 
   void SetNextPaintSyncId(int32_t aSyncId);
 
-  void SetLayerObserverEpoch(uint64_t aLayerObserverEpoch);
+  virtual void SetLayerObserverEpoch(uint64_t aLayerObserverEpoch) override;
 
-  class DidCompositeObserver {
-  public:
-    virtual void DidComposite() = 0;
-  };
-
-  void AddDidCompositeObserver(DidCompositeObserver* aObserver);
-  void RemoveDidCompositeObserver(DidCompositeObserver* aObserver);
+  virtual void AddDidCompositeObserver(DidCompositeObserver* aObserver) override;
+  virtual void RemoveDidCompositeObserver(DidCompositeObserver* aObserver) override;
 
   virtual already_AddRefed<PersistentBufferProvider>
   CreatePersistentBufferProvider(const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat) override;
+
+  static PaintTiming* MaybeGetPaintTiming(LayerManager* aManager) {
+    if (!aManager) {
+      return nullptr;
+    }
+    if (ClientLayerManager* lm = aManager->AsClientLayerManager()) {
+      return &lm->AsShadowForwarder()->GetPaintTiming();
+    }
+    return nullptr;
+  }
 
 protected:
   enum TransactionPhase {
@@ -339,7 +360,6 @@ private:
   nsTArray<DidCompositeObserver*> mDidCompositeObservers;
 
   RefPtr<MemoryPressureObserver> mMemoryPressureObserver;
-  uint64_t mDeviceCounter;
 };
 
 class ClientLayer : public ShadowableLayer
@@ -351,8 +371,6 @@ public:
   }
 
   ~ClientLayer();
-
-  virtual void ClearCachedResources() { }
 
   // Shrink memory usage.
   // Called when "memory-pressure" is observed.
@@ -380,9 +398,9 @@ public:
   }
 };
 
-// Create a shadow layer (PLayerChild) for aLayer, if we're forwarding
-// our layer tree to a parent process.  Record the new layer creation
-// in the current open transaction as a side effect.
+// Create a LayerHandle for aLayer, if we're forwarding our layer tree
+// to a parent process.  Record the new layer creation in the current
+// open transaction as a side effect.
 template<typename CreatedMethod> void
 CreateShadowFor(ClientLayer* aLayer,
                 ClientLayerManager* aMgr,

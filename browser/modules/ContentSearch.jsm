@@ -112,9 +112,9 @@ this.ContentSearch = {
     Cc["@mozilla.org/globalmessagemanager;1"].
       getService(Ci.nsIMessageListenerManager).
       addMessageListener(INBOUND_MESSAGE, this);
-    Services.obs.addObserver(this, "browser-search-engine-modified", false);
-    Services.obs.addObserver(this, "shutdown-leaks-before-check", false);
-    Services.prefs.addObserver("browser.search.hiddenOneOffs", this, false);
+    Services.obs.addObserver(this, "browser-search-engine-modified");
+    Services.obs.addObserver(this, "shutdown-leaks-before-check");
+    Services.prefs.addObserver("browser.search.hiddenOneOffs", this);
     this._stringBundle = Services.strings.createBundle("chrome://global/locale/autocomplete.properties");
   },
 
@@ -420,7 +420,7 @@ this.ContentSearch = {
 
   _onMessageManageEngines(msg, data) {
     let browserWin = msg.target.ownerGlobal;
-    browserWin.openPreferences("paneSearch");
+    browserWin.openPreferences("paneGeneral");
   },
 
   _onMessageGetSuggestions: Task.async(function* (msg, data) {
@@ -455,6 +455,7 @@ this.ContentSearch = {
     if (msg.target.contentWindow) {
       engine.speculativeConnect({
         window: msg.target.contentWindow,
+        originAttributes: msg.target.contentPrincipal.originAttributes
       });
     }
   },

@@ -35,8 +35,6 @@ function checkStateWritten(aSubject, aTopic, aData) {
   for (let line of lines) {
     let parts = line.split("\t");
     let host = parts[0];
-    let score = parts[1];
-    let lastAccessed = parts[2];
     let entry = parts[3].split(",");
     let expectedColumns = EXPECTED_HSTS_COLUMNS;
     if (host.indexOf("HPKP") != -1) {
@@ -54,10 +52,10 @@ function checkStateWritten(aSubject, aTopic, aData) {
   // sites[url][1] corresponds to SecurityPropertySet (if 1) and
   //                              SecurityPropertyUnset (if 0)
   // sites[url][2] corresponds to includeSubdomains
-  if (sites["bugzilla.mozilla.org:HSTS"][1] != 1) {
+  if (sites["includesubdomains.preloaded.test:HSTS"][1] != 1) {
     return;
   }
-  if (sites["bugzilla.mozilla.org:HSTS"][2] != 0) {
+  if (sites["includesubdomains.preloaded.test:HSTS"][2] != 0) {
     return;
   }
   if (sites["a.example.com:HSTS"][1] != 1) {
@@ -105,7 +103,7 @@ function run_test() {
                        new Date().getTime() + 1000000, 1,
                        [NON_ISSUED_KEY_HASH]);
 
-  let uris = [ Services.io.newURI("http://bugzilla.mozilla.org"),
+  let uris = [ Services.io.newURI("http://includesubdomains.preloaded.test"),
                Services.io.newURI("http://a.example.com"),
                Services.io.newURI("http://b.example.com"),
                Services.io.newURI("http://c.c.example.com"),
@@ -124,5 +122,5 @@ function run_test() {
   }
 
   do_test_pending();
-  Services.obs.addObserver(checkStateWritten, "data-storage-written", false);
+  Services.obs.addObserver(checkStateWritten, "data-storage-written");
 }

@@ -61,6 +61,7 @@ public:
   NS_IMETHOD GetActiveCrashGuards(JSContext*, JS::MutableHandle<JS::Value>) override;
   NS_IMETHOD GetContentBackend(nsAString & aContentBackend) override;
   NS_IMETHOD GetUsingGPUProcess(bool *aOutValue) override;
+  NS_IMETHOD GetWebRenderEnabled(bool* aWebRenderEnabled) override;
 
   // Initialization function. If you override this, you must call this class's
   // version of Init first.
@@ -118,7 +119,7 @@ protected:
     JS::Handle<JSObject*> aContainer,
     const char* aName,
     int32_t aFeature,
-    Maybe<mozilla::gfx::FeatureStatus> aKnownStatus,
+    const Maybe<mozilla::gfx::FeatureStatus>& aKnownStatus,
     JS::MutableHandle<JSObject*> aOutObj);
 
   NS_IMETHOD ControlGPUProcessForXPCShell(bool aEnable, bool *_retval) override;

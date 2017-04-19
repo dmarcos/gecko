@@ -332,6 +332,7 @@ SPConsoleListener.prototype = {
       m.columnNumber  = msg.columnNumber;
       m.category      = msg.category;
       m.windowID      = msg.outerWindowID;
+      m.innerWindowID = msg.innerWindowID;
       m.isScriptError = true;
       m.isWarning     = ((msg.flags & Ci.nsIScriptError.warningFlag) === 1);
       m.isException   = ((msg.flags & Ci.nsIScriptError.exceptionFlag) === 1);
@@ -340,7 +341,11 @@ SPConsoleListener.prototype = {
 
     Object.freeze(m);
 
-    this.callback.call(undefined, m);
+    // Run in a separate runnable since console listeners aren't
+    // supposed to touch content and this one might.
+    Services.tm.dispatchToMainThread(() => {
+      this.callback.call(undefined, m);
+    });
 
     if (!m.isScriptError && m.message === "SENTINEL")
       Services.console.unregisterListener(this);
@@ -689,6 +694,14 @@ SpecialPowersAPI.prototype = {
     return crashDumpFiles;
   },
 
+  removePendingCrashDumpFiles: function() {
+    var message = {
+      op: "delete-pending-crash-dump-files"
+    };
+    var removed = this._sendSyncMessage("SPProcessCrashService", message)[0];
+    return removed;
+  },
+
   _setTimeout: function(callback) {
     // for mochitest-browser
     if (typeof window != 'undefined')
@@ -720,7 +733,7 @@ SpecialPowersAPI.prototype = {
      we will revert the permission back to the original.
 
      inPermissions is an array of objects where each object has a type, action, context, ex:
-     [{'type': 'SystemXHR', 'allow': 1, 'context': document}, 
+     [{'type': 'SystemXHR', 'allow': 1, 'context': document},
       {'type': 'SystemXHR', 'allow': Ci.nsIPermissionManager.PROMPT_ACTION, 'context': document}]
 
      Allow can be a boolean value of true/false or ALLOW_ACTION/DENY_ACTION/PROMPT_ACTION/UNKNOWN_ACTION
@@ -812,7 +825,7 @@ SpecialPowersAPI.prototype = {
         // main-process) and get signals from it.
         if (this.isMainProcess()) {
           this.permissionObserverProxy._specialPowersAPI = this;
-          Services.obs.addObserver(this.permissionObserverProxy, "perm-changed", false);
+          Services.obs.addObserver(this.permissionObserverProxy, "perm-changed");
         } else {
           this.registerObservers("perm-changed");
           // bind() is used to set 'this' to SpecialPowersAPI itself.
@@ -1160,7 +1173,7 @@ SpecialPowersAPI.prototype = {
         // Now apply any prefs that may have been queued while we were applying
         self._applyPrefs();
       });
-    }, false);
+    });
 
     for (var idx in pendingActions) {
       var pref = pendingActions[idx];
@@ -1178,7 +1191,7 @@ SpecialPowersAPI.prototype = {
       Services.obs.notifyObservers(null, "specialpowers-http-notify-request", uri);
     },
     "specialpowers-browser-fullZoom:zoomReset": function() {
-      Services.obs.notifyObservers(null, "specialpowers-browser-fullZoom:zoomReset", null);
+      Services.obs.notifyObservers(null, "specialpowers-browser-fullZoom:zoomReset");
     },
   },
 
@@ -1206,6 +1219,38 @@ SpecialPowersAPI.prototype = {
   },
   notifyObservers: function(subject, topic, data) {
     Services.obs.notifyObservers(subject, topic, data);
+  },
+
+  /**
+   * An async observer is useful if you're listening for a
+   * notification that normally is only used by C++ code or chrome
+   * code (so it runs in the SystemGroup), but we need to know about
+   * it for a test (which runs as web content). If we used
+   * addObserver, we would assert when trying to enter web content
+   * from a runnabled labeled by the SystemGroup. An async observer
+   * avoids this problem.
+   */
+  _asyncObservers: new WeakMap(),
+  addAsyncObserver: function(obs, notification, weak) {
+    obs = Cu.waiveXrays(obs);
+    if (typeof obs == 'object' && obs.observe.name != 'SpecialPowersCallbackWrapper') {
+      obs.observe = wrapCallback(obs.observe);
+    }
+    let asyncObs = (...args) => {
+      Services.tm.dispatchToMainThread(() => {
+        if (typeof obs == 'function') {
+          obs.call(undefined, ...args);
+        } else {
+          obs.observe.call(undefined, ...args);
+        }
+      });
+    };
+    this._asyncObservers.set(obs, asyncObs);
+    Services.obs.addObserver(asyncObs, notification, weak);
+  },
+  removeAsyncObserver: function(obs, notification) {
+    let asyncObs = this._asyncObservers.get(Cu.waiveXrays(obs));
+    Services.obs.removeObserver(asyncObs, notification);
   },
 
   can_QI: function(obj) {
@@ -2081,6 +2126,52 @@ SpecialPowersAPI.prototype = {
                .QueryInterface(Ci.nsIContentViewerEdit)
                .setCommandNode(node);
   },
+
+  /* Bug 1339006 Runnables of nsIURIClassifier.classify may be labeled by
+   * SystemGroup, but some test cases may run as web content. That would assert
+   * when trying to enter web content from a runnable labeled by the
+   * SystemGroup. To avoid that, we run classify from SpecialPowers which is
+   * chrome-privileged and allowed to run inside SystemGroup
+   */
+
+  doUrlClassify(principal, eventTarget, tpEnabled, callback) {
+    let classifierService =
+      Cc["@mozilla.org/url-classifier/dbservice;1"].getService(Ci.nsIURIClassifier);
+
+    let wrapCallback = (...args) => {
+      Services.tm.dispatchToMainThread(() => {
+        if (typeof callback == 'function') {
+          callback.call(undefined, ...args);
+        } else {
+          callback.onClassifyComplete.call(undefined, ...args);
+        }
+      });
+    };
+
+    return classifierService.classify(unwrapIfWrapped(principal), eventTarget,
+                                      tpEnabled, wrapCallback);
+  },
+
+  // TODO: Bug 1353701 - Supports custom event target for labelling.
+  doUrlClassifyLocal(uri, tables, callback) {
+    let classifierService =
+      Cc["@mozilla.org/url-classifier/dbservice;1"].getService(Ci.nsIURIClassifier);
+
+    let wrapCallback = (...args) => {
+      Services.tm.dispatchToMainThread(() => {
+        if (typeof callback == 'function') {
+          callback.call(undefined, ...args);
+        } else {
+          callback.onClassifyComplete.call(undefined, ...args);
+        }
+      });
+    };
+
+    return classifierService.asyncClassifyLocalWithTables(unwrapIfWrapped(uri),
+                                                          tables,
+                                                          wrapCallback);
+  },
+
 };
 
 this.SpecialPowersAPI = SpecialPowersAPI;

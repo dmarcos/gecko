@@ -6,14 +6,14 @@
  */
 "use strict";
 
-var escope = require("escope");
 var espree = require("espree");
 var estraverse = require("estraverse");
 var path = require("path");
 var fs = require("fs");
 var ini = require("ini-parser");
 
-var modules = null;
+var gModules = null;
+var gRootDir = null;
 var directoryManifests = new Map();
 
 var definitions = [
@@ -35,10 +35,24 @@ var definitions = [
 ];
 
 var imports = [
-  /^(?:Cu|Components\.utils)\.import\(".*\/((.*?)\.jsm?)"(?:, this)?\)/,
+  /^(?:Cu|Components\.utils)\.import\(".*\/((.*?)\.jsm?)"(?:, this)?\)/
 ];
 
+var workerImportFilenameMatch = /(.*\/)*(.*?\.jsm?)/;
+
 module.exports = {
+  get modulesGlobalData() {
+    if (!gModules) {
+      if (this.isMozillaCentralBased()) {
+        gModules = require(path.join(this.rootDir, "tools", "lint", "eslint", "modules.json"));
+      } else {
+        gModules = require("./modules.json");
+      }
+    }
+
+    return gModules;
+  },
+
   /**
    * Gets the abstract syntax tree (AST) of the JavaScript source code contained
    * in sourceText.
@@ -49,7 +63,7 @@ module.exports = {
    * @return {Object}
    *         The resulting AST.
    */
-  getAST: function(sourceText) {
+  getAST(sourceText) {
     // Use a permissive config file to allow parsing of anything that Espree
     // can parse.
     var config = this.getPermissiveConfig();
@@ -66,12 +80,14 @@ module.exports = {
    * @return {String}
    *         The JS source for the node.
    */
-  getASTSource: function(node) {
+  getASTSource(node) {
     switch (node.type) {
       case "MemberExpression":
-        if (node.computed)
+        if (node.computed) {
           throw new Error("getASTSource unsupported computed MemberExpression");
-        return this.getASTSource(node.object) + "." + this.getASTSource(node.property);
+        }
+        return this.getASTSource(node.object) + "." +
+          this.getASTSource(node.property);
       case "ThisExpression":
         return "this";
       case "Identifier":
@@ -90,7 +106,8 @@ module.exports = {
       case "ArrowFunctionExpression":
         return "() => {}";
       case "AssignmentExpression":
-        return this.getASTSource(node.left) + " = " + this.getASTSource(node.right);
+        return this.getASTSource(node.left) + " = " +
+          this.getASTSource(node.right);
       default:
         throw new Error("getASTSource unsupported node type: " + node.type);
     }
@@ -164,26 +181,56 @@ module.exports = {
    *         The AST node to convert.
    * @param  {boolean} isGlobal
    *         True if the current node is in the global scope.
-   * @param  {String} repository
-   *         The root of the repository.
    *
    * @return {Array}
-   *         An array of variable names defined.
+   *         An array of objects that contain details about the globals:
+   *         - {String} name
+   *                    The name of the global.
+   *         - {Boolean} writable
+   *                     If the global is writeable or not.
    */
-  convertExpressionToGlobals: function(node, isGlobal, repository) {
-    if (!modules) {
-      modules = require(path.join(repository, "tools", "lint", "eslint", "modules.json"));
+  convertWorkerExpressionToGlobals(node, isGlobal, dirname) {
+    var getGlobalsForFile = require("./globals").getGlobalsForFile;
+
+    let globalModules = this.modulesGlobalData;
+
+    let results = [];
+    let expr = node.expression;
+
+    if (node.expression.type === "CallExpression" &&
+        expr.callee &&
+        expr.callee.type === "Identifier" &&
+        expr.callee.name === "importScripts") {
+      for (var arg of expr.arguments) {
+        var match = arg.value.match(workerImportFilenameMatch);
+        if (match) {
+          if (!match[1]) {
+            let filePath = path.resolve(dirname, match[2]);
+            if (fs.existsSync(filePath)) {
+              let additionalGlobals = getGlobalsForFile(filePath);
+              results = results.concat(additionalGlobals);
+            }
+          } else if (match[2] in globalModules) {
+            results = results.concat(globalModules[match[2]].map(name => {
+              return { name, writable: true };
+            }));
+          }
+        }
+      }
     }
 
+    return results;
+  },
+
+  convertExpressionToGlobals(node, isGlobal) {
     try {
       var source = this.getASTSource(node);
-    }
-    catch (e) {
+    } catch (e) {
       return [];
     }
 
     for (var reg of definitions) {
-      var match = source.match(reg);
+      let match = source.match(reg);
       if (match) {
         // Must be in the global scope
         if (!isGlobal) {
@@ -194,16 +241,18 @@ module.exports = {
       }
     }
 
+    let globalModules = this.modulesGlobalData;
+
     for (reg of imports) {
-      var match = source.match(reg);
+      let match = source.match(reg);
       if (match) {
         // The two argument form is only acceptable in the global scope
         if (node.expression.arguments.length > 1 && !isGlobal) {
           return [];
         }
 
-        if (match[1] in modules) {
-          return modules[match[1]];
+        if (match[1] in globalModules) {
+          return globalModules[match[1]];
         }
 
         return [match[2]];
@@ -224,7 +273,7 @@ module.exports = {
    * @param {boolean} writable
    *        Whether the global can be overwritten.
    */
-  addVarToScope: function(name, scope, writable) {
+  addVarToScope(name, scope, writable) {
     scope.__defineGeneric(name, scope.set, scope.variables, null, null);
 
     let variable = scope.set.get(name);
@@ -258,7 +307,7 @@ module.exports = {
    * @param {ASTScope} scope
    *        The scope.
    */
-  addGlobals: function(globalVars, scope) {
+  addGlobals(globalVars, scope) {
     globalVars.forEach(v => this.addVarToScope(v.name, scope, v.writable));
   },
 
@@ -269,7 +318,7 @@ module.exports = {
    * @return {Object}
    *         Espree compatible permissive config.
    */
-  getPermissiveConfig: function() {
+  getPermissiveConfig() {
     return {
       range: true,
       loc: true,
@@ -279,7 +328,7 @@ module.exports = {
       sourceType: "script",
       ecmaFeatures: {
         experimentalObjectRestSpread: true,
-        globalReturn: true,
+        globalReturn: true
       }
     };
   },
@@ -293,7 +342,7 @@ module.exports = {
    * @return {Boolean}
    *         True or false
    */
-  getIsGlobalScope: function(ancestors) {
+  getIsGlobalScope(ancestors) {
     for (let parent of ancestors) {
       if (parent.type == "FunctionExpression" ||
           parent.type == "FunctionDeclaration") {
@@ -308,12 +357,12 @@ module.exports = {
    *
    * @param  {RuleContext} scope
    *         You should pass this from within a rule
-   *         e.g. helpers.getIsHeadFile(this)
+   *         e.g. helpers.getIsHeadFile(context)
    *
    * @return {Boolean}
    *         True or false
    */
-  getIsHeadFile: function(scope) {
+  getIsHeadFile(scope) {
     var pathAndFilename = this.cleanUpPath(scope.getFilename());
 
     return /.*[\\/]head(_.+)?\.js$/.test(pathAndFilename);
@@ -324,12 +373,12 @@ module.exports = {
    *
    * @param  {RuleContext} scope
    *         You should pass this from within a rule
-   *         e.g. helpers.getIsHeadFile(this)
+   *         e.g. helpers.getIsHeadFile(context)
    *
    * @return {String[]}
    *         Paths to head files to load for the test
    */
-  getTestHeadFiles: function(scope) {
+  getTestHeadFiles(scope) {
     if (!this.getIsTest(scope)) {
       return [];
     }
@@ -337,9 +386,10 @@ module.exports = {
     let filepath = this.cleanUpPath(scope.getFilename());
     let dir = path.dirname(filepath);
 
-    let names = fs.readdirSync(dir)
-                  .filter(name => name.startsWith("head") && name.endsWith(".js"))
-                  .map(name => path.join(dir, name));
+    let names =
+      fs.readdirSync(dir)
+        .filter(name => name.startsWith("head") && name.endsWith(".js"))
+        .map(name => path.join(dir, name));
     return names;
   },
 
@@ -352,7 +402,7 @@ module.exports = {
    * @return {Array}
    *         An array of objects with file and manifest properties
    */
-  getManifestsForDirectory: function(dir) {
+  getManifestsForDirectory(dir) {
     if (directoryManifests.has(dir)) {
       return directoryManifests.get(dir);
     }
@@ -366,12 +416,12 @@ module.exports = {
       }
 
       try {
-        let manifest = ini.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+        let manifest = ini.parse(fs.readFileSync(path.join(dir, name), "utf8"));
 
         manifests.push({
           file: path.join(dir, name),
           manifest
-        })
+        });
       } catch (e) {
       }
     }
@@ -385,12 +435,12 @@ module.exports = {
    *
    * @param  {RuleContext} scope
    *         You should pass this from within a rule
-   *         e.g. helpers.getIsHeadFile(this)
+   *         e.g. helpers.getIsHeadFile(context)
    *
    * @return {String}
    *         The path to the test manifest file
    */
-  getTestManifest: function(scope) {
+  getTestManifest(scope) {
     let filepath = this.cleanUpPath(scope.getFilename());
 
     let dir = path.dirname(filepath);
@@ -410,12 +460,12 @@ module.exports = {
    *
    * @param  {RuleContext} scope
    *         You should pass this from within a rule
-   *         e.g. helpers.getIsTest(this)
+   *         e.g. helpers.getIsTest(context)
    *
    * @return {Boolean}
    *         True or false
    */
-  getIsTest: function(scope) {
+  getIsTest(scope) {
     // Regardless of the manifest name being in a manifest means we're a test.
     let manifest = this.getTestManifest(scope);
     if (manifest) {
@@ -430,12 +480,12 @@ module.exports = {
    *
    * @param  {RuleContext} scope
    *         You should pass this from within a rule
-   *         e.g. helpers.getIsHeadFile(this)
+   *         e.g. helpers.getIsHeadFile(context)
    *
    * @return {String or null}
    *         Test type: xpcshell, browser, chrome, mochitest
    */
-  getTestType: function(scope) {
+  getTestType(scope) {
     let manifest = this.getTestManifest(scope);
     if (manifest) {
       let name = path.basename(manifest);
@@ -460,26 +510,33 @@ module.exports = {
     return null;
   },
 
+  getIsWorker(filePath) {
+    let filename = path.basename(this.cleanUpPath(filePath)).toLowerCase();
+
+    return filename.includes("worker");
+  },
+
   /**
-   * Gets the root directory of the repository by walking up directories until
-   * a .eslintignore file is found.
-   * @param {String} fileName
-   *        The absolute path of a file in the repository
-   *
+   * Gets the root directory of the repository by walking up directories from
+   * this file until a .eslintignore file is found.
    * @return {String} The absolute path of the repository directory
    */
-  getRootDir: function(fileName) {
-    var dirName = path.dirname(fileName);
+  get rootDir() {
+    if (!gRootDir) {
+      let dirName = path.dirname(module.filename);
 
-    while (dirName && !fs.existsSync(path.join(dirName, ".eslintignore"))) {
-      dirName = path.dirname(dirName);
+      while (dirName && !fs.existsSync(path.join(dirName, ".eslintignore"))) {
+        dirName = path.dirname(dirName);
+      }
+
+      if (!dirName) {
+        throw new Error("Unable to find root of repository");
+      }
+
+      gRootDir = dirName;
     }
 
-    if (!dirName) {
-      throw new Error("Unable to find root of repository");
-    }
-
-    return dirName;
+    return gRootDir;
   },
 
   /**
@@ -492,7 +549,7 @@ module.exports = {
    * @param {Context} context
    * @return {String} The absolute path
    */
-  getAbsoluteFilePath: function(context) {
+  getAbsoluteFilePath(context) {
     var fileName = this.cleanUpPath(context.getFilename());
     var cwd = process.cwd();
 
@@ -505,13 +562,13 @@ module.exports = {
       // Case 1b: executed from a nested directory, fileName is the base name
       // without any path info (happens in Atom with linter-eslint)
       return path.join(cwd, fileName);
-    } else {
+    }
       // Case 1: executed form in a nested directory, e.g. from a text editor:
       //   fileName: a/b/c/d.js
       //   cwd: /path/to/mozilla/repo/a/b/c
-      var dirName = path.dirname(fileName);
-      return cwd.slice(0, cwd.length - dirName.length) + fileName;
-    }
+    var dirName = path.dirname(fileName);
+    return cwd.slice(0, cwd.length - dirName.length) + fileName;
+
   },
 
   /**
@@ -519,7 +576,20 @@ module.exports = {
    * context.getFileName contain leading and trailing double-quote characters.
    * These characters need to be removed.
    */
-  cleanUpPath: function(path) {
-    return path.replace(/^"/, "").replace(/"$/, "");
+  cleanUpPath(pathName) {
+    return pathName.replace(/^"/, "").replace(/"$/, "");
+  },
+
+  get globalScriptsPath() {
+    return path.join(this.rootDir, "browser",
+                     "base", "content", "global-scripts.inc");
+  },
+
+  isMozillaCentralBased() {
+    return fs.existsSync(this.globalScriptsPath);
+  },
+
+  getSavedEnvironmentItems(environment) {
+    return require("./environments/saved-globals.json").environments[environment];
   }
 };

@@ -10,6 +10,7 @@
 #include "gfxFontUtils.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/EditorUtils.h" // AutoEditBatch, AutoRules
+#include "mozilla/HTMLEditor.h"
 #include "mozilla/mozalloc.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/TextEditRules.h"
@@ -35,9 +36,7 @@
 #include "nsIDOMDocument.h"
 #include "nsIDOMElement.h"
 #include "nsIDOMEventTarget.h"
-#include "nsIDOMKeyEvent.h"
 #include "nsIDOMNode.h"
-#include "nsIDOMNodeList.h"
 #include "nsIDocumentEncoder.h"
 #include "nsIEditRules.h"
 #include "nsINode.h"
@@ -79,6 +78,18 @@ TextEditor::TextEditor()
   GetDefaultEditorPrefs(mNewlineHandling, mCaretStyle);
 }
 
+HTMLEditor*
+TextEditor::AsHTMLEditor()
+{
+  return nullptr;
+}
+
+const HTMLEditor*
+TextEditor::AsHTMLEditor() const
+{
+  return nullptr;
+}
+
 TextEditor::~TextEditor()
 {
   // Remove event listeners. Note that if we had an HTML editor,
@@ -95,10 +106,12 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(TextEditor, EditorBase)
   if (tmp->mRules)
     tmp->mRules->DetachEditor();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mRules)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mCachedDocumentEncoder)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(TextEditor, EditorBase)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRules)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCachedDocumentEncoder)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_ADDREF_INHERITED(TextEditor, EditorBase)
@@ -175,12 +188,10 @@ TextEditor::GetDefaultEditorPrefs(int32_t& aNewlineHandling,
                                   int32_t& aCaretStyle)
 {
   if (sNewlineHandlingPref == -1) {
-    Preferences::RegisterCallback(EditorPrefsChangedCallback,
-                                  "editor.singleLine.pasteNewlines");
-    EditorPrefsChangedCallback("editor.singleLine.pasteNewlines", nullptr);
-    Preferences::RegisterCallback(EditorPrefsChangedCallback,
-                                  "layout.selection.caret_style");
-    EditorPrefsChangedCallback("layout.selection.caret_style", nullptr);
+    Preferences::RegisterCallbackAndCall(EditorPrefsChangedCallback,
+                                         "editor.singleLine.pasteNewlines");
+    Preferences::RegisterCallbackAndCall(EditorPrefsChangedCallback,
+                                         "layout.selection.caret_style");
   }
 
   aNewlineHandling = sNewlineHandlingPref;
@@ -220,35 +231,34 @@ TextEditor::SetDocumentCharacterSet(const nsACString& characterSet)
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Update META charset element.
-  nsCOMPtr<nsIDOMDocument> domdoc = GetDOMDocument();
-  NS_ENSURE_TRUE(domdoc, NS_ERROR_NOT_INITIALIZED);
+  nsCOMPtr<nsIDocument> doc = GetDocument();
+  if (NS_WARN_IF(!doc)) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
 
-  if (UpdateMetaCharset(domdoc, characterSet)) {
+  if (UpdateMetaCharset(*doc, characterSet)) {
     return NS_OK;
   }
 
-  nsCOMPtr<nsIDOMNodeList> headList;
-  rv = domdoc->GetElementsByTagName(NS_LITERAL_STRING("head"), getter_AddRefs(headList));
-  NS_ENSURE_SUCCESS(rv, rv);
-  NS_ENSURE_TRUE(headList, NS_OK);
+  RefPtr<nsContentList> headList =
+    doc->GetElementsByTagName(NS_LITERAL_STRING("head"));
+  if (NS_WARN_IF(!headList)) {
+    return NS_OK;
+  }
 
-  nsCOMPtr<nsIDOMNode> headNode;
-  headList->Item(0, getter_AddRefs(headNode));
-  NS_ENSURE_TRUE(headNode, NS_OK);
+  nsCOMPtr<nsIContent> headNode = headList->Item(0);
+  if (NS_WARN_IF(!headNode)) {
+    return NS_OK;
+  }
 
   // Create a new meta charset tag
-  nsCOMPtr<nsIDOMNode> resultNode;
-  rv = CreateNode(NS_LITERAL_STRING("meta"), headNode, 0, getter_AddRefs(resultNode));
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
-  NS_ENSURE_TRUE(resultNode, NS_OK);
+  RefPtr<Element> metaElement = CreateNode(nsGkAtoms::meta, headNode, 0);
+  if (NS_WARN_IF(!metaElement)) {
+    return NS_OK;
+  }
 
   // Set attributes to the created element
   if (characterSet.IsEmpty()) {
-    return NS_OK;
-  }
-
-  nsCOMPtr<dom::Element> metaElement = do_QueryInterface(resultNode);
-  if (!metaElement) {
     return NS_OK;
   }
 
@@ -263,23 +273,17 @@ TextEditor::SetDocumentCharacterSet(const nsACString& characterSet)
 }
 
 bool
-TextEditor::UpdateMetaCharset(nsIDOMDocument* aDocument,
+TextEditor::UpdateMetaCharset(nsIDocument& aDocument,
                               const nsACString& aCharacterSet)
 {
-  MOZ_ASSERT(aDocument);
   // get a list of META tags
-  nsCOMPtr<nsIDOMNodeList> list;
-  nsresult rv = aDocument->GetElementsByTagName(NS_LITERAL_STRING("meta"),
-                                                getter_AddRefs(list));
-  NS_ENSURE_SUCCESS(rv, false);
-  NS_ENSURE_TRUE(list, false);
+  RefPtr<nsContentList> metaList =
+    aDocument.GetElementsByTagName(NS_LITERAL_STRING("meta"));
+  if (NS_WARN_IF(!metaList)) {
+    return false;
+  }
 
-  nsCOMPtr<nsINodeList> metaList = do_QueryInterface(list);
-
-  uint32_t listLength = 0;
-  metaList->GetLength(&listLength);
-
-  for (uint32_t i = 0; i < listLength; ++i) {
+  for (uint32_t i = 0; i < metaList->Length(true); ++i) {
     nsCOMPtr<nsIContent> metaNode = metaList->Item(i);
     MOZ_ASSERT(metaNode);
 
@@ -310,10 +314,11 @@ TextEditor::UpdateMetaCharset(nsIDOMDocument* aDocument,
     // set attribute to <original prefix> charset=text/html
     RefPtr<Element> metaElement = metaNode->AsElement();
     MOZ_ASSERT(metaElement);
-    rv = EditorBase::SetAttribute(metaElement, nsGkAtoms::content,
-                                  Substring(originalStart, start) +
-                                    charsetEquals +
-                                    NS_ConvertASCIItoUTF16(aCharacterSet));
+    nsresult rv =
+      EditorBase::SetAttribute(metaElement, nsGkAtoms::content,
+                               Substring(originalStart, start) +
+                                 charsetEquals +
+                                 NS_ConvertASCIItoUTF16(aCharacterSet));
     return NS_SUCCEEDED(rv);
   }
   return false;
@@ -329,26 +334,8 @@ TextEditor::InitRules()
   return mRules->Init(this);
 }
 
-
-NS_IMETHODIMP
-TextEditor::GetIsDocumentEditable(bool* aIsDocumentEditable)
-{
-  NS_ENSURE_ARG_POINTER(aIsDocumentEditable);
-
-  nsCOMPtr<nsIDOMDocument> doc = GetDOMDocument();
-  *aIsDocumentEditable = doc && IsModifiable();
-
-  return NS_OK;
-}
-
-bool
-TextEditor::IsModifiable()
-{
-  return !IsReadonly();
-}
-
 nsresult
-TextEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
+TextEditor::HandleKeyPressEvent(WidgetKeyboardEvent* aKeyboardEvent)
 {
   // NOTE: When you change this method, you should also change:
   //   * editor/libeditor/tests/test_texteditor_keyevent_handling.html
@@ -359,16 +346,16 @@ TextEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
 
   if (IsReadonly() || IsDisabled()) {
     // When we're not editable, the events handled on EditorBase.
-    return EditorBase::HandleKeyPressEvent(aKeyEvent);
+    return EditorBase::HandleKeyPressEvent(aKeyboardEvent);
   }
 
-  WidgetKeyboardEvent* nativeKeyEvent =
-    aKeyEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
-  NS_ENSURE_TRUE(nativeKeyEvent, NS_ERROR_UNEXPECTED);
-  NS_ASSERTION(nativeKeyEvent->mMessage == eKeyPress,
-               "HandleKeyPressEvent gets non-keypress event");
+  if (NS_WARN_IF(!aKeyboardEvent)) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  MOZ_ASSERT(aKeyboardEvent->mMessage == eKeyPress,
+             "HandleKeyPressEvent gets non-keypress event");
 
-  switch (nativeKeyEvent->mKeyCode) {
+  switch (aKeyboardEvent->mKeyCode) {
     case NS_VK_META:
     case NS_VK_WIN:
     case NS_VK_SHIFT:
@@ -377,42 +364,42 @@ TextEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
     case NS_VK_BACK:
     case NS_VK_DELETE:
       // These keys are handled on EditorBase
-      return EditorBase::HandleKeyPressEvent(aKeyEvent);
+      return EditorBase::HandleKeyPressEvent(aKeyboardEvent);
     case NS_VK_TAB: {
       if (IsTabbable()) {
         return NS_OK; // let it be used for focus switching
       }
 
-      if (nativeKeyEvent->IsShift() || nativeKeyEvent->IsControl() ||
-          nativeKeyEvent->IsAlt() || nativeKeyEvent->IsMeta() ||
-          nativeKeyEvent->IsOS()) {
+      if (aKeyboardEvent->IsShift() || aKeyboardEvent->IsControl() ||
+          aKeyboardEvent->IsAlt() || aKeyboardEvent->IsMeta() ||
+          aKeyboardEvent->IsOS()) {
         return NS_OK;
       }
 
       // else we insert the tab straight through
-      aKeyEvent->AsEvent()->PreventDefault();
+      aKeyboardEvent->PreventDefault();
       return TypedText(NS_LITERAL_STRING("\t"), eTypedText);
     }
     case NS_VK_RETURN:
-      if (IsSingleLineEditor() || nativeKeyEvent->IsControl() ||
-          nativeKeyEvent->IsAlt() || nativeKeyEvent->IsMeta() ||
-          nativeKeyEvent->IsOS()) {
+      if (IsSingleLineEditor() || aKeyboardEvent->IsControl() ||
+          aKeyboardEvent->IsAlt() || aKeyboardEvent->IsMeta() ||
+          aKeyboardEvent->IsOS()) {
         return NS_OK;
       }
-      aKeyEvent->AsEvent()->PreventDefault();
+      aKeyboardEvent->PreventDefault();
       return TypedText(EmptyString(), eTypedBreak);
   }
 
   // NOTE: On some keyboard layout, some characters are inputted with Control
   // key or Alt key, but at that time, widget sets FALSE to these keys.
-  if (!nativeKeyEvent->mCharCode || nativeKeyEvent->IsControl() ||
-      nativeKeyEvent->IsAlt() || nativeKeyEvent->IsMeta() ||
-      nativeKeyEvent->IsOS()) {
+  if (!aKeyboardEvent->mCharCode || aKeyboardEvent->IsControl() ||
+      aKeyboardEvent->IsAlt() || aKeyboardEvent->IsMeta() ||
+      aKeyboardEvent->IsOS()) {
     // we don't PreventDefault() here or keybindings like control-x won't work
     return NS_OK;
   }
-  aKeyEvent->AsEvent()->PreventDefault();
-  nsAutoString str(nativeKeyEvent->mCharCode);
+  aKeyboardEvent->PreventDefault();
+  nsAutoString str(aKeyboardEvent->mCharCode);
   return TypedText(str, eTypedText);
 }
 
@@ -797,17 +784,19 @@ TextEditor::BeginIMEComposition(WidgetCompositionEvent* aEvent)
 }
 
 nsresult
-TextEditor::UpdateIMEComposition(nsIDOMEvent* aDOMTextEvent)
+TextEditor::UpdateIMEComposition(WidgetCompositionEvent* aCompsitionChangeEvent)
 {
-  MOZ_ASSERT(aDOMTextEvent, "aDOMTextEvent must not be nullptr");
+  MOZ_ASSERT(aCompsitionChangeEvent,
+             "aCompsitionChangeEvent must not be nullptr");
 
-  WidgetCompositionEvent* compositionChangeEvent =
-    aDOMTextEvent->WidgetEventPtr()->AsCompositionEvent();
-  NS_ENSURE_TRUE(compositionChangeEvent, NS_ERROR_INVALID_ARG);
-  MOZ_ASSERT(compositionChangeEvent->mMessage == eCompositionChange,
-             "The internal event should be eCompositionChange");
+  if (NS_WARN_IF(!aCompsitionChangeEvent)) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
-  if (!EnsureComposition(compositionChangeEvent)) {
+  MOZ_ASSERT(aCompsitionChangeEvent->mMessage == eCompositionChange,
+             "The event should be eCompositionChange");
+
+  if (!EnsureComposition(aCompsitionChangeEvent)) {
     return NS_OK;
   }
 
@@ -828,7 +817,7 @@ TextEditor::UpdateIMEComposition(nsIDOMEvent* aDOMTextEvent)
   MOZ_ASSERT(!mPlaceHolderBatch,
     "UpdateIMEComposition() must be called without place holder batch");
   TextComposition::CompositionChangeEventHandlingMarker
-    compositionChangeEventHandlingMarker(mComposition, compositionChangeEvent);
+    compositionChangeEventHandlingMarker(mComposition, aCompsitionChangeEvent);
 
   NotifyEditorObservers(eNotifyEditorObserversOfBefore);
 
@@ -838,7 +827,7 @@ TextEditor::UpdateIMEComposition(nsIDOMEvent* aDOMTextEvent)
   {
     AutoPlaceHolderBatch batch(this, nsGkAtoms::IMETxnName);
 
-    rv = InsertText(compositionChangeEvent->mData);
+    rv = InsertText(aCompsitionChangeEvent->mData);
 
     if (caretP) {
       caretP->SetSelection(selection);
@@ -850,7 +839,7 @@ TextEditor::UpdateIMEComposition(nsIDOMEvent* aDOMTextEvent)
   // compositionend event, we don't need to notify editor observes of this
   // change.
   // NOTE: We must notify after the auto batch will be gone.
-  if (!compositionChangeEvent->IsFollowedByCompositionEnd()) {
+  if (!aCompsitionChangeEvent->IsFollowedByCompositionEnd()) {
     NotifyEditorObservers(eNotifyEditorObserversOfEnd);
   }
 
@@ -1182,24 +1171,35 @@ TextEditor::CanDelete(bool* aCanDelete)
 }
 
 // Shared between OutputToString and OutputToStream
-NS_IMETHODIMP
+already_AddRefed<nsIDocumentEncoder>
 TextEditor::GetAndInitDocEncoder(const nsAString& aFormatType,
                                  uint32_t aFlags,
-                                 const nsACString& aCharset,
-                                 nsIDocumentEncoder** encoder)
+                                 const nsACString& aCharset)
 {
-  nsresult rv = NS_OK;
-
-  nsAutoCString formatType(NS_DOC_ENCODER_CONTRACTID_BASE);
-  LossyAppendUTF16toASCII(aFormatType, formatType);
-  nsCOMPtr<nsIDocumentEncoder> docEncoder (do_CreateInstance(formatType.get(), &rv));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIDocumentEncoder> docEncoder;
+  if (!mCachedDocumentEncoder ||
+      !mCachedDocumentEncoderType.Equals(aFormatType)) {
+    nsAutoCString formatType(NS_DOC_ENCODER_CONTRACTID_BASE);
+    LossyAppendUTF16toASCII(aFormatType, formatType);
+    docEncoder = do_CreateInstance(formatType.get());
+    if (NS_WARN_IF(!docEncoder)) {
+      return nullptr;
+    }
+    mCachedDocumentEncoder = docEncoder;
+    mCachedDocumentEncoderType = aFormatType;
+  } else {
+    docEncoder = mCachedDocumentEncoder;
+  }
 
   nsCOMPtr<nsIDOMDocument> domDoc = do_QueryReferent(mDocWeak);
   NS_ASSERTION(domDoc, "Need a document");
 
-  rv = docEncoder->Init(domDoc, aFormatType, aFlags);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsresult rv =
+    docEncoder->Init(domDoc, aFormatType,
+                     aFlags | nsIDocumentEncoder::RequiresReinitAfterOutput);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
 
   if (!aCharset.IsEmpty() && !aCharset.EqualsLiteral("null")) {
     docEncoder->SetCharset(aCharset);
@@ -1216,23 +1216,30 @@ TextEditor::GetAndInitDocEncoder(const nsAString& aFormatType,
   // in which case we use our existing selection ...
   if (aFlags & nsIDocumentEncoder::OutputSelectionOnly) {
     RefPtr<Selection> selection = GetSelection();
-    NS_ENSURE_STATE(selection);
+    if (NS_WARN_IF(!selection)) {
+      return nullptr;
+    }
     rv = docEncoder->SetSelection(selection);
-    NS_ENSURE_SUCCESS(rv, rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return nullptr;
+    }
   }
   // ... or if the root element is not a body,
   // in which case we set the selection to encompass the root.
   else {
     dom::Element* rootElement = GetRoot();
-    NS_ENSURE_TRUE(rootElement, NS_ERROR_FAILURE);
+    if (NS_WARN_IF(!rootElement)) {
+      return nullptr;
+    }
     if (!rootElement->IsHTMLElement(nsGkAtoms::body)) {
       rv = docEncoder->SetNativeContainerNode(rootElement);
-      NS_ENSURE_SUCCESS(rv, rv);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return nullptr;
+      }
     }
   }
 
-  docEncoder.forget(encoder);
-  return NS_OK;
+  return docEncoder.forget();
 }
 
 
@@ -1267,9 +1274,12 @@ TextEditor::OutputToString(const nsAString& aFormatType,
     charsetStr.AssignLiteral("ISO-8859-1");
   }
 
-  nsCOMPtr<nsIDocumentEncoder> encoder;
-  rv = GetAndInitDocEncoder(aFormatType, aFlags, charsetStr, getter_AddRefs(encoder));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIDocumentEncoder> encoder =
+    GetAndInitDocEncoder(aFormatType, aFlags, charsetStr);
+  if (NS_WARN_IF(!encoder)) {
+    return NS_ERROR_FAILURE;
+  }
+
   return encoder->EncodeToString(aOutputString);
 }
 
@@ -1294,11 +1304,11 @@ TextEditor::OutputToStream(nsIOutputStream* aOutputStream,
     }
   }
 
-  nsCOMPtr<nsIDocumentEncoder> encoder;
-  rv = GetAndInitDocEncoder(aFormatType, aFlags, aCharset,
-                            getter_AddRefs(encoder));
-
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIDocumentEncoder> encoder =
+    GetAndInitDocEncoder(aFormatType, aFlags, aCharset);
+  if (NS_WARN_IF(!encoder)) {
+    return NS_ERROR_FAILURE;
+  }
 
   return encoder->EncodeToStream(aOutputStream);
 }

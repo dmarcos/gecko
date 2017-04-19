@@ -142,14 +142,9 @@ public:
 //==== NSITEXTCONTROLFRAME
 
   NS_IMETHOD    GetEditor(nsIEditor **aEditor) override;
-  NS_IMETHOD    SetSelectionStart(int32_t aSelectionStart) override;
-  NS_IMETHOD    SetSelectionEnd(int32_t aSelectionEnd) override;
-  NS_IMETHOD    SetSelectionRange(int32_t aSelectionStart,
-                                  int32_t aSelectionEnd,
+  NS_IMETHOD    SetSelectionRange(uint32_t aSelectionStart,
+                                  uint32_t aSelectionEnd,
                                   SelectionDirection aDirection = eNone) override;
-  NS_IMETHOD    GetSelectionRange(int32_t* aSelectionStart,
-                                  int32_t* aSelectionEnd,
-                                  SelectionDirection* aDirection = nullptr) override;
   NS_IMETHOD    GetOwnedSelectionController(nsISelectionController** aSelCon) override;
   virtual nsFrameSelection* GetOwnedFrameSelection() override;
 
@@ -243,7 +238,7 @@ protected:
 
     NS_IMETHOD Run() override;
 
-    // avoids use of nsWeakFrame
+    // avoids use of AutoWeakFrame
     void Revoke() {
       mFrame = nullptr;
     }
@@ -270,7 +265,7 @@ protected:
     nsTextControlFrame* mFrame;
   };
 
-  nsresult OffsetToDOMPoint(int32_t aOffset, nsIDOMNode** aResult, int32_t* aPosition);
+  nsresult OffsetToDOMPoint(uint32_t aOffset, nsIDOMNode** aResult, uint32_t* aPosition);
 
   /**
    * Update the textnode under our anonymous div to show the new
@@ -313,17 +308,21 @@ protected:
 
 private:
   //helper methods
-  nsresult SetSelectionInternal(nsIDOMNode *aStartNode, int32_t aStartOffset,
-                                nsIDOMNode *aEndNode, int32_t aEndOffset,
+  nsresult SetSelectionInternal(nsIDOMNode *aStartNode, uint32_t aStartOffset,
+                                nsIDOMNode *aEndNode, uint32_t aEndOffset,
                                 SelectionDirection aDirection = eNone);
   nsresult SelectAllOrCollapseToEndOfText(bool aSelect);
-  nsresult SetSelectionEndPoints(int32_t aSelStart, int32_t aSelEnd,
+  nsresult SetSelectionEndPoints(uint32_t aSelStart, uint32_t aSelEnd,
                                  SelectionDirection aDirection = eNone);
 
   /**
-   * Return the root DOM element, and implicitly initialize the editor if needed.
+   * Return the root DOM element, and implicitly initialize the editor if
+   * needed.
+   *
+   * XXXbz This function is slow.  Very slow.  Consider using
+   * EnsureEditorInitialized() if you need that, and
+   * nsITextControlElement::GetRootEditorNode on our content if you need that.
    */
-  mozilla::dom::Element* GetRootNodeAndInitializeEditor();
   nsresult GetRootNodeAndInitializeEditor(nsIDOMElement **aRootElement);
 
   void FinishedInitializer() {
@@ -340,6 +339,8 @@ private:
   bool mIsProcessing;
   // Keep track if we have asked a placeholder node creation.
   bool mUsePlaceholder;
+  // Similarly for preview node creation.
+  bool mUsePreview;
 
 #ifdef DEBUG
   bool mInEditorInitialization;

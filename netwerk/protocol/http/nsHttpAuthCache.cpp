@@ -65,8 +65,10 @@ nsHttpAuthCache::nsHttpAuthCache()
 
 nsHttpAuthCache::~nsHttpAuthCache()
 {
-    if (mDB)
-        ClearAll();
+    if (mDB) {
+        DebugOnly<nsresult> rv = ClearAll();
+        MOZ_ASSERT(NS_SUCCEEDED(rv));
+    }
     nsCOMPtr<nsIObserverService> obsSvc = services::GetObserverService();
     if (obsSvc) {
         obsSvc->RemoveObserver(mObserver, "clear-origin-attributes-data");
@@ -145,7 +147,7 @@ nsHttpAuthCache::SetAuthEntry(const char *scheme,
 {
     nsresult rv;
 
-    LOG(("nsHttpAuthCache::SetAuthEntry [key=%s://%s:%d realm=%s path=%s metadata=%x]\n",
+    LOG(("nsHttpAuthCache::SetAuthEntry [key=%s://%s:%d realm=%s path=%s metadata=%p]\n",
         scheme, host, port, realm, path, metadata));
 
     if (!mDB) {
@@ -504,12 +506,12 @@ nsHttpAuthEntry::Set(const char *path,
 
 nsHttpAuthNode::nsHttpAuthNode()
 {
-    LOG(("Creating nsHttpAuthNode @%x\n", this));
+    LOG(("Creating nsHttpAuthNode @%p\n", this));
 }
 
 nsHttpAuthNode::~nsHttpAuthNode()
 {
-    LOG(("Destroying nsHttpAuthNode @%x\n", this));
+    LOG(("Destroying nsHttpAuthNode @%p\n", this));
 
     mList.Clear();
 }
@@ -587,7 +589,8 @@ nsHttpAuthNode::SetAuthEntry(const char *path,
     }
     else {
         // update the entry...
-        entry->Set(path, realm, creds, challenge, ident, metadata);
+        nsresult rv = entry->Set(path, realm, creds, challenge, ident, metadata);
+        NS_ENSURE_SUCCESS(rv, rv);
     }
 
     return NS_OK;

@@ -29,7 +29,7 @@ class MochiRemote(MochitestDesktop):
     logMessages = []
 
     def __init__(self, automation, devmgr, options):
-        MochitestDesktop.__init__(self, options)
+        MochitestDesktop.__init__(self, options.flavor, options)
 
         self._automation = automation
         self._dm = devmgr
@@ -355,6 +355,8 @@ def run_test_harness(parser, options):
 
     procName = options.app.split('/')[-1]
     dm.killProcess(procName)
+    if dm.processExist(procName):
+        log.warning("unable to kill %s before running tests!" % procName)
 
     mochitest.mozLogName = "moz.log"
     try:

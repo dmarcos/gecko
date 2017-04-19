@@ -45,7 +45,7 @@ function promiseNotification(topic) {
       Services.obs.removeObserver(observe, topic);
       resolve();
     }
-    Services.obs.addObserver(observe, topic, false);
+    Services.obs.addObserver(observe, topic);
     info("Now waiting for " + topic + " notification from Gecko");
   });
 }
@@ -66,7 +66,27 @@ function promiseLinkVisit(url) {
       Services.obs.removeObserver(observe, topic);
       resolve();
     };
-    Services.obs.addObserver(observe, topic, false);
+    Services.obs.addObserver(observe, topic);
     info("Now waiting for " + topic + " notification from Gecko with URL " + url);
   });
 }
+
+function makeObserver(observerId) {
+  let deferred = Promise.defer();
+
+  let ret = {
+    id: observerId,
+    count: 0,
+    promise: deferred.promise,
+    observe: function (subject, topic, data) {
+      ret.count += 1;
+      let msg = { subject: subject,
+                  topic: topic,
+                  data: data };
+      deferred.resolve(msg);
+    },
+  };
+
+  return ret;
+};
+

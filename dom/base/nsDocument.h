@@ -70,6 +70,7 @@
 #include "mozilla/LinkedList.h"
 #include "CustomElementRegistry.h"
 #include "mozilla/dom/Performance.h"
+#include "mozilla/Maybe.h"
 
 #define XML_DECLARATION_BITS_DECLARATION_EXISTS   (1 << 0)
 #define XML_DECLARATION_BITS_ENCODING_EXISTS      (1 << 1)
@@ -142,26 +143,90 @@ public:
  * Perhaps the document.all results should have their own hashtable
  * in nsHTMLDocument.
  */
-class nsIdentifierMapEntry : public nsStringHashKey
+class nsIdentifierMapEntry : public PLDHashEntryHdr
 {
 public:
+  struct AtomOrString
+  {
+    MOZ_IMPLICIT AtomOrString(nsIAtom* aAtom) : mAtom(aAtom) {}
+    MOZ_IMPLICIT AtomOrString(const nsAString& aString) : mString(aString) {}
+    AtomOrString(const AtomOrString& aOther)
+      : mAtom(aOther.mAtom)
+      , mString(aOther.mString)
+    {
+    }
+
+    AtomOrString(AtomOrString&& aOther)
+      : mAtom(aOther.mAtom.forget())
+      , mString(aOther.mString)
+    {
+    }
+
+    nsCOMPtr<nsIAtom> mAtom;
+    const nsString mString;
+  };
+
+  typedef const AtomOrString& KeyType;
+  typedef const AtomOrString* KeyTypePointer;
+
   typedef mozilla::dom::Element Element;
   typedef mozilla::net::ReferrerPolicy ReferrerPolicy;
 
-  explicit nsIdentifierMapEntry(const nsAString& aKey) :
-    nsStringHashKey(&aKey), mNameContentList(nullptr)
+  explicit nsIdentifierMapEntry(const AtomOrString& aKey)
+    : mKey(aKey)
   {
   }
-  explicit nsIdentifierMapEntry(const nsAString* aKey) :
-    nsStringHashKey(aKey), mNameContentList(nullptr)
+  explicit nsIdentifierMapEntry(const AtomOrString* aKey)
+    : mKey(aKey ? *aKey : nullptr)
   {
   }
-  nsIdentifierMapEntry(const nsIdentifierMapEntry& aOther) :
-    nsStringHashKey(&aOther.GetKey())
+  nsIdentifierMapEntry(nsIdentifierMapEntry&& aOther) :
+    mKey(mozilla::Move(aOther.GetKey())),
+    mIdContentList(mozilla::Move(aOther.mIdContentList)),
+    mNameContentList(aOther.mNameContentList.forget()),
+    mChangeCallbacks(aOther.mChangeCallbacks.forget()),
+    mImageElement(aOther.mImageElement.forget())
   {
-    NS_ERROR("Should never be called");
   }
   ~nsIdentifierMapEntry();
+
+  KeyType GetKey() const { return mKey; }
+
+  nsString GetKeyAsString() const
+  {
+    if (mKey.mAtom) {
+      return nsAtomString(mKey.mAtom);
+    }
+
+    return mKey.mString;
+  }
+
+  bool KeyEquals(const KeyTypePointer aOtherKey) const
+  {
+    if (mKey.mAtom) {
+      if (aOtherKey->mAtom) {
+        return mKey.mAtom == aOtherKey->mAtom;
+      }
+
+      return mKey.mAtom->Equals(aOtherKey->mString);
+    }
+
+    if (aOtherKey->mAtom) {
+      return aOtherKey->mAtom->Equals(mKey.mString);
+    }
+
+    return mKey.mString.Equals(aOtherKey->mString);
+  }
+
+  static KeyTypePointer KeyToPointer(KeyType aKey) { return &aKey; }
+
+  static PLDHashNumber HashKey(const KeyTypePointer aKey)
+  {
+    return aKey->mAtom ?
+      aKey->mAtom->hash() : mozilla::HashString(aKey->mString);
+  }
+
+  enum { ALLOW_MEMMOVE = false };
 
   void AddNameElement(nsINode* aDocument, Element* aElement);
   void RemoveNameElement(Element* aElement);
@@ -253,12 +318,16 @@ public:
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 private:
+  nsIdentifierMapEntry(const nsIdentifierMapEntry& aOther) = delete;
+  nsIdentifierMapEntry& operator=(const nsIdentifierMapEntry& aOther) = delete;
+
   void FireChangeCallbacks(Element* aOldElement, Element* aNewElement,
                            bool aImageOnly = false);
 
+  AtomOrString mKey;
   // empty if there are no elements with this ID.
   // The elements are stored as weak pointers.
-  nsTArray<Element*> mIdContentList;
+  AutoTArray<Element*, 1> mIdContentList;
   RefPtr<nsBaseContentList> mNameContentList;
   nsAutoPtr<nsTHashtable<ChangeCallbackEntry> > mChangeCallbacks;
   RefPtr<Element> mImageElement;
@@ -513,6 +582,8 @@ public:
   virtual void ResetToURI(nsIURI *aURI, nsILoadGroup *aLoadGroup,
                           nsIPrincipal* aPrincipal) override;
 
+  already_AddRefed<nsIPrincipal> MaybeDowngradePrincipal(nsIPrincipal* aPrincipal);
+
   // StartDocumentLoad is pure virtual so that subclasses must override it.
   // The nsDocument StartDocumentLoad does some setup, but does NOT set
   // *aDocListener; this is the job of subclasses.
@@ -535,6 +606,8 @@ public:
   virtual void SetChromeXHRDocBaseURI(nsIURI* aURI) override;
 
   virtual void ApplySettingsFromCSP(bool aSpeculative) override;
+
+  virtual already_AddRefed<nsIParser> CreatorParserOrNull() override;
 
   /**
    * Set the principal responsible for this document.
@@ -599,7 +672,7 @@ public:
     final;
   virtual void DeleteShell() override;
 
-  virtual nsresult GetAllowPlugins(bool* aAllowPlugins) override;
+  virtual bool GetAllowPlugins() override;
 
   static bool IsElementAnimateEnabled(JSContext* aCx, JSObject* aObject);
   static bool IsWebAnimationsEnabled(JSContext* aCx, JSObject* aObject);
@@ -798,6 +871,9 @@ public:
 
   virtual void NotifyLayerManagerRecreated() override;
 
+  virtual void ScheduleSVGForPresAttrEvaluation(nsSVGElement* aSVG) override;
+  virtual void UnscheduleSVGForPresAttrEvaluation(nsSVGElement* aSVG) override;
+  virtual void ResolveScheduledSVGPresAttrs() override;
 
 private:
   void AddOnDemandBuiltInUASheet(mozilla::StyleSheet* aSheet);
@@ -907,22 +983,14 @@ public:
   virtual mozilla::PendingAnimationTracker*
   GetOrCreatePendingAnimationTracker() override;
 
-  virtual void SuppressEventHandling(SuppressionType aWhat,
-                                     uint32_t aIncrease) override;
+  virtual void SuppressEventHandling(uint32_t aIncrease) override;
 
-  virtual void UnsuppressEventHandlingAndFireEvents(SuppressionType aWhat,
-                                                    bool aFireEvents) override;
+  virtual void UnsuppressEventHandlingAndFireEvents(bool aFireEvents) override;
 
   void DecreaseEventSuppression() {
     MOZ_ASSERT(mEventsSuppressed);
     --mEventsSuppressed;
-    MaybeRescheduleAnimationFrameNotifications();
-  }
-
-  void ResumeAnimations() {
-    MOZ_ASSERT(mAnimationsPaused);
-    --mAnimationsPaused;
-    MaybeRescheduleAnimationFrameNotifications();
+    UpdateFrameRequestCallbackSchedulingState();
   }
 
   virtual nsIDocument* GetTemplateContentsOwner() override;
@@ -982,7 +1050,12 @@ public:
 
   virtual nsISupports* GetCurrentContentSink() override;
 
-  virtual mozilla::EventStates GetDocumentState() override;
+  virtual mozilla::EventStates GetDocumentState() final;
+  // GetDocumentState() mutates the state due to lazy resolution;
+  // and can't be used during parallel traversal. Use this instead,
+  // and ensure GetDocumentState() has been called first.
+  // This will assert if the state is stale.
+  virtual mozilla::EventStates ThreadSafeGetDocumentState() const final;
 
   // Only BlockOnload should call this!
   void AsyncBlockOnload();
@@ -1140,7 +1213,7 @@ public:
                                                   ErrorResult& rv) override;
   virtual already_AddRefed<Element> CreateElementNS(const nsAString& aNamespaceURI,
                                                     const nsAString& aQualifiedName,
-                                                    const mozilla::dom::ElementCreationOptions& aOptions,
+                                                    const mozilla::dom::ElementCreationOptionsOrString& aOptions,
                                                     mozilla::ErrorResult& rv) override;
 
   virtual nsIDocument* MasterDocument() override
@@ -1305,6 +1378,9 @@ protected:
 
   void UpdateScreenOrientation();
 
+  virtual mozilla::dom::FlashClassification DocumentFlashClassification() override;
+  virtual bool IsThirdParty() override;
+
 #define NS_DOCUMENT_NOTIFY_OBSERVERS(func_, params_)                        \
   NS_OBSERVER_ARRAY_NOTIFY_XPCOM_OBSERVERS(mObservers, nsIDocumentObserver, \
                                            func_, params_);
@@ -1324,6 +1400,14 @@ protected:
   // events. It returns false if the fullscreen element ready check
   // fails and nothing gets changed.
   bool ApplyFullscreen(const FullscreenRequest& aRequest);
+
+  // Retrieves the classification of the Flash plugins in the document based on
+  // the classification lists.
+  mozilla::dom::FlashClassification PrincipalFlashClassification();
+
+  // Attempts to determine the Flash classification of this page based on the
+  // the classification lists and the classification of parent documents.
+  mozilla::dom::FlashClassification ComputeFlashClassification();
 
   nsTArray<nsIObserver*> mCharSetObservers;
 
@@ -1349,7 +1433,8 @@ protected:
   nsTObserverArray<nsIDocumentObserver*> mObservers;
 
   // Array of intersection observers
-  nsTArray<RefPtr<mozilla::dom::DOMIntersectionObserver>> mIntersectionObservers;
+  nsTHashtable<nsPtrHashKey<mozilla::dom::DOMIntersectionObserver>>
+    mIntersectionObservers;
 
   // Tracker for animations that are waiting to start.
   // nullptr until GetOrCreatePendingAnimationTracker is called.
@@ -1369,7 +1454,12 @@ protected:
   // non-null when this document is in fullscreen mode.
   nsWeakPtr mFullscreenRoot;
 
+  mozilla::dom::FlashClassification mFlashClassification;
+  // Do not use this value directly. Call the |IsThirdParty()| method, which
+  // caches its result here.
+  mozilla::Maybe<bool> mIsThirdParty;
 private:
+  void UpdatePossiblyStaleDocumentState();
   static bool CustomElementConstructor(JSContext* aCx, unsigned aArgc, JS::Value* aVp);
 
   /**
@@ -1433,10 +1523,6 @@ public:
   bool mSynchronousDOMContentLoaded:1;
 
   bool mInXBLUpdate:1;
-
-  // Whether we're currently under a FlushPendingNotifications call to
-  // our presshell.  This is used to handle flush reentry correctly.
-  bool mInFlush:1;
 
   // Parser aborted. True if the parser of this document was forcibly
   // terminated instead of letting it finish at its own pace.
@@ -1519,16 +1605,10 @@ private:
   void EnableStyleSheetsForSetInternal(const nsAString& aSheetSet,
                                        bool aUpdateCSSLoader);
 
-  // Revoke any pending notifications due to requestAnimationFrame calls
-  void RevokeAnimationFrameNotifications();
-  // Reschedule any notifications we need to handle
-  // requestAnimationFrame, if it's OK to do so.
-  void MaybeRescheduleAnimationFrameNotifications();
-
   void ClearAllBoxObjects();
 
   // Returns true if the scheme for the url for this document is "about"
-  bool IsAboutPage();
+  bool IsAboutPage() const;
 
   // These are not implemented and not supported.
   nsDocument(const nsDocument& aOther);
@@ -1631,6 +1711,11 @@ private:
   // Set to true when the document is possibly controlled by the ServiceWorker.
   // Used to prevent multiple requests to ServiceWorkerManager.
   bool mMaybeServiceWorkerControlled;
+
+  // We lazily calculate declaration blocks for SVG elements
+  // with mapped attributes in Servo mode. This list contains all elements which
+  // need lazy resolution
+  nsTHashtable<nsPtrHashKey<nsSVGElement>> mLazySVGPresElements;
 
 #ifdef DEBUG
 public:

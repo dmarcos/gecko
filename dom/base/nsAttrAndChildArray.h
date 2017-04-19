@@ -134,6 +134,14 @@ public:
   {
     return MappedAttrCount();
   }
+  const nsMappedAttributes* GetMapped() const;
+
+  // Force this to have mapped attributes, even if those attributes are empty.
+  nsresult ForceMapped(nsMappedAttributeElement* aContent, nsIDocument* aDocument);
+
+  // Clear the servo declaration block on the mapped attributes, if any
+  // Will assert off main thread
+  void ClearMappedServoStyle();
 
 private:
   nsAttrAndChildArray(const nsAttrAndChildArray& aOther) = delete;
@@ -148,7 +156,8 @@ private:
   nsMappedAttributes*
   GetModifiableMapped(nsMappedAttributeElement* aContent,
                       nsHTMLStyleSheet* aSheet,
-                      bool aWillAddAttr);
+                      bool aWillAddAttr,
+                      int32_t aAttrCount = 1);
   nsresult MakeMappedUnique(nsMappedAttributes* aAttributes);
 
   uint32_t AttrSlotsSize() const

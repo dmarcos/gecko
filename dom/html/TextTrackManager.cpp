@@ -12,8 +12,10 @@
 #include "mozilla/dom/TextTrackCue.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Telemetry.h"
 #include "nsComponentManagerUtils.h"
+#include "nsGlobalWindow.h"
 #include "nsVariant.h"
 #include "nsVideoFrame.h"
 #include "nsIFrame.h"
@@ -158,7 +160,8 @@ TextTrackManager::AddTextTrack(TextTrackKind aKind, const nsAString& aLabel,
     return nullptr;
   }
   WEBVTT_LOG("%p AddTextTrack",this);
-  WEBVTT_LOGV("AddTextTrack kind %d Label %s Language %s",aKind,
+  WEBVTT_LOGV("AddTextTrack kind %" PRIu32 " Label %s Language %s",
+    static_cast<uint32_t>(aKind),
     NS_ConvertUTF16toUTF8(aLabel).get(), NS_ConvertUTF16toUTF8(aLanguage).get());
   RefPtr<TextTrack> track =
     mTextTracks->AddTextTrack(aKind, aLabel, aLanguage, aMode, aReadyState,
@@ -278,7 +281,7 @@ TextTrackManager::UpdateCueDisplay()
 
   if (activeCues.Length() > 0) {
     WEBVTT_LOG("UpdateCueDisplay ProcessCues");
-    WEBVTT_LOGV("UpdateCueDisplay activeCues.Length() %d",activeCues.Length());
+    WEBVTT_LOGV("UpdateCueDisplay activeCues.Length() %" PRIuSIZE, activeCues.Length());
     RefPtr<nsVariantCC> jsCues = new nsVariantCC();
 
     jsCues->SetAsArray(nsIDataType::VTYPE_INTERFACE,
@@ -407,7 +410,8 @@ TextTrackManager::PerformTrackSelection(TextTrackKind aTextTrackKinds[],
   // Step 3: If any TextTracks in candidates are showing then abort these steps.
   for (uint32_t i = 0; i < candidates.Length(); i++) {
     if (candidates[i]->Mode() == TextTrackMode::Showing) {
-      WEBVTT_LOGV("PerformTrackSelection Showing return kind %d",candidates[i]->Kind());
+      WEBVTT_LOGV("PerformTrackSelection Showing return kind %d",
+                  static_cast<int>(candidates[i]->Kind()));
       return;
     }
   }
@@ -419,7 +423,8 @@ TextTrackManager::PerformTrackSelection(TextTrackKind aTextTrackKinds[],
     if (TrackIsDefault(candidates[i]) &&
         candidates[i]->Mode() == TextTrackMode::Disabled) {
       candidates[i]->SetMode(TextTrackMode::Showing);
-      WEBVTT_LOGV("PerformTrackSelection set Showing kind %d", candidates[i]->Kind());
+      WEBVTT_LOGV("PerformTrackSelection set Showing kind %d",
+                  static_cast<int>(candidates[i]->Kind()));
       return;
     }
   }
@@ -576,8 +581,13 @@ TextTrackManager::DispatchUpdateCueDisplay()
   if (!mUpdateCueDisplayDispatched && !mShutdown &&
       (mMediaElement->GetHasUserInteraction() || mMediaElement->IsCurrentlyPlaying())) {
     WEBVTT_LOG("DispatchUpdateCueDisplay");
-    NS_DispatchToMainThread(NewRunnableMethod(this, &TextTrackManager::UpdateCueDisplay));
-    mUpdateCueDisplayDispatched = true;
+    nsPIDOMWindowInner* win = mMediaElement->OwnerDoc()->GetInnerWindow();
+    if (win) {
+      nsGlobalWindow::Cast(win)->Dispatch(
+        "TextTrackManager::UpdateCueDisplay", TaskCategory::Other,
+        NewRunnableMethod(this, &TextTrackManager::UpdateCueDisplay));
+      mUpdateCueDisplayDispatched = true;
+    }
   }
 }
 
@@ -591,8 +601,13 @@ TextTrackManager::DispatchTimeMarchesOn()
   if (!mTimeMarchesOnDispatched && !mShutdown &&
       (mMediaElement->GetHasUserInteraction() || mMediaElement->IsCurrentlyPlaying())) {
     WEBVTT_LOG("DispatchTimeMarchesOn");
-    NS_DispatchToMainThread(NewRunnableMethod(this, &TextTrackManager::TimeMarchesOn));
-    mTimeMarchesOnDispatched = true;
+    nsPIDOMWindowInner* win = mMediaElement->OwnerDoc()->GetInnerWindow();
+    if (win) {
+      nsGlobalWindow::Cast(win)->Dispatch(
+        "TextTrackManager::TimeMarchesOn", TaskCategory::Other,
+        NewRunnableMethod(this, &TextTrackManager::TimeMarchesOn));
+      mTimeMarchesOnDispatched = true;
+    }
   }
 }
 
@@ -843,6 +858,13 @@ TextTrackManager::ReportTelemetryForCue()
     mCueTelemetryReported = true;
   }
 }
+
+bool
+TextTrackManager::IsLoaded()
+{
+  return mTextTracks ? mTextTracks->AreTextTracksLoaded() : true;
+}
+
 
 } // namespace dom
 } // namespace mozilla

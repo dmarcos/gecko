@@ -5,10 +5,12 @@
 package org.mozilla.gecko;
 
 import org.mozilla.gecko.GeckoAppShell;
+import org.mozilla.gecko.permissions.Permissions;
 import org.mozilla.gecko.util.BundleEventListener;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
 
+import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -51,23 +53,50 @@ public class FilePicker implements BundleEventListener {
                               final EventCallback callback) {
         if ("FilePicker:Show".equals(event)) {
             String mimeType = "*/*";
-            final String mode = message.getString("mode");
+            final String mode = message.getString("mode", "");
             final int tabId = message.getInt("tabId", -1);
-            final String title = message.getString("title");
+            final String title = message.getString("title", "");
 
             if ("mimeType".equals(mode)) {
-                mimeType = message.getString("mimeType");
+                mimeType = message.getString("mimeType", "");
             } else if ("extension".equals(mode)) {
-                mimeType = GeckoAppShell.getMimeTypeFromExtensions(message.getString("extensions"));
+                mimeType = GeckoAppShell.getMimeTypeFromExtensions(message.getString("extensions", ""));
             }
 
-            showFilePickerAsync(title, mimeType, new ResultHandler() {
-                @Override
-                public void gotFile(final String filename) {
-                    callback.sendSuccess(filename);
-                }
-            }, tabId);
+            final String[] requiredPermission = getPermissionsForMimeType(mimeType);
+            final String finalMimeType = mimeType;
+            // Use activity context cause we want to prompt for runtime permission. (bug 1337692)
+            Permissions.from(GeckoAppShell.getGeckoInterface().getActivity())
+                    .withPermissions(requiredPermission)
+                    .andFallback(new Runnable() {
+                        @Override
+                        public void run() {
+                            callback.sendError(null);
+                        }
+                    })
+                    .run(new Runnable() {
+                        @Override
+                        public void run() {
+                            showFilePickerAsync(title, finalMimeType, new ResultHandler() {
+                                @Override
+                                public void gotFile(final String filename) {
+                                    callback.sendSuccess(filename);
+                                }
+                            }, tabId);
+                        }
+                    });
         }
+    }
+
+    private static String[] getPermissionsForMimeType(final String mimeType) {
+        if (mimeType.startsWith("audio/")) {
+            return new String[] { Manifest.permission.RECORD_AUDIO };
+        } else if (mimeType.startsWith("image/")) {
+            return new String[] { Manifest.permission.CAMERA };
+        } else if (mimeType.startsWith("video/")) {
+            return new String[] { Manifest.permission.CAMERA };
+        }
+        return new String[] { Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO };
     }
 
     private void addActivities(Intent intent, HashMap<String, Intent> intents, HashMap<String, Intent> filters) {

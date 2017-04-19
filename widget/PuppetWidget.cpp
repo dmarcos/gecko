@@ -10,14 +10,18 @@
 #include "ClientLayerManager.h"
 #include "gfxPlatform.h"
 #include "mozilla/dom/TabChild.h"
+#include "mozilla/dom/TabGroup.h"
+#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/Hal.h"
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/layers/APZChild.h"
 #include "mozilla/layers/PLayerTransactionChild.h"
+#include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/TextComposition.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/Unused.h"
+#include "BasicLayers.h"
 #include "PuppetWidget.h"
 #include "nsContentUtils.h"
 #include "nsIWidgetListener.h"
@@ -73,6 +77,9 @@ MightNeedIMEFocus(const nsWidgetInitData* aInitData)
 // Arbitrary, fungible.
 const size_t PuppetWidget::kMaxDimension = 4000;
 
+static bool gRemoteDesktopBehaviorEnabled = false;
+static bool gRemoteDesktopBehaviorInitialized = false;
+
 NS_IMPL_ISUPPORTS_INHERITED0(PuppetWidget, nsBaseWidget)
 
 PuppetWidget::PuppetWidget(TabChild* aTabChild)
@@ -91,6 +98,11 @@ PuppetWidget::PuppetWidget(TabChild* aTabChild)
 
   // Setting 'Unknown' means "not yet cached".
   mInputContext.mIMEState.mEnabled = IMEState::UNKNOWN;
+
+  if (!gRemoteDesktopBehaviorInitialized) {
+    Preferences::AddBoolVarCache(&gRemoteDesktopBehaviorEnabled, "browser.tabs.remote.desktopbehavior", false);
+    gRemoteDesktopBehaviorInitialized = true;
+  }
 }
 
 PuppetWidget::~PuppetWidget()
@@ -149,7 +161,7 @@ PuppetWidget::InitIMEState()
   if (mNeedIMEStateInit) {
     mContentCache.Clear();
     mTabChild->SendUpdateContentCache(mContentCache);
-    mIMEPreferenceOfParent = nsIMEUpdatePreference();
+    mIMENotificationRequestsOfParent = IMENotificationRequests();
     mNeedIMEStateInit = false;
   }
 }
@@ -298,9 +310,10 @@ PuppetWidget::Invalidate(const LayoutDeviceIntRect& aRect)
 
   mDirtyRegion.Or(mDirtyRegion, aRect);
 
-  if (!mDirtyRegion.IsEmpty() && !mPaintTask.IsPending()) {
+  if (mTabChild && !mDirtyRegion.IsEmpty() && !mPaintTask.IsPending()) {
     mPaintTask = new PaintTask(this);
-    NS_DispatchToCurrentThread(mPaintTask.get());
+    nsCOMPtr<nsIRunnable> event(mPaintTask.get());
+    mTabChild->TabGroup()->Dispatch("PuppetWidget::Invalidate", TaskCategory::Other, event.forget());
     return;
   }
 }
@@ -588,19 +601,51 @@ PuppetWidget::GetLayerManager(PLayerTransactionChild* aShadowManager,
                               LayerManagerPersistence aPersistence)
 {
   if (!mLayerManager) {
-    mLayerManager = new ClientLayerManager(this);
+    if (XRE_IsParentProcess()) {
+      // On the parent process there is no CompositorBridgeChild which confuses
+      // some layers code, so we use basic layers instead. Note that we create
+      // a non-retaining layer manager since we don't care about performance.
+      mLayerManager = new BasicLayerManager(BasicLayerManager::BLM_OFFSCREEN);
+      return mLayerManager;
+    }
+
+    if (mTabChild && !mTabChild->IsLayersConnected()) {
+      // If we know for sure that the parent side of this TabChild is not
+      // connected to the compositor, we don't want to use a "remote" layer
+      // manager like WebRender or Client. Instead we use a Basic one which
+      // can do drawing in this process.
+      mLayerManager = new BasicLayerManager(this);
+    } else if (gfxVars::UseWebRender()) {
+      MOZ_ASSERT(!aShadowManager);
+      mLayerManager = new WebRenderLayerManager(this);
+    } else {
+      mLayerManager = new ClientLayerManager(this);
+    }
   }
+
+  // Attach a shadow forwarder if none exists.
   ShadowLayerForwarder* lf = mLayerManager->AsShadowForwarder();
   if (lf && !lf->HasShadowManager() && aShadowManager) {
     lf->SetShadowManager(aShadowManager);
   }
+
   return mLayerManager;
 }
 
 LayerManager*
 PuppetWidget::RecreateLayerManager(PLayerTransactionChild* aShadowManager)
 {
-  mLayerManager = new ClientLayerManager(this);
+  // Force the old LM to self destruct, otherwise if the reference dangles we
+  // could fail to revoke the most recent transaction.
+  DestroyLayerManager();
+
+  MOZ_ASSERT(mTabChild);
+  if (gfxVars::UseWebRender()) {
+    MOZ_ASSERT(!aShadowManager);
+    mLayerManager = new WebRenderLayerManager(this);
+  } else {
+    mLayerManager = new ClientLayerManager(this);
+  }
   if (ShadowLayerForwarder* lf = mLayerManager->AsShadowForwarder()) {
     lf->SetShadowManager(aShadowManager);
   }
@@ -655,6 +700,11 @@ PuppetWidget::RequestIMEToCommitComposition(bool aCancel)
 nsresult
 PuppetWidget::NotifyIMEInternal(const IMENotification& aIMENotification)
 {
+  if (mNativeTextEventDispatcherListener) {
+    // Use mNativeTextEventDispatcherListener for IME notifications.
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+
   switch (aIMENotification.mMessage) {
     case REQUEST_TO_COMMIT_COMPOSITION:
       return RequestIMEToCommitComposition(false);
@@ -792,9 +842,9 @@ PuppetWidget::NotifyIMEOfFocusChange(const IMENotification& aIMENotification)
     mContentCache.Clear();
   }
 
-  mIMEPreferenceOfParent = nsIMEUpdatePreference();
+  mIMENotificationRequestsOfParent = IMENotificationRequests();
   if (!mTabChild->SendNotifyIMEFocus(mContentCache, aIMENotification,
-                                     &mIMEPreferenceOfParent)) {
+                                     &mIMENotificationRequestsOfParent)) {
     return NS_ERROR_FAILURE;
   }
   return NS_OK;
@@ -816,9 +866,15 @@ PuppetWidget::NotifyIMEOfCompositionUpdate(
   return NS_OK;
 }
 
-nsIMEUpdatePreference
-PuppetWidget::GetIMEUpdatePreference()
+IMENotificationRequests
+PuppetWidget::GetIMENotificationRequests()
 {
+  if (mNativeTextEventDispatcherListener) {
+    // Use mNativeTextEventDispatcherListener for retrieving IME notification
+    // requests because non-native IME may have transaction.
+    return mNativeTextEventDispatcherListener->GetIMENotificationRequests();
+  }
+
   // e10s requires IME content cache in in the TabParent for handling query
   // content event only with the parent process.  Therefore, this process
   // needs to receive a lot of information from the focused editor to sent
@@ -827,12 +883,14 @@ PuppetWidget::GetIMEUpdatePreference()
     // But if a plugin has focus, we cannot receive text nor selection change
     // in the plugin.  Therefore, PuppetWidget needs to receive only position
     // change event for updating the editor rect cache.
-    return nsIMEUpdatePreference(mIMEPreferenceOfParent.mWantUpdates |
-                                 nsIMEUpdatePreference::NOTIFY_POSITION_CHANGE);
+    return IMENotificationRequests(
+             mIMENotificationRequestsOfParent.mWantUpdates |
+             IMENotificationRequests::NOTIFY_POSITION_CHANGE);
   }
-  return nsIMEUpdatePreference(mIMEPreferenceOfParent.mWantUpdates |
-                               nsIMEUpdatePreference::NOTIFY_TEXT_CHANGE |
-                               nsIMEUpdatePreference::NOTIFY_POSITION_CHANGE );
+  return IMENotificationRequests(
+           mIMENotificationRequestsOfParent.mWantUpdates |
+           IMENotificationRequests::NOTIFY_TEXT_CHANGE |
+           IMENotificationRequests::NOTIFY_POSITION_CHANGE);
 }
 
 nsresult
@@ -859,7 +917,7 @@ PuppetWidget::NotifyIMEOfTextChange(const IMENotification& aIMENotification)
 
   // TabParent doesn't this this to cache.  we don't send the notification
   // if parent process doesn't request NOTIFY_TEXT_CHANGE.
-  if (mIMEPreferenceOfParent.WantTextChange()) {
+  if (mIMENotificationRequestsOfParent.WantTextChange()) {
     mTabChild->SendNotifyIMETextChange(mContentCache, aIMENotification);
   } else {
     mTabChild->SendUpdateContentCache(mContentCache);
@@ -937,7 +995,7 @@ PuppetWidget::NotifyIMEOfPositionChange(const IMENotification& aIMENotification)
       NS_WARN_IF(!mContentCache.CacheSelection(this, &aIMENotification))) {
     return NS_ERROR_FAILURE;
   }
-  if (mIMEPreferenceOfParent.WantPositionChanged()) {
+  if (mIMENotificationRequestsOfParent.WantPositionChanged()) {
     mTabChild->SendNotifyIMEPositionChange(mContentCache, aIMENotification);
   } else {
     mTabChild->SendUpdateContentCache(mContentCache);
@@ -1049,7 +1107,8 @@ PuppetWidget::Paint()
                          "PuppetWidget", 0);
 #endif
 
-    if (mozilla::layers::LayersBackend::LAYERS_CLIENT == mLayerManager->GetBackendType()) {
+    if (mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_CLIENT ||
+        mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_WR) {
       // Do nothing, the compositor will handle drawing
       if (mTabChild) {
         mTabChild->NotifyPainted();
@@ -1141,7 +1200,7 @@ PuppetWidget::NeedsPaint()
 {
   // e10s popups are handled by the parent process, so never should be painted here
   if (XRE_IsContentProcess() &&
-      Preferences::GetBool("browser.tabs.remote.desktopbehavior", false) &&
+      gRemoteDesktopBehaviorEnabled &&
       mWindowType == eWindowType_popup) {
     NS_WARNING("Trying to paint an e10s popup in the child process!");
     return false;
@@ -1310,13 +1369,6 @@ PuppetWidget::GetScreenDimensions()
 }
 
 NS_IMETHODIMP
-PuppetScreen::GetId(uint32_t *outId)
-{
-  *outId = 1;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 PuppetScreen::GetRect(int32_t *outLeft,  int32_t *outTop,
                       int32_t *outWidth, int32_t *outHeight)
 {
@@ -1349,20 +1401,6 @@ PuppetScreen::GetColorDepth(int32_t *aColorDepth)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-PuppetScreen::GetRotation(uint32_t* aRotation)
-{
-  NS_WARNING("Attempt to get screen rotation through nsIScreen::GetRotation().  Nothing should know or care this in sandboxed contexts.  If you want *orientation*, use hal.");
-  return NS_ERROR_NOT_AVAILABLE;
-}
-
-NS_IMETHODIMP
-PuppetScreen::SetRotation(uint32_t aRotation)
-{
-  NS_WARNING("Attempt to set screen rotation through nsIScreen::GetRotation().  Nothing should know or care this in sandboxed contexts.  If you want *orientation*, use hal.");
-  return NS_ERROR_NOT_AVAILABLE;
-}
-
 NS_IMPL_ISUPPORTS(PuppetScreenManager, nsIScreenManager)
 
 PuppetScreenManager::PuppetScreenManager()
@@ -1372,14 +1410,6 @@ PuppetScreenManager::PuppetScreenManager()
 
 PuppetScreenManager::~PuppetScreenManager()
 {
-}
-
-NS_IMETHODIMP
-PuppetScreenManager::ScreenForId(uint32_t aId,
-                                 nsIScreen** outScreen)
-{
-  NS_IF_ADDREF(*outScreen = mOneScreen.get());
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1397,27 +1427,6 @@ PuppetScreenManager::ScreenForRect(int32_t inLeft,
                                    nsIScreen** outScreen)
 {
   return GetPrimaryScreen(outScreen);
-}
-
-NS_IMETHODIMP
-PuppetScreenManager::ScreenForNativeWidget(void* aWidget,
-                                           nsIScreen** outScreen)
-{
-  return GetPrimaryScreen(outScreen);
-}
-
-NS_IMETHODIMP
-PuppetScreenManager::GetNumberOfScreens(uint32_t* aNumberOfScreens)
-{
-  *aNumberOfScreens = 1;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-PuppetScreenManager::GetSystemDefaultScale(float *aDefaultScale)
-{
-  *aDefaultScale = 1.0f;
-  return NS_OK;
 }
 
 nsIWidgetListener*

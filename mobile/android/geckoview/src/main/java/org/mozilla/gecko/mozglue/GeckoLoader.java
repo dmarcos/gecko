@@ -216,13 +216,6 @@ public final class GeckoLoader {
         }
 
         putenv("MOZ_LINKER_EXTRACT=1");
-        // Ensure that the cache dir is world-writable
-        File cacheDir = new File(linkerCache);
-        if (cacheDir.isDirectory()) {
-            cacheDir.setWritable(true, false);
-            cacheDir.setExecutable(true, false);
-            cacheDir.setReadable(true, false);
-        }
     }
 
     @RobocopTarget
@@ -521,15 +514,6 @@ public final class GeckoLoader {
         loadGeckoLibsNative(apkName);
     }
 
-    public synchronized static void extractGeckoLibs(final Context context, final String apkName) {
-        loadLibsSetupLocked(context);
-        try {
-            extractGeckoLibsNative(apkName);
-        } catch (Exception e) {
-            Log.e(LOGTAG, "Failing library extraction.", e);
-        }
-    }
-
     private static void setupLocaleEnvironment() {
         putenv("LANG=" + Locale.getDefault().toString());
         NumberFormat nf = NumberFormat.getInstance();
@@ -568,5 +552,5 @@ public final class GeckoLoader {
     private static native void loadGeckoLibsNative(String apkName);
     private static native void loadSQLiteLibsNative(String apkName);
     private static native void loadNSSLibsNative(String apkName);
-    private static native void extractGeckoLibsNative(String apkName);
+    public static native boolean neonCompatible();
 }

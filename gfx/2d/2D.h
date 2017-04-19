@@ -12,6 +12,7 @@
 #include "Matrix.h"
 #include "Quaternion.h"
 #include "UserData.h"
+#include "FontVariation.h"
 #include <vector>
 
 // GenericRefCountedBase allows us to hold on to refcounted objects of any type
@@ -19,19 +20,19 @@
 // without having a dependency on that type. This is used for DrawTargetSkia
 // to be able to hold on to a GLContext.
 #include "mozilla/GenericRefCounted.h"
+#include "mozilla/MemoryReporting.h"
 
 // This RefPtr class isn't ideal for usage in Azure, as it doesn't allow T**
 // outparams using the &-operator. But it will have to do as there's no easy
 // solution.
 #include "mozilla/RefPtr.h"
+#include "mozilla/WeakPtr.h"
 
 #include "mozilla/DebugOnly.h"
 
 #ifdef MOZ_ENABLE_FREETYPE
 #include <string>
 #endif
-
-#include "gfxPrefs.h"
 
 struct _cairo_surface;
 typedef _cairo_surface cairo_surface_t;
@@ -63,6 +64,7 @@ namespace mozilla {
 
 namespace gfx {
 
+class ScaledFont;
 class SourceSurface;
 class DataSourceSurface;
 class DrawTarget;
@@ -697,6 +699,46 @@ struct GlyphMetrics
   Float mHeight;
 };
 
+class UnscaledFont
+  : public external::AtomicRefCounted<UnscaledFont>
+  , public SupportsWeakPtr<UnscaledFont>
+{
+public:
+  MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(UnscaledFont)
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(UnscaledFont)
+
+  virtual ~UnscaledFont();
+
+  virtual FontType GetType() const = 0;
+
+  static uint32_t DeletionCounter() { return sDeletionCounter; }
+
+  typedef void (*FontFileDataOutput)(const uint8_t *aData, uint32_t aLength, uint32_t aIndex,
+                                     void *aBaton);
+  typedef void (*FontInstanceDataOutput)(const uint8_t* aData, uint32_t aLength, void* aBaton);
+  typedef void (*FontDescriptorOutput)(const uint8_t* aData, uint32_t aLength, void* aBaton);
+
+  virtual bool GetFontFileData(FontFileDataOutput, void *) { return false; }
+
+  virtual bool GetFontInstanceData(FontInstanceDataOutput, void *) { return false; }
+
+  virtual bool GetFontDescriptor(FontDescriptorOutput, void *) { return false; }
+
+  virtual already_AddRefed<ScaledFont>
+    CreateScaledFont(Float aGlyphSize,
+                     const uint8_t* aInstanceData,
+                     uint32_t aInstanceDataLength)
+  {
+    return nullptr;
+  }
+
+protected:
+  UnscaledFont() {}
+
+private:
+  static uint32_t sDeletionCounter;
+};
+
 /** This class is an abstraction of a backend/platform specific font object
  * at a particular size. It is passed into text drawing calls to describe
  * the font used for the drawing call.
@@ -707,25 +749,9 @@ public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(ScaledFont)
   virtual ~ScaledFont() {}
 
-  typedef struct {
-    uint32_t mTag;
-    Float    mValue;
-  } VariationSetting;
-
-  typedef void (*FontFileDataOutput)(const uint8_t *aData, uint32_t aLength, uint32_t aIndex, Float aGlyphSize,
-                                     uint32_t aVariationCount, const VariationSetting* aVariations,
-                                     void *aBaton);
-  typedef void (*FontInstanceDataOutput)(const uint8_t* aData, uint32_t aLength, void* aBaton);
-  typedef void (*FontDescriptorOutput)(const uint8_t* aData, uint32_t aLength, Float aFontSize, void* aBaton);
-
   virtual FontType GetType() const = 0;
-  virtual AntialiasMode GetDefaultAAMode() {
-    if (gfxPrefs::DisableAllTextAA()) {
-      return AntialiasMode::NONE;
-    }
-
-    return AntialiasMode::DEFAULT;
-  }
+  virtual Float GetSize() const = 0;
+  virtual AntialiasMode GetDefaultAAMode();
 
   /** This allows getting a path that describes the outline of a set of glyphs.
    * A target is passed in so that the guarantee is made the returned path
@@ -745,11 +771,11 @@ public:
    */
   virtual void GetGlyphDesignMetrics(const uint16_t* aGlyphIndices, uint32_t aNumGlyphs, GlyphMetrics* aGlyphMetrics) = 0;
 
-  virtual bool GetFontFileData(FontFileDataOutput, void *) { return false; }
+  typedef void (*FontInstanceDataOutput)(const uint8_t* aData, uint32_t aLength, void* aBaton);
 
   virtual bool GetFontInstanceData(FontInstanceDataOutput, void *) { return false; }
 
-  virtual bool GetFontDescriptor(FontDescriptorOutput, void *) { return false; }
+  virtual bool CanSerialize() { return false; }
 
   void AddUserData(UserDataKey *key, void *userData, void (*destroy)(void*)) {
     mUserData.Add(key, userData, destroy);
@@ -758,10 +784,15 @@ public:
     return mUserData.Get(key);
   }
 
+  const RefPtr<UnscaledFont>& GetUnscaledFont() const { return mUnscaledFont; }
+
 protected:
-  ScaledFont() {}
+  explicit ScaledFont(const RefPtr<UnscaledFont>& aUnscaledFont)
+    : mUnscaledFont(aUnscaledFont)
+  {}
 
   UserData mUserData;
+  RefPtr<UnscaledFont> mUnscaledFont;
 };
 
 /**
@@ -774,20 +805,19 @@ public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(NativeFontResource)
 
   /**
-   * Creates a ScaledFont using the font corresponding to the index and
-   * the given glyph size.
+   * Creates a UnscaledFont using the font corresponding to the index.
    *
    * @param aIndex index for the font within the resource.
-   * @param aGlyphSize the size of ScaledFont required.
    * @param aInstanceData pointer to read-only buffer of any available instance data.
    * @param aInstanceDataLength the size of the instance data.
-   * @return an already_addrefed ScaledFont, containing nullptr if failed.
+   * @return an already_addrefed UnscaledFont, containing nullptr if failed.
    */
-  virtual already_AddRefed<ScaledFont>
-    CreateScaledFont(uint32_t aIndex, Float aGlyphSize,
-                     const uint8_t* aInstanceData, uint32_t aInstanceDataLength) = 0;
+  virtual already_AddRefed<UnscaledFont>
+    CreateUnscaledFont(uint32_t aIndex,
+                       const uint8_t* aInstanceData,
+                       uint32_t aInstanceDataLength) = 0;
 
-  virtual ~NativeFontResource() {};
+  virtual ~NativeFontResource() {}
 };
 
 /** This class is designed to allow passing additional glyph rendering
@@ -1010,13 +1040,23 @@ public:
                     const DrawOptions &aOptions = DrawOptions()) = 0;
 
   /**
-   * Fill a series of clyphs on the draw target with a certain source pattern.
+   * Fill a series of glyphs on the draw target with a certain source pattern.
    */
   virtual void FillGlyphs(ScaledFont *aFont,
                           const GlyphBuffer &aBuffer,
                           const Pattern &aPattern,
                           const DrawOptions &aOptions = DrawOptions(),
                           const GlyphRenderingOptions *aRenderingOptions = nullptr) = 0;
+
+  /**
+   * Stroke a series of glyphs on the draw target with a certain source pattern.
+   */
+  virtual void StrokeGlyphs(ScaledFont* aFont,
+                            const GlyphBuffer& aBuffer,
+                            const Pattern& aPattern,
+                            const StrokeOptions& aStrokeOptions = StrokeOptions(),
+                            const DrawOptions& aOptions = DrawOptions(),
+                            const GlyphRenderingOptions* aRenderingOptions = nullptr);
 
   /**
    * This takes a source pattern and a mask, and composites the source pattern
@@ -1421,11 +1461,14 @@ public:
     CreateDrawTargetForData(BackendType aBackend, unsigned char* aData, const IntSize &aSize, int32_t aStride, SurfaceFormat aFormat, bool aUninitialized = false);
 
   static already_AddRefed<ScaledFont>
-    CreateScaledFontForNativeFont(const NativeFont &aNativeFont, Float aSize);
+    CreateScaledFontForNativeFont(const NativeFont &aNativeFont,
+                                  const RefPtr<UnscaledFont>& aUnscaledFont,
+                                  Float aSize);
 
 #ifdef MOZ_WIDGET_GTK
   static already_AddRefed<ScaledFont>
-    CreateScaledFontForFontconfigFont(cairo_scaled_font_t* aScaledFont, FcPattern* aPattern, Float aSize);
+    CreateScaledFontForFontconfigFont(cairo_scaled_font_t* aScaledFont, FcPattern* aPattern,
+                                      const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize);
 #endif
 
   /**
@@ -1433,23 +1476,18 @@ public:
    *
    * @param aData Pointer to the data
    * @param aSize Size of the TrueType data
-   * @param aVariationCount Number of VariationSetting records provided.
-   * @param aVariations Pointer to VariationSetting records.
    * @param aType Type of NativeFontResource that should be created.
    * @return a NativeFontResource of nullptr if failed.
    */
   static already_AddRefed<NativeFontResource>
-    CreateNativeFontResource(uint8_t *aData, uint32_t aSize,
-                             uint32_t aVariationCount,
-                             const ScaledFont::VariationSetting* aVariations,
-                             FontType aType);
+    CreateNativeFontResource(uint8_t *aData, uint32_t aSize, FontType aType);
 
   /**
-   * This creates a scaled font of the given type based on font descriptor
+   * This creates an unscaled font of the given type based on font descriptor
    * data retrieved from ScaledFont::GetFontDescriptor.
    */
-  static already_AddRefed<ScaledFont>
-    CreateScaledFontFromFontDescriptor(FontType aType, const uint8_t* aData, uint32_t aDataLength, Float aSize);
+  static already_AddRefed<UnscaledFont>
+    CreateUnscaledFontFromFontDescriptor(FontType aType, const uint8_t* aData, uint32_t aDataLength);
 
   /**
    * This creates a scaled font with an associated cairo_scaled_font_t, and
@@ -1457,7 +1495,10 @@ public:
    * cairo_scaled_font_t* parameters must correspond to the same font.
    */
   static already_AddRefed<ScaledFont>
-    CreateScaledFontWithCairo(const NativeFont &aNativeFont, Float aSize, cairo_scaled_font_t* aScaledFont);
+    CreateScaledFontWithCairo(const NativeFont &aNativeFont,
+                              const RefPtr<UnscaledFont>& aUnscaledFont,
+                              Float aSize,
+                              cairo_scaled_font_t* aScaledFont);
 
   /**
    * This creates a simple data source surface for a certain size. It allocates
@@ -1583,6 +1624,7 @@ public:
   static already_AddRefed<ScaledFont>
     CreateScaledFontForDWriteFont(IDWriteFontFace* aFontFace,
                                   const gfxFontStyle* aStyle,
+                                  const RefPtr<UnscaledFont>& aUnscaledFont,
                                   Float aSize,
                                   bool aUseEmbeddedBitmap,
                                   bool aForceGDIMode);

@@ -10,6 +10,7 @@
 #include "gfxWindowsPlatform.h"
 #include "gfxPlatformFontList.h"
 #include "nsGkAtoms.h"
+#include "mozilla/gfx/UnscaledFontGDI.h"
 
 #include <windows.h>
 
@@ -112,8 +113,7 @@ public:
 
     virtual bool IsSymbolFont();
 
-    void FillLogFont(LOGFONTW *aLogFont, uint16_t aWeight, gfxFloat aSize,
-                     bool aUseCleartype);
+    void FillLogFont(LOGFONTW *aLogFont, uint16_t aWeight, gfxFloat aSize);
 
     static gfxWindowsFontType DetermineFontType(const NEWTEXTMETRICW& metrics, 
                                                 DWORD fontType)
@@ -263,7 +263,7 @@ public:
     gfxSparseBitSet mUnicodeRanges;
 
 protected:
-    friend class gfxWindowsFont;
+    friend class gfxGDIFont;
 
     GDIFontEntry(const nsAString& aFaceName, gfxWindowsFontType aFontType,
                  uint8_t aStyle, uint16_t aWeight, int16_t aStretch,
@@ -276,7 +276,11 @@ protected:
     virtual nsresult CopyFontTable(uint32_t aTableTag,
                                    nsTArray<uint8_t>& aBuffer) override;
 
+    already_AddRefed<mozilla::gfx::UnscaledFontGDI> LookupUnscaledFont(HFONT aFont);
+
     LOGFONTW mLogFont;
+
+    mozilla::WeakPtr<mozilla::gfx::UnscaledFont> mUnscaledFont;
 };
 
 // a single font family, referencing one or more faces

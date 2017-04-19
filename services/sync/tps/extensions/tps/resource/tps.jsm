@@ -20,6 +20,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/PlacesUtils.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
+Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://services-common/async.js");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://services-sync/main.js");
@@ -135,9 +136,6 @@ var TPS = {
       Services.obs.addObserver(this, aTopic, true);
     }, this);
 
-    // Configure some logging prefs for Sync itself.
-    Weave.Svc.Prefs.set("log.appender.dump", "Debug");
-
     /* global Authentication */
     Cu.import("resource://tps/auth/fxaccounts.jsm", module);
   },
@@ -177,7 +175,14 @@ var TPS = {
           break;
 
         case "sessionstore-windows-restored":
-          Utils.nextTick(this.RunNextTestAction, this);
+          // This is a terrible hack, but fixes cases where tps (usually cleanup)
+          // fails because of sessionstore restoring windows before tps is able
+          // to initialize. This used to take only 1 tick, but at some point
+          // session store started restoring windows sooner, or tps started
+          // initializing later.
+          setTimeout(() => {
+            this.RunNextTestAction();
+          }, 1000);
           break;
 
         case "weave:service:setup-complete":
@@ -590,6 +595,7 @@ var TPS = {
         waiter();
         Logger.logInfo("signout complete");
       }
+      Authentication.deleteEmail(this.config.fx_account.username);
     } catch (e) {
       Logger.logError("Failed to sign out: " + Log.exceptionStr(e));
     }
@@ -624,7 +630,7 @@ var TPS = {
       serverRecordDumpStr = JSON.stringify(serverRecords);
 
       let validator = new BookmarkValidator();
-      let {problemData} = validator.compareServerWithClient(serverRecords, clientTree);
+      let {problemData} = Async.promiseSpinningly(validator.compareServerWithClient(serverRecords, clientTree));
 
       for (let {name, count} of problemData.getSummary()) {
         // Exclude mobile showing up on the server hackily so that we don't

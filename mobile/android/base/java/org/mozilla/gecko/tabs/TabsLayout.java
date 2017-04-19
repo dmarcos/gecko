@@ -5,7 +5,6 @@
 
 package org.mozilla.gecko.tabs;
 
-import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
@@ -13,6 +12,7 @@ import org.mozilla.gecko.widget.RecyclerViewClickSupport;
 
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.util.AttributeSet;
 import android.view.View;
@@ -20,15 +20,19 @@ import android.widget.Button;
 
 import java.util.ArrayList;
 
+import static org.mozilla.gecko.Tab.TabType;
+
 public abstract class TabsLayout extends RecyclerView
         implements TabsPanel.TabsLayout,
         Tabs.OnTabsChangedListener,
         RecyclerViewClickSupport.OnItemClickListener,
-        TabsTouchHelperCallback.DismissListener {
+        TabsTouchHelperCallback.DismissListener,
+        TabsTouchHelperCallback.DragListener {
 
     private static final String LOGTAG = "Gecko" + TabsLayout.class.getSimpleName();
 
     private final boolean isPrivate;
+    private final TabType type;
     private TabsPanel tabsPanel;
     private final TabsLayoutAdapter tabsAdapter;
 
@@ -37,6 +41,7 @@ public abstract class TabsLayout extends RecyclerView
 
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.TabsLayout);
         isPrivate = (a.getInt(R.styleable.TabsLayout_tabs, 0x0) == 1);
+        type = TabType.BROWSING;
         a.recycle();
 
         tabsAdapter = new TabsLayoutAdapter(context, itemViewLayoutResId, isPrivate,
@@ -81,7 +86,6 @@ public abstract class TabsLayout extends RecyclerView
     public void hide() {
         setVisibility(View.GONE);
         Tabs.unregisterOnTabsChangedListener(this);
-        GeckoAppShell.notifyObservers("Tab:Screenshot:Cancel", "");
         tabsAdapter.clear();
     }
 
@@ -96,13 +100,18 @@ public abstract class TabsLayout extends RecyclerView
 
     @Override
     public void onTabChanged(Tab tab, Tabs.TabEvents msg, String data) {
+        if (msg != Tabs.TabEvents.RESTORED && tab.getType() != type) {
+            return;
+        }
+
         switch (msg) {
             case ADDED:
-                final int tabIndex = Integer.parseInt(data);
+                int tabIndex = Integer.parseInt(data);
+                tabIndex = tabIndex == Tabs.NEW_LAST_INDEX ? tabsAdapter.getItemCount() : tabIndex;
                 tabsAdapter.notifyTabInserted(tab, tabIndex);
                 if (addAtIndexRequiresScroll(tabIndex)) {
                     // (The SELECTED tab is updated *after* this call to ADDED, so don't just call
-                    // updateSelectedPosition().)
+                    // scrollSelectedTabToTopOfTray().)
                     scrollToPosition(tabIndex);
                 }
                 break;
@@ -125,8 +134,9 @@ public abstract class TabsLayout extends RecyclerView
     }
 
     /**
-     * Addition of a tab at selected positions (dependent on LayoutManager) will result in a tab
-     * being added out of view - return true if {@code index} is such a position.
+     * Addition of a tab at selected positions (dependent on LayoutManager) can result in a tab
+     * being added out of view - return true if {@code index} is such a position.  This should be
+     * called only after the add has occurred.
      */
     abstract protected boolean addAtIndexRequiresScroll(int index);
 
@@ -149,11 +159,26 @@ public abstract class TabsLayout extends RecyclerView
         Tabs.getInstance().notifyListeners(tab, Tabs.TabEvents.OPENED_FROM_TABS_TRAY);
     }
 
-    /** Updates the selected position in the list so that it will be scrolled to the right place. */
-    protected void updateSelectedPosition() {
+    @Override
+    public void onItemDismiss(View view) {
+        closeTab(view);
+    }
+
+    @Override
+    public boolean onItemMove(int fromPosition, int toPosition) {
+        return tabsAdapter.moveTab(fromPosition, toPosition);
+    }
+
+    /**
+     * Scroll the selected tab to the top of the tray.
+     * One of the motivations for scrolling to the top is so that, as often as possible, if we open
+     * a background tab from the selected tab, when we return to the tabs tray the new tab will be
+     * visible for selecting without requiring additional scrolling.
+     */
+    protected void scrollSelectedTabToTopOfTray() {
         final int selected = getSelectedAdapterPosition();
         if (selected != NO_POSITION) {
-            scrollToPosition(selected);
+            ((LinearLayoutManager)getLayoutManager()).scrollToPositionWithOffset(selected, 0);
         }
     }
 
@@ -164,13 +189,13 @@ public abstract class TabsLayout extends RecyclerView
         final Iterable<Tab> allTabs = Tabs.getInstance().getTabsInOrder();
 
         for (final Tab tab : allTabs) {
-            if (tab.isPrivate() == isPrivate) {
+            if (tab.isPrivate() == isPrivate && tab.getType() == type) {
                 tabData.add(tab);
             }
         }
 
         tabsAdapter.setTabs(tabData);
-        updateSelectedPosition();
+        scrollSelectedTabToTopOfTray();
     }
 
     private void closeTab(View view) {
@@ -198,11 +223,6 @@ public abstract class TabsLayout extends RecyclerView
                 Tabs.getInstance().closeTab(tab, false);
             }
         }
-    }
-
-    @Override
-    public void onItemDismiss(View view) {
-        closeTab(view);
     }
 
     @Override

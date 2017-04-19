@@ -157,6 +157,15 @@ public:
     mOriginAttributes = aOriginAttributes;
   }
 
+  void
+  SetAddonId(nsIPrincipal* aPrincipal)
+  {
+    nsAutoString addonId;
+    aPrincipal->GetAddonId(addonId);
+
+    mAddonId = addonId;
+  }
+
   bool
   PopulateArgumentsSequence(Sequence<JS::Value>& aSequence) const
   {
@@ -249,6 +258,8 @@ public:
   nsString mInnerIDString;
 
   OriginAttributes mOriginAttributes;
+
+  nsString mAddonId;
 
   nsString mMethodString;
 
@@ -582,7 +593,7 @@ private:
         innerID = NS_LITERAL_STRING("ServiceWorker");
         // Use scope as ID so the webconsole can decide if the message should
         // show up per tab
-        id.AssignWithConversion(mWorkerPrivate->WorkerName());
+        id.AssignWithConversion(mWorkerPrivate->ServiceWorkerScope());
       } else {
         innerID = NS_LITERAL_STRING("Worker");
       }
@@ -721,6 +732,9 @@ private:
 
     MOZ_ASSERT(argumentsValue.isObject());
     JS::Rooted<JSObject*> argumentsObj(aCx, &argumentsValue.toObject());
+    if (NS_WARN_IF(!argumentsObj)) {
+      return;
+    }
 
     uint32_t length;
     if (!JS_GetArrayLength(aCx, argumentsObj, &length)) {
@@ -999,6 +1013,8 @@ Console::TimeStamp(const GlobalObject& aGlobal,
 {
   JSContext* cx = aGlobal.Context();
 
+  ClearException ce(cx);
+
   Sequence<JS::Value> data;
   SequenceRooter<JS::Value> rooter(cx, &data);
 
@@ -1217,6 +1233,7 @@ Console::MethodInternal(JSContext* aCx, MethodName aMethodName,
     }
 
     oa = principal->OriginAttributesRef();
+    callData->SetAddonId(principal);
 
 #ifdef DEBUG
     if (!nsContentUtils::IsSystemPrincipal(principal)) {
@@ -1294,10 +1311,13 @@ Console::MethodInternal(JSContext* aCx, MethodName aMethodName,
           ? JS_GetEmptyStringValue(aCx)
           : aData[0]);
         JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, value));
+        if (!jsString) {
+          return;
+        }
 
         nsAutoJSString key;
-        if (jsString) {
-          key.init(aCx, jsString);
+        if (!key.init(aCx, jsString)) {
+          return;
         }
 
         timelines->AddMarkerForDocShell(docShell, Move(
@@ -1307,16 +1327,19 @@ Console::MethodInternal(JSContext* aCx, MethodName aMethodName,
       else if (isTimelineRecording && aData.Length() == 1) {
         JS::Rooted<JS::Value> value(aCx, aData[0]);
         JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, value));
-
-        if (jsString) {
-          nsAutoJSString key;
-          if (key.init(aCx, jsString)) {
-            timelines->AddMarkerForDocShell(docShell, Move(
-              MakeUnique<ConsoleTimelineMarker>(
-                key, aMethodName == MethodTime ? MarkerTracingType::START
-                                               : MarkerTracingType::END)));
-          }
+        if (!jsString) {
+          return;
         }
+
+        nsAutoJSString key;
+        if (!key.init(aCx, jsString)) {
+          return;
+        }
+
+        timelines->AddMarkerForDocShell(docShell, Move(
+          MakeUnique<ConsoleTimelineMarker>(
+            key, aMethodName == MethodTime ? MarkerTracingType::START
+                                           : MarkerTracingType::END)));
       }
     } else {
       WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
@@ -1500,6 +1523,8 @@ Console::PopulateConsoleNotificationInTheTargetScope(JSContext* aCx,
     event.mOriginAttributes = originAttributesValue;
   }
 
+  event.mAddonId = aData->mAddonId;
+
   event.mID.Construct();
   event.mInnerID.Construct();
 
@@ -1546,6 +1571,9 @@ Console::PopulateConsoleNotificationInTheTargetScope(JSContext* aCx,
     case MethodException:
     case MethodDebug:
     case MethodAssert:
+    case MethodGroup:
+    case MethodGroupCollapsed:
+    case MethodGroupEnd:
       event.mArguments.Construct();
       event.mStyles.Construct();
       if (NS_WARN_IF(!ProcessArguments(aCx, aArguments,
@@ -1567,7 +1595,7 @@ Console::PopulateConsoleNotificationInTheTargetScope(JSContext* aCx,
   if (aData->mMethodName == MethodGroup ||
       aData->mMethodName == MethodGroupCollapsed ||
       aData->mMethodName == MethodGroupEnd) {
-    ComposeGroupName(aCx, aArguments, event.mGroupName);
+    ComposeGroupName(aCx, event.mArguments.Value(), event.mGroupName);
   }
 
   else if (aData->mMethodName == MethodTime && !aArguments.IsEmpty()) {

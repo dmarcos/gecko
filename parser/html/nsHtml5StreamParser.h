@@ -140,11 +140,11 @@ class nsHtml5StreamParser : public nsICharsetDetectionObserver {
     NS_IMETHOD Notify(const char* aCharset, nsDetectionConfident aConf) override;
 
     // EncodingDeclarationHandler
-    // http://hg.mozilla.org/projects/htmlparser/file/tip/src/nu/validator/htmlparser/common/EncodingDeclarationHandler.java
+    // https://hg.mozilla.org/projects/htmlparser/file/tip/src/nu/validator/htmlparser/common/EncodingDeclarationHandler.java
     /**
      * Tree builder uses this to report a late <meta charset>
      */
-    bool internalEncodingDeclaration(nsString* aEncoding);
+    bool internalEncodingDeclaration(nsHtml5String aEncoding);
 
     // Not from an external interface
 
@@ -543,6 +543,12 @@ class nsHtml5StreamParser : public nsICharsetDetectionObserver {
      * Timer for flushing tree ops once in a while when not speculating.
      */
     nsCOMPtr<nsITimer>            mFlushTimer;
+
+    /**
+     * Mutex for protecting access to mFlushTimer (but not for the two
+     * mFlushTimerFoo booleans below).
+     */
+    mozilla::Mutex                mFlushTimerMutex;
 
     /**
      * Keeps track whether mFlushTimer has been armed. Unfortunately,

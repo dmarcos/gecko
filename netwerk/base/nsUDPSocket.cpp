@@ -7,6 +7,7 @@
 #include "mozilla/EndianUtils.h"
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/HoldDropJSObjects.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Telemetry.h"
 
 #include "nsSocketTransport2.h"
@@ -54,7 +55,8 @@ PostEvent(nsUDPSocket *s, nsUDPSocketFunc func)
 }
 
 static nsresult
-ResolveHost(const nsACString &host, nsIDNSListener *listener)
+ResolveHost(const nsACString &host, const OriginAttributes& aOriginAttributes,
+            nsIDNSListener *listener)
 {
   nsresult rv;
 
@@ -65,8 +67,8 @@ ResolveHost(const nsACString &host, nsIDNSListener *listener)
   }
 
   nsCOMPtr<nsICancelable> tmpOutstanding;
-  return dns->AsyncResolve(host, 0, listener, nullptr,
-                           getter_AddRefs(tmpOutstanding));
+  return dns->AsyncResolveNative(host, 0, listener, nullptr, aOriginAttributes,
+                                 getter_AddRefs(tmpOutstanding));
 
 }
 
@@ -263,6 +265,7 @@ nsUDPMessage::GetDataAsTArray()
 nsUDPSocket::nsUDPSocket()
   : mLock("nsUDPSocket.mLock")
   , mFD(nullptr)
+  , mOriginAttributes()
   , mAttached(false)
   , mByteReadCount(0)
   , mByteWriteCount(0)
@@ -472,12 +475,6 @@ nsUDPSocket::OnSocketReady(PRFileDesc *fd, int16_t outFlags)
   // support the maximum size of jumbo frames
   char buff[9216];
   count = PR_RecvFrom(mFD, buff, sizeof(buff), 0, &prClientAddr, PR_INTERVAL_NO_WAIT);
-
-  if (count < 1) {
-    NS_WARNING("error of recvfrom on UDP socket");
-    mCondition = NS_ERROR_UNEXPECTED;
-    return;
-  }
   mByteReadCount += count;
 
   FallibleTArray<uint8_t> data;
@@ -631,6 +628,9 @@ nsUDPSocket::InitWithAddress(const NetAddr *aAddr, nsIPrincipal *aPrincipal,
 
   bool addressReuse = (aOptionalArgc == 1) ? aAddressReuse : true;
 
+  if (aPrincipal) {
+    mOriginAttributes = aPrincipal->OriginAttributesRef();
+  }
   //
   // configure listening socket...
   //
@@ -1038,7 +1038,7 @@ SocketListenerProxyBackground::OnPacketReceivedRunnable::Run()
 
   FallibleTArray<uint8_t>& data = mMessage->GetDataAsTArray();
 
-  UDPSOCKET_LOG(("%s [this=%p], len %u", __FUNCTION__, this, data.Length()));
+  UDPSOCKET_LOG(("%s [this=%p], len %" PRIuSIZE, __FUNCTION__, this, data.Length()));
   nsCOMPtr<nsIUDPMessage> message = new UDPMessageProxy(&netAddr,
                                                         outputStream,
                                                         data);
@@ -1194,8 +1194,11 @@ nsUDPSocket::Send(const nsACString &aHost, uint16_t aPort,
                   const uint8_t *aData, uint32_t aDataLength,
                   uint32_t *_retval)
 {
-  NS_ENSURE_ARG(aData);
   NS_ENSURE_ARG_POINTER(_retval);
+  if (!((aData && aDataLength > 0) ||
+        (!aData && !aDataLength))) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   *_retval = 0;
 
@@ -1206,7 +1209,7 @@ nsUDPSocket::Send(const nsACString &aHost, uint16_t aPort,
 
   nsCOMPtr<nsIDNSListener> listener = new PendingSend(this, aPort, fallibleArray);
 
-  nsresult rv = ResolveHost(aHost, listener);
+  nsresult rv = ResolveHost(aHost, mOriginAttributes, listener);
   NS_ENSURE_SUCCESS(rv, rv);
 
   *_retval = aDataLength;
@@ -1279,7 +1282,7 @@ nsUDPSocket::SendBinaryStream(const nsACString &aHost, uint16_t aPort,
 
   nsCOMPtr<nsIDNSListener> listener = new PendingSendStream(this, aPort, aStream);
 
-  return ResolveHost(aHost, listener);
+  return ResolveHost(aHost, mOriginAttributes, listener);
 }
 
 NS_IMETHODIMP

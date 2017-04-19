@@ -48,8 +48,11 @@ namespace stagefright {
 static const int64_t OVERFLOW_ERROR = -INT64_MAX;
 
 // Calculate units*1,000,000/hz, trying to avoid overflow.
-// Return OVERFLOW_ERROR in case of unavoidable overflow.
+// Return OVERFLOW_ERROR in case of unavoidable overflow, or div by hz==0.
 int64_t unitsToUs(int64_t units, int64_t hz) {
+    if (hz == 0) {
+        return OVERFLOW_ERROR;
+    }
     const int64_t MAX_S = INT64_MAX / 1000000;
     if (std::abs(units) <= MAX_S) {
         return units * 1000000 / hz;
@@ -202,7 +205,7 @@ static void hexdump(const void *_data, size_t size) {
     const uint8_t *data = (const uint8_t *)_data;
     size_t offset = 0;
     while (offset < size) {
-        printf("0x%04x  ", offset);
+        printf("0x%04x  ", static_cast<unsigned int>(offset));
 
         size_t n = size - offset;
         if (n > 16) {
@@ -265,6 +268,9 @@ static const char *FourCC2MIME(uint32_t fourcc) {
 
         case FOURCC('V', 'P', '6', 'F'):
             return MEDIA_MIMETYPE_VIDEO_VP6;
+
+        case FOURCC('v', 'p', '0', '9'):
+            return MEDIA_MIMETYPE_VIDEO_VP9;
 
         default:
             ALOGE("Unknown MIME type %08x", fourcc);
@@ -750,7 +756,6 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
         case FOURCC('m', 'o', 'o', 'f'):
         case FOURCC('t', 'r', 'a', 'f'):
         case FOURCC('m', 'f', 'r', 'a'):
-        case FOURCC('u', 'd', 't', 'a'):
         case FOURCC('i', 'l', 's', 't'):
         case FOURCC('s', 'i', 'n', 'f'):
         case FOURCC('s', 'c', 'h', 'i'):
@@ -895,7 +900,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
                 }
                 entriesoffset += 4; // ignore media_rate_integer and media_rate_fraction.
                 if (media_time == -1 && i) {
-                    ALOGW("ignoring invalid empty edit", i);
+                    ALOGW("ignoring invalid empty edit");
                     break;
                 } else if (media_time == -1) {
                     // Starting offsets for tracks (streams) are represented by an initial empty edit.
@@ -1670,7 +1675,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
         case FOURCC('a', 'v', 'c', 'C'):
         {
             if (chunk_data_size < 7) {
-              ALOGE("short avcC chunk (%d bytes)", chunk_data_size);
+              ALOGE("short avcC chunk (%" PRId64 " bytes)", int64_t(chunk_data_size));
               return ERROR_MALFORMED;
             }
 
@@ -1710,7 +1715,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             char buffer[23];
             if (chunk_data_size != 7 &&
                 chunk_data_size != 23) {
-                ALOGE("Incorrect D263 box size %lld", chunk_data_size);
+                ALOGE("Incorrect D263 box size %" PRId64, chunk_data_size);
                 return ERROR_MALFORMED;
             }
 

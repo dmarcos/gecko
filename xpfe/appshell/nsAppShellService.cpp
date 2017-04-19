@@ -21,8 +21,6 @@
 #include "nsPIDOMWindow.h"
 #include "nsWebShellWindow.h"
 
-#include "prprf.h"
-
 #include "nsWidgetInitData.h"
 #include "nsWidgetsCID.h"
 #include "nsIWidget.h"
@@ -33,7 +31,6 @@
 #include "nsContentUtils.h"
 #include "nsThreadUtils.h"
 #include "nsISupportsPrimitives.h"
-#include "nsIChromeRegistry.h"
 #include "nsILoadContext.h"
 #include "nsIWebNavigation.h"
 #include "nsIWindowlessBrowser.h"
@@ -42,16 +39,19 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/StartupTimeline.h"
+#include "mozilla/intl/LocaleService.h"
 
 #include "nsEmbedCID.h"
 #include "nsIWebBrowser.h"
 #include "nsIDocShell.h"
+#include "gfxPlatform.h"
 
 #ifdef MOZ_INSTRUMENT_EVENT_LOOP
 #include "EventTracer.h"
 #endif
 
 using namespace mozilla;
+using mozilla::intl::LocaleService;
 
 // Default URL for the hidden window, can be overridden by a pref on Mac
 #define DEFAULT_HIDDENWINDOW_URL "resource://gre-resources/hiddenWindow.html"
@@ -185,7 +185,7 @@ nsAppShellService::DestroyHiddenWindow()
  */
 NS_IMETHODIMP
 nsAppShellService::CreateTopLevelWindow(nsIXULWindow *aParent,
-                                        nsIURI *aUrl, 
+                                        nsIURI *aUrl,
                                         uint32_t aChromeMask,
                                         int32_t aInitialWidth,
                                         int32_t aInitialHeight,
@@ -226,8 +226,10 @@ class WebBrowserChrome2Stub : public nsIWebBrowserChrome2,
                               public nsIInterfaceRequestor,
                               public nsSupportsWeakReference {
 protected:
+    nsCOMPtr<nsIWebBrowser> mBrowser;
     virtual ~WebBrowserChrome2Stub() {}
 public:
+    explicit WebBrowserChrome2Stub(nsIWebBrowser *aBrowser) : mBrowser(aBrowser) {}
     NS_DECL_ISUPPORTS
     NS_DECL_NSIWEBBROWSERCHROME
     NS_DECL_NSIWEBBROWSERCHROME2
@@ -356,7 +358,10 @@ WebBrowserChrome2Stub::GetDimensions(uint32_t flags, int32_t* x, int32_t* y, int
 NS_IMETHODIMP
 WebBrowserChrome2Stub::SetDimensions(uint32_t flags, int32_t x, int32_t y, int32_t cx, int32_t cy)
 {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  nsCOMPtr<nsIBaseWindow> window = do_QueryInterface(mBrowser);
+  NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
+  window->SetSize(cx, cy, true);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -508,7 +513,7 @@ nsAppShellService::CreateWindowlessBrowser(bool aIsChrome, nsIWindowlessBrowser 
    * an instance of WebBrowserChrome2Stub, which provides a stub implementation
    * of nsIWebBrowserChrome2.
    */
-  RefPtr<WebBrowserChrome2Stub> stub = new WebBrowserChrome2Stub();
+  RefPtr<WebBrowserChrome2Stub> stub = new WebBrowserChrome2Stub(browser);
   browser->SetContainerWindow(stub);
 
   nsCOMPtr<nsIWebNavigation> navigation = do_QueryInterface(browser);
@@ -519,12 +524,17 @@ nsAppShellService::CreateWindowlessBrowser(bool aIsChrome, nsIWindowlessBrowser 
 
   /* A windowless web browser doesn't have an associated OS level window. To
    * accomplish this, we initialize the window associated with our instance of
-   * nsWebBrowser with an instance of PuppetWidget, which provides a stub
-   * implementation of nsIWidget.
+   * nsWebBrowser with an instance of HeadlessWidget/PuppetWidget, which provide
+   * a stub implementation of nsIWidget.
    */
-  nsCOMPtr<nsIWidget> widget = nsIWidget::CreatePuppetWidget(nullptr);
+  nsCOMPtr<nsIWidget> widget;
+  if (gfxPlatform::IsHeadless()) {
+    widget = nsIWidget::CreateHeadlessWidget();
+  } else {
+    widget = nsIWidget::CreatePuppetWidget(nullptr);
+  }
   if (!widget) {
-    NS_ERROR("Couldn't create instance of PuppetWidget");
+    NS_ERROR("Couldn't create instance of stub widget");
     return NS_ERROR_FAILURE;
   }
   nsresult rv =
@@ -658,7 +668,7 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
   if (aChromeMask & nsIWebBrowserChrome::CHROME_WINDOW_POPUP)
     widgetInitData.mWindowType = eWindowType_popup;
 
-  if (aChromeMask & nsIWebBrowserChrome::CHROME_MAC_SUPPRESS_ANIMATION)
+  if (aChromeMask & nsIWebBrowserChrome::CHROME_SUPPRESS_ANIMATION)
     widgetInitData.mIsAnimationSuppressed = true;
 
 #ifdef XP_MACOSX
@@ -710,7 +720,7 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
     // but anyone can explicitly ask for a minimize button
     if (aChromeMask & nsIWebBrowserChrome::CHROME_WINDOW_MIN) {
       widgetInitData.mBorderStyle = static_cast<enum nsBorderStyle>(widgetInitData.mBorderStyle | eBorderStyle_minimize);
-    }  
+    }
   }
 
   if (aInitialWidth == nsIAppShellService::SIZE_TO_CONTENT ||
@@ -722,15 +732,7 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
 
   bool center = aChromeMask & nsIWebBrowserChrome::CHROME_CENTER_SCREEN;
 
-  nsCOMPtr<nsIXULChromeRegistry> reg =
-    mozilla::services::GetXULChromeRegistryService();
-  if (reg) {
-    nsAutoCString package;
-    package.AssignLiteral("global");
-    bool isRTL = false;
-    reg->IsLocaleRTL(package, &isRTL);
-    widgetInitData.mRTL = isRTL;
-  }
+  widgetInitData.mRTL = LocaleService::GetInstance()->IsAppLocaleRTL();
 
 #ifdef MOZ_WIDGET_GONK
   // B2G multi-screen support. Screen ID is for differentiating screens of

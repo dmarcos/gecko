@@ -805,7 +805,7 @@ var gDownloadingPage = {
     if (this._downloadStatus.textContent == status)
       return;
     while (this._downloadStatus.hasChildNodes())
-      this._downloadStatus.removeChild(this._downloadStatus.firstChild);
+      this._downloadStatus.firstChild.remove();
     this._downloadStatus.appendChild(document.createTextNode(status));
   },
 
@@ -871,7 +871,7 @@ var gDownloadingPage = {
     let applyingStatus = gUpdates.getAUSString("applyingUpdate");
     this._setStatus(applyingStatus);
 
-    Services.obs.addObserver(this, "update-staged", false);
+    Services.obs.addObserver(this, "update-staged");
     this._updateApplyingObserver = true;
   },
 
@@ -1204,6 +1204,8 @@ var gErrorPatchingPage = {
 
   onWizardNext() {
     switch (gUpdates.update.selectedPatch.state) {
+      case STATE_APPLIED:
+      case STATE_APPLIED_SERVICE:
       case STATE_PENDING:
       case STATE_PENDING_SERVICE:
         gUpdates.wiz.goTo("finished");
@@ -1347,7 +1349,7 @@ var gFinishedPage = {
    * When elevation is required and the user clicks "No Thanks" in the wizard.
    */
   onExtra2: Task.async(function*() {
-    Services.obs.notifyObservers(null, "update-canceled", null);
+    Services.obs.notifyObservers(null, "update-canceled");
     let um = CoC["@mozilla.org/updates/update-manager;1"].
                getService(CoI.nsIUpdateManager);
     um.cleanupActiveUpdate();

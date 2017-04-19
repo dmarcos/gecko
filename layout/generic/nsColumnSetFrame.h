@@ -72,10 +72,6 @@ public:
 
   virtual nsIAtom* GetType() const override;
 
-  virtual void PaintColumnRule(nsRenderingContext* aCtx,
-                               const nsRect&        aDirtyRect,
-                               const nsPoint&       aPt);
-
   /**
    * Similar to nsBlockFrame::DrainOverflowLines. Locate any columns not
    * handled by our prev-in-flow, and any columns sitting on our own
@@ -83,11 +79,23 @@ public:
    */
   void DrainOverflowColumns();
 
+  /**
+   * Update the style on our column-content frames.
+   */
+  void DoUpdateStyleOfOwnedAnonBoxes(mozilla::ServoStyleSet& aStyleSet,
+                                     nsStyleChangeList& aChangeList,
+                                     nsChangeHint aHintForThisFrame) override;
+
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override {
     return MakeFrameName(NS_LITERAL_STRING("ColumnSet"), aResult);
   }
 #endif
+
+  void CreateBorderRenderers(nsTArray<nsCSSBorderRenderer>& aBorderRenderers,
+                             nsRenderingContext* aCtx,
+                             const nsRect& aDirtyRect,
+                             const nsPoint& aPt);
 
 protected:
   nscoord        mLastBalanceBSize;

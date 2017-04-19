@@ -50,7 +50,7 @@ function checkPassValidPin(pinValue, settingPin, expectedMaxAge) {
   }
   try {
     gSSService.processHeader(Ci.nsISiteSecurityService.HEADER_HPKP, uri,
-                             pinValue, sslStatus, 0, maxAge);
+                             pinValue, sslStatus, 0, {}, maxAge);
     ok(true, "Valid pin should be accepted");
   } catch (e) {
     ok(false, "Valid pin should have been accepted");
@@ -63,8 +63,8 @@ function checkPassValidPin(pinValue, settingPin, expectedMaxAge) {
 
   // after processing ensure that the postconditions are true, if setting
   // the host must be pinned, if removing the host must not be pinned
-  let hostIsPinned = gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HPKP,
-                                             "a.pinning2.example.com", 0);
+  let hostIsPinned = gSSService.isSecureURI(Ci.nsISiteSecurityService.HEADER_HPKP,
+                                             uri, 0);
   if (settingPin) {
     ok(hostIsPinned, "Host should be considered pinned");
   } else {
@@ -123,7 +123,7 @@ function run_test() {
   checkFailParseInvalidPin("thisisinvalidtest");
   checkFailParseInvalidPin("invalid" + GOOD_MAX_AGE + VALID_PIN1 + BACKUP_PIN1);
 
-  checkPassRemovingPin("max-age=0"); //test removal without terminating ';'
+  checkPassRemovingPin("max-age=0"); // test removal without terminating ';'
   checkPassRemovingPin(MAX_AGE_ZERO);
   checkPassRemovingPin(MAX_AGE_ZERO + VALID_PIN1);
 

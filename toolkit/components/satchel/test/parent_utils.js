@@ -1,3 +1,7 @@
+/* eslint-env mozilla/frame-script */
+// assert is available to chrome scripts loaded via SpecialPowers.loadChromeScript.
+/* global assert */
+
 const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/FormHistory.jsm");
@@ -138,7 +142,7 @@ addMessageListener("getPopupState", () => {
 });
 
 addMessageListener("addObserver", () => {
-  Services.obs.addObserver(ParentUtils, "satchel-storage-changed", false);
+  Services.obs.addObserver(ParentUtils, "satchel-storage-changed");
 });
 addMessageListener("removeObserver", () => {
   Services.obs.removeObserver(ParentUtils, "satchel-storage-changed");

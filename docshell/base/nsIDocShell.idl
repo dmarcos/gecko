@@ -373,7 +373,7 @@ interface nsIDocShell : nsIDocShellTreeItem
 
   /*
    * The size, in CSS pixels, of the horizontal margins for the <body> of an
-   * HTML document in this docshel; used to implement the marginwidth attribute
+   * HTML document in this docshell; used to implement the marginwidth attribute
    * on HTML <frame>/<iframe> elements.  A value smaller than zero indicates
    * that the attribute was not set.
    */
@@ -381,7 +381,7 @@ interface nsIDocShell : nsIDocShellTreeItem
 
   /*
    * The size, in CSS pixels, of the vertical margins for the <body> of an HTML
-   * document in this docshel; used to implement the marginheight attribute on
+   * document in this docshell; used to implement the marginheight attribute on
    * HTML <frame>/<iframe> elements.  A value smaller than zero indicates that
    * the attribute was not set.
    */
@@ -1127,14 +1127,18 @@ interface nsIDocShell : nsIDocShellTreeItem
   [infallible] readonly attribute boolean isOnlyToplevelInTabGroup;
 
   /**
-   * Returns `true` if this docshell is loaded within a Large-Allocation
-   * process.
-   */
-  [infallible] readonly attribute boolean inLargeAllocProcess;
-
-  /**
    * Returns `true` if this docshell was created due to a Large-Allocation
    * header, and has not seen the initiating load yet.
    */
   [infallible] readonly attribute boolean awaitingLargeAlloc;
+
+  /**
+   * Attribute that determines whether tracking protection is enabled.
+   */
+  attribute boolean useTrackingProtection;
+
+ /**
+  * Fire a dummy location change event asynchronously.
+  */
+  [noscript] void dispatchLocationChangeEvent();
 };

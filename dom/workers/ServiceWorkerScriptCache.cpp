@@ -240,6 +240,7 @@ public:
                           CompareCallback* aCallback)
     : mRegistration(aRegistration)
     , mCallback(aCallback)
+    , mInternalHeaders(new InternalHeaders())
     , mState(WaitingForOpen)
     , mNetworkFinished(false)
     , mCacheFinished(false)
@@ -434,10 +435,19 @@ public:
     return mCacheStorage;
   }
 
-  void
-  InitChannelInfo(nsIChannel* aChannel)
+  nsresult
+  OnStartRequest(nsIChannel* aChannel)
   {
+    nsresult rv = SetPrincipalInfo(aChannel);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
     mChannelInfo.InitFromChannel(aChannel);
+
+    mInternalHeaders->FillResponseHeaders(aChannel);
+
+    return NS_OK;
   }
 
   nsresult
@@ -562,6 +572,9 @@ private:
       ir->SetPrincipalInfo(Move(mPrincipalInfo));
     }
 
+    IgnoredErrorResult ignored;
+    ir->Headers()->Fill(*mInternalHeaders, ignored);
+
     RefPtr<Response> response = new Response(aCache->GetGlobalObject(), ir);
 
     RequestOrUSVString request;
@@ -594,6 +607,7 @@ private:
   nsString mNewCacheName;
 
   ChannelInfo mChannelInfo;
+  RefPtr<InternalHeaders> mInternalHeaders;
 
   UniquePtr<mozilla::ipc::PrincipalInfo> mPrincipalInfo;
 
@@ -657,11 +671,13 @@ CompareNetwork::Initialize(nsIPrincipal* aPrincipal, const nsAString& aURL, nsIL
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
   if (httpChannel) {
     // Spec says no redirects allowed for SW scripts.
-    httpChannel->SetRedirectionLimit(0);
+    rv = httpChannel->SetRedirectionLimit(0);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
 
-    httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Service-Worker"),
-                                  NS_LITERAL_CSTRING("script"),
-                                  /* merge */ false);
+    rv = httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Service-Worker"),
+                                       NS_LITERAL_CSTRING("script"),
+                                       /* merge */ false);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
 
   nsCOMPtr<nsIStreamLoader> loader;
@@ -693,8 +709,7 @@ CompareNetwork::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
   MOZ_ASSERT(channel == mChannel);
 #endif
 
-  mManager->InitChannelInfo(mChannel);
-  nsresult rv = mManager->SetPrincipalInfo(mChannel);
+  nsresult rv = mManager->OnStartRequest(mChannel);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -752,7 +767,7 @@ CompareNetwork::OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aContext
     // Get the stringified numeric status code, not statusText which could be
     // something misleading like OK for a 404.
     uint32_t status = 0;
-    httpChannel->GetResponseStatus(&status); // don't care if this fails, use 0.
+    Unused << httpChannel->GetResponseStatus(&status); // don't care if this fails, use 0.
     nsAutoString statusAsText;
     statusAsText.AppendInt(status);
 

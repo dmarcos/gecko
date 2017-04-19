@@ -22,16 +22,20 @@ class FrameParser;
 
 class ADTSTrackDemuxer;
 
-class ADTSDemuxer : public MediaDataDemuxer {
+class ADTSDemuxer : public MediaDataDemuxer
+{
 public:
   // MediaDataDemuxer interface.
   explicit ADTSDemuxer(MediaResource* aSource);
   RefPtr<InitPromise> Init() override;
   bool HasTrackType(TrackInfo::TrackType aType) const override;
   uint32_t GetNumberTracks(TrackInfo::TrackType aType) const override;
-  already_AddRefed<MediaTrackDemuxer> GetTrackDemuxer(
-    TrackInfo::TrackType aType, uint32_t aTrackNumber) override;
+  already_AddRefed<MediaTrackDemuxer>
+  GetTrackDemuxer(TrackInfo::TrackType aType, uint32_t aTrackNumber) override;
   bool IsSeekable() const override;
+
+  // Return true if a valid ADTS frame header could be found.
+  static bool ADTSSniffer(const uint8_t* aData, const uint32_t aLength);
 
 private:
   bool InitInternal();
@@ -40,7 +44,8 @@ private:
   RefPtr<ADTSTrackDemuxer> mTrackDemuxer;
 };
 
-class ADTSTrackDemuxer : public MediaTrackDemuxer {
+class ADTSTrackDemuxer : public MediaTrackDemuxer
+{
 public:
   explicit ADTSTrackDemuxer(MediaResource* aSource);
 

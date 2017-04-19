@@ -217,7 +217,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
   ensurePrefObserver: function () {
     if (!this._prefObserverRegistered) {
       this._prefObserverRegistered = true;
-      Services.prefs.addObserver("devtools.", this, false);
+      Services.prefs.addObserver("devtools.", this);
     }
   },
 
@@ -567,7 +567,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
       let target = TargetFactory.forTab(aTab);
 
       gDevTools.showToolbox(target, "jsdebugger").then(toolbox => {
-        let threadClient = toolbox.getCurrentPanel().panelWin.gThreadClient;
+        let threadClient = toolbox.threadClient;
 
         // Break in place, which means resuming the debuggee thread and pausing
         // right before the next step happens.
@@ -751,7 +751,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
     // Destroy toolboxes for closed window
     for (let [target, toolbox] of gDevTools._toolboxes) {
-      if (toolbox.win.top == win) {
+      if (target.tab && target.tab.ownerDocument.defaultView == win) {
         toolbox.destroy();
       }
     }
@@ -867,11 +867,11 @@ gDevTools.on("tool-unregistered", function (ev, toolId) {
 gDevTools.on("toolbox-ready", gDevToolsBrowser._updateMenuCheckbox);
 gDevTools.on("toolbox-destroyed", gDevToolsBrowser._updateMenuCheckbox);
 
-Services.obs.addObserver(gDevToolsBrowser, "quit-application", false);
-Services.obs.addObserver(gDevToolsBrowser, "browser-delayed-startup-finished", false);
+Services.obs.addObserver(gDevToolsBrowser, "quit-application");
+Services.obs.addObserver(gDevToolsBrowser, "browser-delayed-startup-finished");
 // Watch for module loader unload. Fires when the tools are reloaded.
-Services.obs.addObserver(gDevToolsBrowser, "sdk:loader:destroy", false);
-Services.obs.addObserver(gDevToolsBrowser, "lightweight-theme-changed", false);
+Services.obs.addObserver(gDevToolsBrowser, "sdk:loader:destroy");
+Services.obs.addObserver(gDevToolsBrowser, "lightweight-theme-changed");
 
 // Fake end of browser window load event for all already opened windows
 // that is already fully loaded.

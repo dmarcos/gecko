@@ -24,18 +24,31 @@ linux32/opt:
     test-sets:
         -  linux32-tests
         -  linux32-opt-tests
+        -  awsy
+linux32-nightly/opt:
+    build-platform: linux-nightly/opt
+    test-sets:
+        -  linux32-tests
+        -  linux32-opt-tests
 
 linux64/debug:
     build-platform: linux64/debug
     test-sets:
         - common-tests
-        - external-media-tests
         - web-platform-tests
 linux64/opt:
     build-platform: linux64/opt
     test-sets:
         - common-tests
-        - external-media-tests
+        - web-platform-tests
+        - opt-only-tests
+        - desktop-screenshot-capture
+        - talos
+        - awsy
+linux64-nightly/opt:
+    build-platform: linux64-nightly/opt
+    test-sets:
+        - common-tests
         - web-platform-tests
         - opt-only-tests
         - desktop-screenshot-capture
@@ -46,7 +59,6 @@ linux64-pgo/opt:
     build-platform: linux64-pgo/opt
     test-sets:
         - common-tests
-        - external-media-tests
         - web-platform-tests
         - talos
 
@@ -67,6 +79,18 @@ linux64-stylo/opt:
         - stylo-tests
         - talos
 
+# QR builds just run a subset right now. Note that the tests in this
+# test set are further restricted in tests.yml to run on certain projects
+# only, to avoid adding too much infra load.
+linux64-qr/opt:
+    build-platform: linux64-qr/opt
+    test-sets:
+        - qr-tests
+linux64-qr/debug:
+    build-platform: linux64-qr/debug
+    test-sets:
+        - qr-tests
+
 linux64-ccov/opt:
     build-platform: linux64-ccov/opt
     test-sets:
@@ -84,30 +108,38 @@ windows7-32-vm/debug:
     build-platform: win32/debug
     test-sets:
         - windows-vm-tests
+        - external-media-tests
 windows7-32-vm/opt:
     build-platform: win32/opt
     test-sets:
         - windows-vm-tests
+        - external-media-tests
+        - external-media-tests-slow
+        - awsy
 
 # win32 gpu
-#windows7-32/debug:
-#    build-platform: win32/debug
-#    test-sets:
-#        - windows-gpu-tests
-#windows7-32/opt:
-#    build-platform: win32/opt
-#    test-sets:
-#        - windows-gpu-tests
+windows7-32/debug:
+    build-platform: win32/debug
+    test-sets:
+        - windows-gpu-tests
+windows7-32/opt:
+    build-platform: win32/opt
+    test-sets:
+        - windows-gpu-tests
 
 # win64 vm
 windows10-64-vm/debug:
     build-platform: win64/debug
     test-sets:
-        - windows-vm-tests
+#        - windows-vm-tests
+        - external-media-tests
 windows10-64-vm/opt:
     build-platform: win64/opt
     test-sets:
-        - windows-vm-tests
+#        - windows-vm-tests
+        - external-media-tests
+        - external-media-tests-slow
+        - awsy
 
 # win64 gpu
 #windows10-64/debug:
@@ -119,6 +151,11 @@ windows10-64-vm/opt:
 #    test-sets:
 #        - windows-gpu-tests
 
+windows10-64-asan/opt:
+    build-platform: win64-asan/opt
+    test-sets:
+        - common-tests
+
 ##
 # MacOS X platforms (matching /macosx.*/)
 
@@ -126,11 +163,12 @@ macosx64/debug:
     build-platform: macosx64/debug
     test-sets:
         - macosx64-tests-debug
-# Disable bbb talos tests for mac until we disable bb scheduling
+
 # macosx64/opt:
 #     build-platform: macosx64/opt
 #     test-sets:
 #         - macosx64-tests-talos
+#         - macosx64-tests-debug
 
 ##
 # Android platforms (matching /android.*/)

@@ -19,6 +19,16 @@
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 
+#if defined(DEBUG) || !defined(RELEASE_OR_BETA)
+#define PROMISE_DEBUG
+#endif
+
+#ifdef PROMISE_DEBUG
+#define PROMISE_ASSERT MOZ_RELEASE_ASSERT
+#else
+#define PROMISE_ASSERT(...) do { } while (0)
+#endif
+
 namespace mozilla {
 
 extern LazyLogModule gMozPromiseLog;
@@ -120,6 +130,8 @@ template<typename T> class MozPromiseRequestHolder;
 template<typename ResolveValueT, typename RejectValueT, bool IsExclusive>
 class MozPromise : public MozPromiseRefcountable
 {
+  static const uint32_t sMagic = 0xcecace11;
+
 public:
   typedef ResolveValueT ResolveValueType;
   typedef RejectValueT RejectValueType;
@@ -176,6 +188,9 @@ protected:
     , mMutex("MozPromise Mutex")
     , mHaveRequest(false)
     , mIsCompletionPromise(aIsCompletionPromise)
+#ifdef PROMISE_DEBUG
+    , mMagic4(&mMutex)
+#endif
   {
     PROMISE_LOG("%s creating MozPromise (%p)", mCreationSite, this);
   }
@@ -217,6 +232,7 @@ private:
       : mPromise(new typename AllPromiseType::Private(__func__))
       , mOutstandingPromises(aDependentPromises)
     {
+      MOZ_ASSERT(aDependentPromises > 0);
       mResolveValues.SetLength(aDependentPromises);
     }
 
@@ -264,6 +280,10 @@ public:
 
   static RefPtr<AllPromiseType> All(AbstractThread* aProcessingThread, nsTArray<RefPtr<MozPromise>>& aPromises)
   {
+    if (aPromises.Length() == 0) {
+      return AllPromiseType::CreateAndResolve(nsTArray<ResolveValueType>(), __func__);
+    }
+
     RefPtr<AllPromiseHolder> holder = new AllPromiseHolder(aPromises.Length());
     for (size_t i = 0; i < aPromises.Length(); ++i) {
       aPromises[i]->Then(aProcessingThread, __func__,
@@ -278,12 +298,6 @@ public:
   {
   public:
     virtual void Disconnect() = 0;
-
-    // MSVC complains when an inner class (ThenValueBase::{Resolve,Reject}Runnable)
-    // tries to access an inherited protected member.
-    bool IsDisconnected() const { return mDisconnected; }
-
-    virtual void AssertIsDead() = 0;
 
   protected:
     Request() : mComplete(false), mDisconnected(false) {}
@@ -304,9 +318,10 @@ protected:
   class ThenValueBase : public Request
   {
     friend class MozPromise;
+    static const uint32_t sMagic = 0xfadece11;
 
   public:
-    class ResolveOrRejectRunnable : public Runnable
+    class ResolveOrRejectRunnable : public CancelableRunnable
     {
     public:
       ResolveOrRejectRunnable(ThenValueBase* aThenValue, MozPromise* aPromise)
@@ -332,6 +347,11 @@ protected:
         return NS_OK;
       }
 
+      nsresult Cancel() override
+      {
+        return Run();
+      }
+
     private:
       RefPtr<ThenValueBase> mThenValue;
       RefPtr<MozPromise> mPromise;
@@ -341,10 +361,21 @@ protected:
                   const char* aCallSite)
       : mResponseTarget(aResponseTarget)
       , mCallSite(aCallSite)
-    { }
-
-    void AssertIsDead() override
     {
+      MOZ_ASSERT(aResponseTarget);
+    }
+
+#ifdef PROMISE_DEBUG
+    ~ThenValueBase()
+    {
+      mMagic1 = 0;
+      mMagic2 = 0;
+    }
+#endif
+
+    void AssertIsDead()
+    {
+      PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic);
       // We want to assert that this ThenValues is dead - that is to say, that
       // there are no consumers waiting for the result. In the case of a normal
       // ThenValue, we check that it has been disconnected, which is the way
@@ -361,25 +392,25 @@ protected:
 
     void Dispatch(MozPromise *aPromise)
     {
+      PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic);
       aPromise->mMutex.AssertCurrentThreadOwns();
       MOZ_ASSERT(!aPromise->IsPending());
 
-      RefPtr<Runnable> runnable =
-        static_cast<Runnable*>(new (typename ThenValueBase::ResolveOrRejectRunnable)(this, aPromise));
+      nsCOMPtr<nsIRunnable> r = new ResolveOrRejectRunnable(this, aPromise);
       PROMISE_LOG("%s Then() call made from %s [Runnable=%p, Promise=%p, ThenValue=%p]",
-                  aPromise->mValue.IsResolve() ? "Resolving" : "Rejecting", ThenValueBase::mCallSite,
-                  runnable.get(), aPromise, this);
+                  aPromise->mValue.IsResolve() ? "Resolving" : "Rejecting", mCallSite,
+                  r.get(), aPromise, this);
 
       // Promise consumers are allowed to disconnect the Request object and
       // then shut down the thread or task queue that the promise result would
       // be dispatched on. So we unfortunately can't assert that promise
       // dispatch succeeds. :-(
-      mResponseTarget->Dispatch(runnable.forget(), AbstractThread::DontAssertDispatchSuccess);
+      mResponseTarget->Dispatch(r.forget(), AbstractThread::DontAssertDispatchSuccess);
     }
 
     void Disconnect() override
     {
-      MOZ_ASSERT(ThenValueBase::mResponseTarget->IsCurrentThreadIn());
+      MOZ_DIAGNOSTIC_ASSERT(mResponseTarget->IsCurrentThreadIn());
       MOZ_DIAGNOSTIC_ASSERT(!Request::mComplete);
       Request::mDisconnected = true;
 
@@ -395,6 +426,8 @@ protected:
 
     void DoResolveOrReject(const ResolveOrRejectValue& aValue)
     {
+      PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic);
+      MOZ_DIAGNOSTIC_ASSERT(mResponseTarget->IsCurrentThreadIn());
       Request::mComplete = true;
       if (Request::mDisconnected) {
         PROMISE_LOG("ThenValue::DoResolveOrReject disconnected - bailing out [this=%p]", this);
@@ -416,7 +449,13 @@ protected:
     }
 
     RefPtr<AbstractThread> mResponseTarget; // May be released on any thread.
+#ifdef PROMISE_DEBUG
+    uint32_t mMagic1 = sMagic;
+#endif
     RefPtr<Private> mCompletionPromise;
+#ifdef PROMISE_DEBUG
+    uint32_t mMagic2 = sMagic;
+#endif
     const char* mCallSite;
   };
 
@@ -666,8 +705,9 @@ public:
   void ThenInternal(AbstractThread* aResponseThread, ThenValueBase* aThenValue,
                     const char* aCallSite)
   {
+    PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic && mMagic3 == sMagic && mMagic4 == &mMutex);
+    MOZ_ASSERT(aResponseThread);
     MutexAutoLock lock(mMutex);
-    MOZ_ASSERT(aResponseThread->IsDispatchReliable());
     MOZ_DIAGNOSTIC_ASSERT(!IsExclusive || !mHaveRequest);
     mHaveRequest = true;
     PROMISE_LOG("%s invoking Then() [this=%p, aThenValue=%p, isPending=%d]",
@@ -700,7 +740,10 @@ private:
       : mResponseThread(aResponseThread)
       , mCallSite(aCallSite)
       , mThenValue(aThenValue)
-      , mReceiver(aReceiver) {}
+      , mReceiver(aReceiver)
+    {
+      MOZ_ASSERT(aResponseThread);
+    }
 
     ThenCommand(ThenCommand&& aOther) = default;
 
@@ -819,6 +862,7 @@ public:
   // AssertIsDead() only.
   void AssertIsDead()
   {
+    PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic && mMagic3 == sMagic && mMagic4 == &mMutex);
     MutexAutoLock lock(mMutex);
     for (auto&& then : mThenValues) {
       then->AssertIsDead();
@@ -873,15 +917,35 @@ protected:
       MOZ_ASSERT(mThenValues.IsEmpty());
       MOZ_ASSERT(mChainedPromises.IsEmpty());
     }
+#ifdef PROMISE_DEBUG
+    mMagic1 = 0;
+    mMagic2 = 0;
+    mMagic3 = 0;
+    mMagic4 = nullptr;
+#endif
   };
 
   const char* mCreationSite; // For logging
   Mutex mMutex;
   ResolveOrRejectValue mValue;
-  nsTArray<RefPtr<ThenValueBase>> mThenValues;
+#ifdef PROMISE_DEBUG
+  uint32_t mMagic1 = sMagic;
+#endif
+  // Try shows we never have more than 3 elements when IsExclusive is false.
+  // So '3' is a good value to avoid heap allocation in most cases.
+  AutoTArray<RefPtr<ThenValueBase>, IsExclusive ? 1 : 3> mThenValues;
+#ifdef PROMISE_DEBUG
+  uint32_t mMagic2 = sMagic;
+#endif
   nsTArray<RefPtr<Private>> mChainedPromises;
+#ifdef PROMISE_DEBUG
+  uint32_t mMagic3 = sMagic;
+#endif
   bool mHaveRequest;
   const bool mIsCompletionPromise;
+#ifdef PROMISE_DEBUG
+  void* mMagic4;
+#endif
 };
 
 template<typename ResolveValueT, typename RejectValueT, bool IsExclusive>
@@ -895,6 +959,7 @@ public:
   template<typename ResolveValueT_>
   void Resolve(ResolveValueT_&& aResolveValue, const char* aResolveSite)
   {
+    PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic && mMagic3 == sMagic && mMagic4 == &mMutex);
     MutexAutoLock lock(mMutex);
     MOZ_ASSERT(IsPending());
     PROMISE_LOG("%s resolving MozPromise (%p created at %s)", aResolveSite, this, mCreationSite);
@@ -905,6 +970,7 @@ public:
   template<typename RejectValueT_>
   void Reject(RejectValueT_&& aRejectValue, const char* aRejectSite)
   {
+    PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic && mMagic3 == sMagic && mMagic4 == &mMutex);
     MutexAutoLock lock(mMutex);
     MOZ_ASSERT(IsPending());
     PROMISE_LOG("%s rejecting MozPromise (%p created at %s)", aRejectSite, this, mCreationSite);
@@ -915,6 +981,7 @@ public:
   template<typename ResolveOrRejectValue_>
   void ResolveOrReject(ResolveOrRejectValue_&& aValue, const char* aSite)
   {
+    PROMISE_ASSERT(mMagic1 == sMagic && mMagic2 == sMagic && mMagic3 == sMagic && mMagic4 == &mMutex);
     MutexAutoLock lock(mMutex);
     MOZ_ASSERT(IsPending());
     PROMISE_LOG("%s resolveOrRejecting MozPromise (%p created at %s)", aSite, this, mCreationSite);
@@ -1163,7 +1230,7 @@ private:
 
 template<typename PromiseType, typename MethodType, typename ThisType,
          typename... Storages>
-class ProxyRunnable : public Runnable
+class ProxyRunnable : public CancelableRunnable
 {
 public:
   ProxyRunnable(typename PromiseType::Private* aProxyPromise,
@@ -1176,6 +1243,11 @@ public:
     mMethodCall = nullptr;
     p->ChainTo(mProxyPromise.forget(), "<Proxy Promise>");
     return NS_OK;
+  }
+
+  nsresult Cancel() override
+  {
+    return Run();
   }
 
 private:
@@ -1192,6 +1264,8 @@ InvokeAsyncImpl(AbstractThread* aTarget, ThisType* aThisVal,
                 RefPtr<PromiseType>(ThisType::*aMethod)(ArgTypes...),
                 ActualArgTypes&&... aArgs)
 {
+  MOZ_ASSERT(aTarget);
+
   typedef RefPtr<PromiseType>(ThisType::*MethodType)(ArgTypes...);
   typedef detail::MethodCall<PromiseType, MethodType, ThisType, Storages...> MethodCallType;
   typedef detail::ProxyRunnable<PromiseType, MethodType, ThisType, Storages...> ProxyRunnableType;
@@ -1200,7 +1274,6 @@ InvokeAsyncImpl(AbstractThread* aTarget, ThisType* aThisVal,
     new MethodCallType(aMethod, aThisVal, Forward<ActualArgTypes>(aArgs)...);
   RefPtr<typename PromiseType::Private> p = new (typename PromiseType::Private)(aCallerName);
   RefPtr<ProxyRunnableType> r = new ProxyRunnableType(p, methodCall);
-  MOZ_ASSERT(aTarget->IsDispatchReliable());
   aTarget->Dispatch(r.forget());
   return p.forget();
 }
@@ -1268,7 +1341,7 @@ InvokeAsync(AbstractThread* aTarget, ThisType* aThisVal, const char* aCallerName
 namespace detail {
 
 template<typename Function, typename PromiseType>
-class ProxyFunctionRunnable : public Runnable
+class ProxyFunctionRunnable : public CancelableRunnable
 {
   typedef typename Decay<Function>::Type FunctionStorage;
 public:
@@ -1284,6 +1357,11 @@ public:
     mFunction = nullptr;
     p->ChainTo(mProxyPromise.forget(), "<Proxy Promise>");
     return NS_OK;
+  }
+
+  nsresult Cancel() override
+  {
+    return Run();
   }
 
 private:
@@ -1313,6 +1391,7 @@ InvokeAsync(AbstractThread* aTarget, const char* aCallerName,
                 && IsMozPromise<typename RemoveSmartPointer<
                                            decltype(aFunction())>::Type>::value,
                 "Function object must return RefPtr<MozPromise>");
+  MOZ_ASSERT(aTarget);
   typedef typename RemoveSmartPointer<decltype(aFunction())>::Type PromiseType;
   typedef detail::ProxyFunctionRunnable<Function, PromiseType> ProxyRunnableType;
 
@@ -1320,7 +1399,6 @@ InvokeAsync(AbstractThread* aTarget, const char* aCallerName,
     new (typename PromiseType::Private)(aCallerName);
   RefPtr<ProxyRunnableType> r =
     new ProxyRunnableType(p, Forward<Function>(aFunction));
-  MOZ_ASSERT(aTarget->IsDispatchReliable());
   aTarget->Dispatch(r.forget());
   return p.forget();
 }
@@ -1344,6 +1422,8 @@ InvokeAsync(AbstractThread* aTarget, const char* aCallerName,
 }
 
 #undef PROMISE_LOG
+#undef PROMISE_ASSERT
+#undef PROMISE_DEBUG
 
 } // namespace mozilla
 

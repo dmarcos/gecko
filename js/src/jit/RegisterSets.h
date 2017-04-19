@@ -1031,6 +1031,19 @@ class CommonRegSet : public SpecializedRegSet<Accessors, Set>
 #error "Bad architecture"
 #endif
     }
+
+    using Parent::addUnchecked;
+    void addUnchecked(ValueOperand value) {
+#if defined(JS_NUNBOX32)
+        addUnchecked(value.payloadReg());
+        addUnchecked(value.typeReg());
+#elif defined(JS_PUNBOX64)
+        addUnchecked(value.valueReg());
+#else
+#error "Bad architecture"
+#endif
+    }
+
     void add(TypedOrValueRegister reg) {
         if (reg.hasValue())
             add(reg.valueReg());
@@ -1346,8 +1359,14 @@ class ABIArg
         MOZ_ASSERT(isGeneralRegPair());
         return Register::FromCode(u.gpr_ + 1);
     }
-    FloatRegister fpu() const { MOZ_ASSERT(kind() == FPU); return FloatRegister::FromCode(u.fpu_); }
-    uint32_t offsetFromArgBase() const { MOZ_ASSERT(kind() == Stack); return u.offset_; }
+    FloatRegister fpu() const {
+        MOZ_ASSERT(kind() == FPU);
+        return FloatRegister::FromCode(u.fpu_);
+    }
+    uint32_t offsetFromArgBase() const {
+        MOZ_ASSERT(kind() == Stack);
+        return u.offset_;
+    }
 
     bool argInRegister() const { return kind() != Stack; }
     AnyRegister reg() const { return kind_ == GPR ? AnyRegister(gpr()) : AnyRegister(fpu()); }

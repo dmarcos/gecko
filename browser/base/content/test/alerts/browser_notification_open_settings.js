@@ -8,11 +8,11 @@ add_task(function* test_settingsOpen_observer() {
     gBrowser,
     url: "about:robots"
   }, function* dummyTabTask(aBrowser) {
-    let tabPromise = BrowserTestUtils.waitForNewTab(gBrowser, "about:preferences#content");
+    let tabPromise = BrowserTestUtils.waitForNewTab(gBrowser, "about:preferences#privacy");
     info("simulate a notifications-open-settings notification");
     let uri = NetUtil.newURI("https://example.com");
     let principal = Services.scriptSecurityManager.createCodebasePrincipal(uri, {});
-    Services.obs.notifyObservers(principal, "notifications-open-settings", null);
+    Services.obs.notifyObservers(principal, "notifications-open-settings");
     let tab = yield tabPromise;
     ok(tab, "The notification settings tab opened");
     yield BrowserTestUtils.removeTab(tab);
@@ -40,7 +40,7 @@ add_task(function* test_settingsOpen_button() {
       }
 
       let closePromise = promiseWindowClosed(alertWindow);
-      let tabPromise = BrowserTestUtils.waitForNewTab(gBrowser, "about:preferences#content");
+      let tabPromise = BrowserTestUtils.waitForNewTab(gBrowser, "about:preferences#privacy");
       let openSettingsMenuItem = alertWindow.document.getElementById("openSettingsMenuItem");
       openSettingsMenuItem.click();
 

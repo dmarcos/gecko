@@ -46,9 +46,9 @@ _SUBDIR_CONFIG_ARGS="$ac_configure_args"
 dnl Set the version number of the libs included with mozilla
 dnl ========================================================
 MOZJPEG=62
-MOZPNG=10628
+MOZPNG=10629
 NSPR_VERSION=4
-NSPR_MINVER=4.13.1
+NSPR_MINVER=4.14
 NSS_VERSION=3
 
 dnl Set the minimum version of toolkit libs used by mozilla
@@ -57,18 +57,16 @@ GLIB_VERSION=2.22
 # 2_26 is the earliest version we can set GLIB_VERSION_MIN_REQUIRED.
 # The macro won't be used when compiling with earlier versions anyway.
 GLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_26
-GIO_VERSION=2.22
 CAIRO_VERSION=1.10
 GTK2_VERSION=2.18.0
 GTK3_VERSION=3.4.0
 GDK_VERSION_MAX_ALLOWED=GDK_VERSION_3_4
 WINDRES_VERSION=2.14.90
 W32API_VERSION=3.14
-GNOMEUI_VERSION=2.2.0
 GCONF_VERSION=1.2.1
 STARTUP_NOTIFICATION_VERSION=0.8
 DBUS_VERSION=0.60
-SQLITE_VERSION=3.16.2
+SQLITE_VERSION=3.18.0
 
 dnl Set various checks
 dnl ========================================================
@@ -432,31 +430,6 @@ dnl ========================================================
 dnl Checks for programs.
 dnl ========================================================
 if test "$COMPILE_ENVIRONMENT"; then
-
-dnl ========================================================
-dnl = Mac OS X toolchain support
-dnl ========================================================
-
-dnl The universal machinery sets UNIVERSAL_BINARY to inform packager.mk
-dnl that a universal binary is being produced.
-AC_SUBST(UNIVERSAL_BINARY)
-
-MOZ_ARG_WITH_STRING(unify-dist,
-[  --with-unify-dist=dir   Location of the dist directory to unify with at packaging time (Mac OS X universal build only)],
-    UNIFY_DIST=$withval)
-if test -n "$UNIVERSAL_BINARY"; then
-    if test -z "$UNIFY_DIST"; then
-        AC_MSG_ERROR([You need to provide the --with-unify-dist=dir argument when performing a universal build])
-    fi
-    case "$UNIFY_DIST" in
-    /*)
-        ;;
-    *)
-        UNIFY_DIST="${MOZ_BUILD_ROOT}/${UNIFY_DIST}"
-        ;;
-    esac
-fi
-AC_SUBST(UNIFY_DIST)
 
 dnl ========================================================
 dnl = Mac OS X SDK support
@@ -992,12 +965,14 @@ case "$target" in
             dnl VS2012+ defaults to -arch:SSE2. We want to target nothing
             dnl more recent, so set that explicitly here unless another
             dnl target arch has already been set.
+            changequote(,)
             if test -z `echo $CFLAGS | grep -i [-/]arch:`; then
               CFLAGS="$CFLAGS -arch:SSE2"
             fi
             if test -z `echo $CXXFLAGS | grep -i [-/]arch:`; then
               CXXFLAGS="$CXXFLAGS -arch:SSE2"
             fi
+            changequote([,])
             SSE_FLAGS="-arch:SSE"
             SSE2_FLAGS="-arch:SSE2"
             dnl MSVC allows the use of intrinsics without any flags
@@ -1009,10 +984,6 @@ case "$target" in
         if test -n "$CLANG_CL"; then
             SSSE3_FLAGS="-mssse3"
         fi
-        dnl VS2013+ requires -FS when parallel building by make -jN.
-        dnl If nothing, compiler sometimes causes C1041 error.
-        CFLAGS="$CFLAGS -FS"
-        CXXFLAGS="$CXXFLAGS -FS"
         dnl VS2013+ supports -Gw for better linker optimizations.
         dnl http://blogs.msdn.com/b/vcblog/archive/2013/09/11/introducing-gw-compiler-switch.aspx
         dnl Disabled on ASan because it causes false-positive ODR violations.
@@ -2028,7 +1999,7 @@ MOZ_ARG_WITH_BOOL(system-nss,
     _USE_SYSTEM_NSS=1 )
 
 if test -n "$_USE_SYSTEM_NSS"; then
-    AM_PATH_NSS(3.30, [MOZ_SYSTEM_NSS=1], [AC_MSG_ERROR([you don't have NSS installed or your version is too old])])
+    AM_PATH_NSS(3.31, [MOZ_SYSTEM_NSS=1], [AC_MSG_ERROR([you don't have NSS installed or your version is too old])])
 fi
 
 if test -n "$MOZ_SYSTEM_NSS"; then
@@ -2245,7 +2216,6 @@ esac
 
 case "${target}" in
     *-android*|*-linuxandroid*)
-        MOZ_THEME_FASTSTRIPE=1
         MOZ_RAW=1
         ;;
 
@@ -2372,7 +2342,7 @@ dnl ========================================================
 if test -z "$gonkdir" ; then
     case "$MOZ_BUILD_APP" in
     mobile/android)
-        MOZ_ANDROID_SDK(23, 23.0.3 23.0.1)
+        MOZ_ANDROID_SDK(23, 23.0.3 23.0.1, 25.3.1)
         ;;
     esac
 fi
@@ -2565,48 +2535,15 @@ MOZ_ANDROID_INSTALL_TRACKING
 
 
 dnl ========================================================
-dnl = GIO and GConf support module
+dnl = GConf support module
 dnl ========================================================
 
 if test "$MOZ_X11"
 then
-    dnl build the GIO extension by default only when the
-    dnl GTK2 toolkit is in use.
     if test "$MOZ_ENABLE_GTK"
     then
-        MOZ_ENABLE_GIO=1
         MOZ_ENABLE_GCONF=1
     fi
-
-    dnl ========================================================
-    dnl = GIO support module
-    dnl ========================================================
-    MOZ_ARG_DISABLE_BOOL(gio,
-    [  --disable-gio           Disable GIO support],
-        MOZ_ENABLE_GIO=,
-        MOZ_ENABLE_GIO=force)
-
-    if test "$MOZ_ENABLE_GIO" -a "$MOZ_ENABLE_GTK"
-    then
-        if test "$MOZ_WIDGET_TOOLKIT" = gtk2
-        then
-            PKG_CHECK_MODULES(_GTKCHECK, gtk+-2.0 >= 2.14, ,
-                              [AC_MSG_ERROR([* * * Could not find gtk+-2.0 > 2.14. Required for build with gio.])])
-        fi
-        PKG_CHECK_MODULES(MOZ_GIO, gio-2.0 >= $GIO_VERSION,[
-            MOZ_GIO_LIBS=`echo $MOZ_GIO_LIBS | sed 's/-llinc\>//'`
-            MOZ_ENABLE_GIO=1
-            AC_DEFINE(MOZ_ENABLE_GIO)
-        ],[
-            if test "$MOZ_ENABLE_GIO" = "force"
-            then
-                AC_MSG_ERROR([* * * Could not find gio-2.0 >= $GIO_VERSION])
-            fi
-            MOZ_ENABLE_GIO=
-        ])
-    fi
-
-    AC_SUBST(MOZ_ENABLE_GIO)
 
     dnl ========================================================
     dnl = GConf support module
@@ -2658,38 +2595,6 @@ then
     fi
 fi
 AC_SUBST(MOZ_ENABLE_LIBPROXY)
-
-dnl ========================================================
-dnl = libgnomeui support module
-dnl ========================================================
-
-if test "$MOZ_ENABLE_GTK"
-then
-    MOZ_ARG_ENABLE_BOOL(gnomeui,
-    [  --enable-gnomeui        Enable libgnomeui instead of GIO & GTK for icon theme support ],
-        MOZ_ENABLE_GNOMEUI=force,
-        MOZ_ENABLE_GNOMEUI=)
-
-    if test "$MOZ_ENABLE_GNOMEUI"
-    then
-        PKG_CHECK_MODULES(MOZ_GNOMEUI, libgnomeui-2.0 >= $GNOMEUI_VERSION,
-        [
-            MOZ_ENABLE_GNOMEUI=1
-        ],[
-            if test "$MOZ_ENABLE_GNOMEUI" = "force"
-            then
-                AC_MSG_ERROR([* * * Could not find libgnomeui-2.0 >= $GNOMEUI_VERSION])
-            fi
-            MOZ_ENABLE_GNOMEUI=
-        ])
-    fi
-
-    if test "$MOZ_ENABLE_GNOMEUI"; then
-        AC_DEFINE(MOZ_ENABLE_GNOMEUI)
-    fi
-fi
-
-AC_SUBST(MOZ_ENABLE_GNOMEUI)
 
 dnl ========================================================
 dnl = dbus support
@@ -3239,13 +3144,6 @@ x86_64)
   ;;
 esac
 
-# This is potentially set in external mozconfig files; if it's set,
-# then the build exposes the "webgl" context name, which is reserved
-# for conformant implementations.
-if test -n "$MOZ_WEBGL_CONFORMANT"; then
-  AC_DEFINE(MOZ_WEBGL_CONFORMANT)
-fi
-
 dnl ========================================================
 dnl D3D compiler DLL
 dnl ========================================================
@@ -3606,20 +3504,6 @@ MOZ_ARG_ENABLE_STRING(extensions,
 done],
     MOZ_EXTENSIONS="$MOZ_EXTENSIONS_DEFAULT")
 
-if test -z "$MOZ_ENABLE_GIO" -a `echo "$MOZ_EXTENSIONS" | grep -c gio` -ne 0; then
-    # Suppress warning on non-X11 platforms
-    if test -n "$MOZ_X11"; then
-        AC_MSG_WARN([Removing gio from MOZ_EXTENSIONS due to --disable-gio.])
-    fi
-    MOZ_EXTENSIONS=`echo $MOZ_EXTENSIONS | sed -e 's|gio||'`
-fi
-
-if test `echo "$MOZ_EXTENSIONS" | grep -c gio` -ne 0; then
-    MOZ_GIO_COMPONENT=1
-    MOZ_EXTENSIONS=`echo $MOZ_EXTENSIONS | sed -e 's|gio||'`
-fi
-AC_SUBST(MOZ_GIO_COMPONENT)
-
 dnl Ensure every extension exists, to avoid mostly-inscrutable error messages
 dnl when trying to build a nonexistent extension.
 for extension in $MOZ_EXTENSIONS; do
@@ -3771,14 +3655,14 @@ if test -n "$gonkdir"; then
     MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
 fi
 
-case "$OS_TARGET:$NIGHTLY_BUILD" in
-WINNT:*)
+case "$OS_TARGET" in
+WINNT)
     MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
     ;;
-Darwin:*)
+Darwin)
     MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
     ;;
-Linux:1)
+Linux)
     case $CPU_ARCH in
         x86_64|x86)
             MOZ_CONTENT_SANDBOX=$MOZ_SANDBOX
@@ -4052,15 +3936,6 @@ MOZ_ARG_DISABLE_BOOL(zipwriter,
 AC_SUBST(MOZ_ZIPWRITER)
 
 dnl ========================================================
-dnl = faststripe theme
-dnl ========================================================
-MOZ_ARG_ENABLE_BOOL(faststripe,
-[  --enable-faststripe     Use faststripe theme],
-    MOZ_THEME_FASTSTRIPE=1,
-    MOZ_THEME_FASTSTRIPE= )
-AC_SUBST(MOZ_THEME_FASTSTRIPE)
-
-dnl ========================================================
 dnl =
 dnl = Feature options that require extra sources to be pulled
 dnl =
@@ -4310,7 +4185,9 @@ dnl ========================================================
 dnl = Enable using the clang plugin to build
 dnl ========================================================
 
+if test -n "$COMPILE_ENVIRONMENT"; then
 MOZ_CONFIG_CLANG_PLUGIN
+fi # COMPILE_ENVIRONMENT
 
 dnl ========================================================
 dnl = Enable stripping of libs & executables
@@ -4916,11 +4793,8 @@ if test "$MOZ_TREE_CAIRO"; then
         WIN32_FONT_FEATURE="#define CAIRO_HAS_WIN32_FONT 1"
         WIN32_SURFACE_FEATURE="#define CAIRO_HAS_WIN32_SURFACE 1"
         MOZ_ENABLE_D2D_SURFACE=1
-        MOZ_ENABLE_DWRITE_FONT=1
 
         if test "$COMPILE_ENVIRONMENT"; then
-
-          MOZ_CHECK_HEADER(d3d9.h, MOZ_ENABLE_D3D9_LAYER=1)
 
           dnl D3D10 Layers depend on D2D Surfaces.
           if test -n "$WIN32_D2D_SURFACE_FEATURE"; then
@@ -4933,9 +4807,7 @@ if test "$MOZ_TREE_CAIRO"; then
         FC_FONT_FEATURE="#define CAIRO_HAS_FC_FONT 1"
     fi
     AC_SUBST(MOZ_ENABLE_CAIRO_FT)
-    AC_SUBST(MOZ_ENABLE_DWRITE_FONT)
     AC_SUBST(MOZ_ENABLE_D2D_SURFACE)
-    AC_SUBST(MOZ_ENABLE_D3D9_LAYER)
     AC_SUBST(MOZ_ENABLE_D3D10_LAYER)
 
     AC_SUBST(PS_SURFACE_FEATURE)
@@ -5342,13 +5214,15 @@ dnl ========================================================
 dnl ICU Support
 dnl ========================================================
 
-# Internationalization is not built or exposed on Fennec.
-# See Bug 1215256
-
-if test "$MOZ_BUILD_APP" = "mobile/android"; then
-    _INTL_API=no
+if test "$MOZ_WIDGET_TOOLKIT" != "android" -o -z "$RELEASE_OR_BETA"; then
+    dnl Disable ICU on android/x86 for testing on tier-1 platform
+    if test "$MOZ_WIDGET_TOOLKIT" = "android" -a "$CPU_ARCH" = "x86"; then
+        _INTL_API=no
+    else
+        _INTL_API=yes
+    fi
 else
-    _INTL_API=yes
+    _INTL_API=no
 fi
 
 if test "$MOZ_WIDGET_TOOLKIT" = "cocoa"; then

@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* import-globals-from sanitizeDialog.js */
+
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
@@ -86,7 +88,7 @@ Sanitizer.prototype = {
     try {
       yield promise;
     } finally {
-      Services.obs.notifyObservers(null, "sanitizer-sanitization-complete", "");
+      Services.obs.notifyObservers(null, "sanitizer-sanitization-complete");
     }
   }),
 
@@ -189,8 +191,8 @@ Sanitizer.prototype = {
   // and can optionally specify a specific range.  If timespan is not ignored,
   // and range is not set, sanitize() will use the value of the timespan
   // pref to determine a range
-  ignoreTimespan : true,
-  range : null,
+  ignoreTimespan: true,
+  range: null,
 
   items: {
     cache: {
@@ -435,7 +437,7 @@ Sanitizer.prototype = {
           sdr.logoutAndTeardown();
 
           // clear FTP and plain HTTP auth sessions
-          Services.obs.notifyObservers(null, "net:clear-active-logins", null);
+          Services.obs.notifyObservers(null, "net:clear-active-logins");
         } finally {
           TelemetryStopwatch.finish("FX_SANITIZE_SESSIONS", refObj);
         }
@@ -625,8 +627,8 @@ Sanitizer.prototype = {
               }
             }
           }
-          Services.obs.addObserver(onWindowOpened, "browser-delayed-startup-finished", false);
-          Services.obs.addObserver(onWindowClosed, "xul-window-destroyed", false);
+          Services.obs.addObserver(onWindowOpened, "browser-delayed-startup-finished");
+          Services.obs.addObserver(onWindowClosed, "xul-window-destroyed");
         });
 
         // Start the process of closing windows
@@ -734,13 +736,6 @@ Sanitizer.clearPluginData = Task.async(function* (range) {
     if (!range || age >= 0) {
       let tags = ph.getPluginTags();
       for (let tag of tags) {
-        let refObj = {};
-        let probe = "";
-        if (/\bFlash\b/.test(tag.name)) {
-          probe = tag.loaded ? "FX_SANITIZE_LOADED_FLASH"
-                             : "FX_SANITIZE_UNLOADED_FLASH";
-          TelemetryStopwatch.start(probe, refObj);
-        }
         try {
           let rv = yield new Promise(resolve =>
             ph.clearSiteData(tag, null, FLAG_CLEAR_ALL, age, resolve)
@@ -751,14 +746,8 @@ Sanitizer.clearPluginData = Task.async(function* (range) {
               ph.clearSiteData(tag, null, FLAG_CLEAR_ALL, -1, resolve)
             );
           }
-          if (probe) {
-            TelemetryStopwatch.finish(probe, refObj);
-          }
         } catch (ex) {
           // Ignore errors from plug-ins
-          if (probe) {
-            TelemetryStopwatch.cancel(probe, refObj);
-          }
         }
       }
     }

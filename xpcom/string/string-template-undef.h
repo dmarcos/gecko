@@ -10,9 +10,11 @@
 #undef CharT_is_char
 #undef nsTAString_IncompatibleCharT
 #undef nsTString_CharT
+#undef nsTStringRepr_CharT
 #undef nsTFixedString_CharT
 #undef nsTAutoString_CharT
 #undef nsTSubstring_CharT
+#undef PrintfAppend_CharT
 #undef nsTSubstringTuple_CharT
 #undef nsTStringComparator_CharT
 #undef nsTDefaultStringComparator_CharT

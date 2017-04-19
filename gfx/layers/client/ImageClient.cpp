@@ -194,6 +194,10 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
     // This can also happen if all images in the list are invalid.
     // We return true because the caller would attempt to recreate the
     // ImageClient otherwise, and that isn't going to help.
+    for (auto& b : mBuffers) {
+      RemoveTexture(b.mTextureClient);
+    }
+    mBuffers.Clear();
     return true;
   }
 
@@ -225,10 +229,20 @@ ImageClientSingle::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
       // should fix it.
       texture = CreateTextureClientForImage(image, GetForwarder());
     }
-    if (!texture || !AddTextureClient(texture)) {
+
+    if (!texture) {
       return false;
     }
 
+    // We check if the texture's allocator is still open, since in between media
+    // decoding a frame and adding it to the compositable, we could have
+    // restarted the GPU process.
+    if (!texture->GetAllocator()->IPCOpen()) {
+      continue;
+    }
+    if (!AddTextureClient(texture)) {
+      return false;
+    }
 
     CompositableForwarder::TimedTextureClient* t = textures.AppendElement();
     t->mTextureClient = texture;
@@ -290,7 +304,13 @@ ImageClientBridge::UpdateImage(ImageContainer* aContainer, uint32_t aContentFlag
   if (mAsyncContainerHandle == aContainer->GetAsyncContainerHandle()) {
     return true;
   }
+
   mAsyncContainerHandle = aContainer->GetAsyncContainerHandle();
+  if (!mAsyncContainerHandle) {
+    // If we couldn't contact a working ImageBridgeParent, just return.
+    return true;
+  }
+
   static_cast<ShadowLayerForwarder*>(GetForwarder())->AttachAsyncCompositable(mAsyncContainerHandle, mLayer);
   return true;
 }

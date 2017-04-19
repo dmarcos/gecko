@@ -42,7 +42,7 @@
 /* Toolbox tabbar */
 
 .devtools-tabbar {
-  -moz-appearance: none;
+  -moz-appearance: none; appearance: none;
   min-height: 24px;
   border: 0px solid;
   border-bottom-width: 1px;
@@ -52,15 +52,16 @@
   display: flex;
 }
 
-.toolbox-tabs {
-  margin: 0;
-  flex: 1;
-}
-
 .toolbox-tabs-wrapper {
   position: relative;
   display: flex;
   flex: 1;
+}
+
+.toolbox-tabs-wrapper .all-tools-menu {
+  border-inline-end: 1px solid var(--theme-splitter-color);
+  border-top-width: 0;
+  border-bottom-width: 0;
 }
 
 .toolbox-tabs {
@@ -70,6 +71,9 @@
   right: 0;
   bottom: 0;
   display: flex;
+  margin: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 /* Set flex attribute to Toolbox buttons and Picker container so,
@@ -87,6 +91,9 @@
 
 /* Toolbox tabs */
 .devtools-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
   min-width: 32px;
   min-height: 24px;
   margin: 0;
@@ -94,24 +101,43 @@
   border-style: solid;
   border-width: 0;
   border-inline-start-width: 1px;
-  padding-inline-end: 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   background-color: transparent;
 }
 
-.devtools-tab-icon-only {
-  padding-inline-end: 2px;
+
+.devtools-tab-label {
+  mask-image: linear-gradient(to left, transparent 0, black 6px);
+  /* Set the end padding on the label to make sure the label gets faded out properly */
+  padding-inline-end: 10px;
+  min-width: 1px;
 }
 
-.devtools-tab span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-inline-end: 13px;
-  position: relative;
-  top: 1px;
+.devtools-tab-label:-moz-locale-dir(rtl) {
+  mask-image: linear-gradient(to right, transparent 0, black 6px);
+}
+
+/* Hide tab icons when the viewport width is limited */
+@media (max-width: 700px) {
+  .devtools-tab-label {
+    /* Set the end padding on the label to make sure the label gets faded out properly */
+    padding-inline-end: 5px;
+  }
+
+  .devtools-tab:not(.devtools-tab-icon-only) {
+    padding-inline-start: 5px !important;
+  }
+
+  /* Hide the icons */
+  .devtools-tab:not(.devtools-tab-icon-only) > img {
+    display: none;
+  }
+}
+
+.devtools-tab-icon-only {
+  min-width: 24px;
 }
 
 /* Save space on the tab-strip in Firebug theme */
@@ -134,7 +160,7 @@
 }
 
 .devtools-tab:hover {
-  background-color: var(--toolbar-tab-hover);
+  background-color: var(--theme-toolbar-hover);
 }
 
 .theme-dark .devtools-tab:hover:active {
@@ -142,7 +168,7 @@
 }
 
 .devtools-tab:hover:active {
-  background-color: var(--toolbar-tab-hover-active);
+  background-color: var(--theme-toolbar-hover-active);
 }
 
 .theme-dark .devtools-tab:not(.selected).highlighted {
@@ -167,11 +193,12 @@
   border: none;
   margin: 0;
   margin-inline-start: 10px;
-  opacity: 0.6;
+  margin-inline-end: 5px;
+  opacity: 0.8;
   max-height: 16px;
   width: 16px; /* Prevents collapse during theme switching */
   vertical-align: text-top;
-  margin-inline-end: 6px;
+  flex-shrink: 0;
 }
 
 /* Support invertable icon flags and make icon white when it's on a blue background */
@@ -194,10 +221,7 @@
   margin: 0 4px;
 }
 
-.devtools-tab:hover > img {
-  opacity: 0.8;
-}
-
+.devtools-tab:hover > img,
 .devtools-tab:active > img,
 .devtools-tab.selected > img {
   opacity: 1;
@@ -210,15 +234,10 @@
 }
 
 .toolbox-tabs .devtools-tab.selected,
-.toolbox-tabs .devtools-tab.highlighted {
-  border-width: 0;
-  padding-inline-start: 1px;
-}
-
+.toolbox-tabs .devtools-tab.highlighted,
 .toolbox-tabs .devtools-tab.selected + .devtools-tab,
 .toolbox-tabs .devtools-tab.highlighted + .devtools-tab {
-  border-inline-start-width: 0;
-  padding-inline-start: 1px;
+  border-inline-start-color: transparent;
 }
 
 .toolbox-tabs .devtools-tab:first-child {
@@ -237,31 +256,19 @@
 
 /* The options tab is special - it doesn't have the same parent
    as the other tabs (toolbox-option-container vs toolbox-tabs) */
-#toolbox-option-container .devtools-tab:not(.selected) {
-  background-color: transparent;
-}
 #toolbox-option-container .devtools-tab {
   border-color: transparent;
   border-width: 0;
   padding-inline-start: 1px;
 }
 #toolbox-option-container img {
-  margin-inline-end: 6px;
-  margin-inline-start: 6px;
+  margin: 0 3px;
 }
 
 /* Toolbox controls */
 
 #toolbox-controls, #toolbox-dock-buttons {
   display: flex;
-}
-#toolbox-controls > button,
-#toolbox-dock-buttons > button {
-  -moz-appearance: none;
-  border: none;
-  margin: 0 4px;
-  min-width: 16px;
-  width: 16px;
 }
 
 /* Save space in Firebug theme */
@@ -315,43 +322,20 @@
 
 /* Command buttons */
 
-.command-button {
+.command-button,
+#toolbox-controls > button,
+#toolbox-dock-buttons > button {
   /* !important is needed to override .devtools-button rules in common.css */
   padding: 0 !important;
   margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
   position: relative;
+  min-width: 24px;
 }
 
-.command-button::before {
-  opacity: 0.7;
-}
-
-.command-button:hover {
-  background-color: var(--toolbar-tab-hover);
-}
-
-.theme-light .command-button:hover {
-  background-color: inherit;
-}
-
-.command-button:hover:active,
-.command-button.checked:not(:hover) {
-  background-color: var(--toolbar-tab-hover-active)
-}
-
-.theme-light .command-button:hover:active,
-.theme-light .command-button.checked:not(:hover) {
-  background-color: inherit;
-}
-
-.command-button:hover::before {
-  opacity: 0.85;
-}
-
-.command-button:hover:active::before,
-.command-button.checked::before,
-.command-button.open::before {
-  opacity: 1;
+#command-button-pick {
+  min-width: 32px;
 }
 
 /* Command button images */

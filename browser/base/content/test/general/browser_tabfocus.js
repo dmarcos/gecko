@@ -2,6 +2,8 @@
  * This test checks that focus is adjusted properly when switching tabs.
  */
 
+/* eslint-env mozilla/frame-script */
+
 var testPage1 = "<html id='html1'><body id='body1'><button id='button1'>Tab 1</button></body></html>";
 var testPage2 = "<html id='html2'><body id='body2'><button id='button2'>Tab 2</button></body></html>";
 var testPage3 = "<html id='html3'><body id='body3'><button id='button3'>Tab 3</button></body></html>";
@@ -43,8 +45,8 @@ var currentPromiseResolver = null;
 function* getFocusedElementForBrowser(browser, dontCheckExtraFocus = false) {
   if (gMultiProcessBrowser) {
     return new Promise((resolve, reject) => {
-      messageManager.addMessageListener("Browser:GetCurrentFocus", function getCurrentFocus(message) {
-        messageManager.removeMessageListener("Browser:GetCurrentFocus", getCurrentFocus);
+      window.messageManager.addMessageListener("Browser:GetCurrentFocus", function getCurrentFocus(message) {
+        window.messageManager.removeMessageListener("Browser:GetCurrentFocus", getCurrentFocus);
         resolve(message.data.details);
       });
 
@@ -76,7 +78,7 @@ function focusInChild() {
       id = getWindowDocId(event.originalTarget) + "-document";
     else
       id = event.originalTarget.id;
-    sendSyncMessage("Browser:FocusChanged", { details : event.type + ": " + id });
+    sendSyncMessage("Browser:FocusChanged", { details: event.type + ": " + id });
   }
 
   addEventListener("focus", eventListener, true);
@@ -142,7 +144,7 @@ add_task(function*() {
   yield SimpleTest.promiseFocus();
 
   if (gMultiProcessBrowser) {
-    messageManager.addMessageListener("Browser:FocusChanged", message => {
+    window.messageManager.addMessageListener("Browser:FocusChanged", message => {
       actualEvents.push(message.data.details);
       compareFocusResults();
     });

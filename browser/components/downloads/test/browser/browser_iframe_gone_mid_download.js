@@ -1,6 +1,6 @@
 const SAVE_PER_SITE_PREF = "browser.download.lastDir.savePerSite";
 
-function test_deleted_iframe(perSitePref, windowOptions={}) {
+function test_deleted_iframe(perSitePref, windowOptions = {}) {
   return function*() {
     Services.prefs.setBoolPref(SAVE_PER_SITE_PREF, perSitePref);
     let {DownloadLastDir} = Cu.import("resource://gre/modules/DownloadLastDir.jsm", {});
@@ -22,7 +22,7 @@ function test_deleted_iframe(perSitePref, windowOptions={}) {
           Services.obs.removeObserver(obs, topic);
           resolve();
         }
-      }, "dom-window-destroyed", false);
+      }, "dom-window-destroyed");
     });
     iframe.remove();
     yield promiseIframeWindowGone;

@@ -15,7 +15,7 @@
 #include "nsFrameManager.h"
 #include "nsIDocument.h"
 #include "nsStyleChangeList.h"
-#include "mozilla/RestyleManager.h"
+#include "mozilla/GeckoRestyleManager.h"
 #include "RestyleTrackerInlines.h"
 #include "nsTransitionManager.h"
 #include "mozilla/RestyleTimelineMarker.h"
@@ -77,19 +77,19 @@ RestyleTracker::ProcessOneRestyle(Element* aElement,
                   "Element has unexpected document");
 
   LOG_RESTYLE("aRestyleHint = %s, aChangeHint = %s",
-              RestyleManager::RestyleHintToString(aRestyleHint).get(),
-              RestyleManager::ChangeHintToString(aChangeHint).get());
+              GeckoRestyleManager::RestyleHintToString(aRestyleHint).get(),
+              GeckoRestyleManager::ChangeHintToString(aChangeHint).get());
 
   nsIFrame* primaryFrame = aElement->GetPrimaryFrame();
 
   if (aRestyleHint & ~eRestyle_LaterSiblings) {
 #ifdef RESTYLE_LOGGING
     if (ShouldLogRestyle() && primaryFrame &&
-        RestyleManager::StructsToLog() != 0) {
+        GeckoRestyleManager::StructsToLog() != 0) {
       LOG_RESTYLE("style context tree before restyle:");
       LOG_RESTYLE_INDENT();
       primaryFrame->StyleContext()->LogStyleContextTree(
-          LoggingDepth(), RestyleManager::StructsToLog());
+          LoggingDepth(), GeckoRestyleManager::StructsToLog());
     }
 #endif
     mRestyleManager->RestyleElement(aElement, primaryFrame, aChangeHint,
@@ -98,7 +98,7 @@ RestyleTracker::ProcessOneRestyle(Element* aElement,
              (primaryFrame ||
               (aChangeHint & nsChangeHint_ReconstructFrame))) {
     // Don't need to recompute style; just apply the hint
-    nsStyleChangeList changeList;
+    nsStyleChangeList changeList(StyleBackendType::Gecko);
     changeList.AppendChange(primaryFrame, aElement, aChangeHint);
     mRestyleManager->ProcessRestyledFrames(changeList);
   }
@@ -114,8 +114,8 @@ RestyleTracker::DoProcessRestyles()
       docURL = uri->GetSpecOrDefault();
     }
   }
-  PROFILER_LABEL_PRINTF("RestyleTracker", "ProcessRestyles",
-                        js::ProfileEntry::Category::CSS, "(%s)", docURL.get());
+  PROFILER_LABEL_DYNAMIC("RestyleTracker", "ProcessRestyles",
+                         js::ProfileEntry::Category::CSS, docURL.get());
 
   nsDocShell* docShell = static_cast<nsDocShell*>(mRestyleManager->PresContext()->GetDocShell());
   RefPtr<TimelineConsumers> timelines = TimelineConsumers::Get();
@@ -146,7 +146,7 @@ RestyleTracker::DoProcessRestyles()
   // EndReconstruct so those style contexts go away before
   // EndReconstruct.
   {
-    RestyleManager::ReframingStyleContexts
+    GeckoRestyleManager::ReframingStyleContexts
       reframingStyleContexts(mRestyleManager);
 
     mRestyleManager->BeginProcessingRestyles(*this);

@@ -1,6 +1,8 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
+/* eslint-env mozilla/frame-script */
+
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "MediaManagerService",
                                    "@mozilla.org/mediaManagerService;1",
@@ -38,7 +40,7 @@ function observer(aSubject, aTopic, aData) {
 }
 
 kObservedTopics.forEach(topic => {
-  Services.obs.addObserver(observer, topic, false);
+  Services.obs.addObserver(observer, topic);
 });
 
 addMessageListener("Test:ExpectObserverCalled", ({data}) => {
@@ -98,7 +100,7 @@ addMessageListener("Test:WaitForObserverCall", ({data}) => {
       else
         --gObservedTopics[topic];
     }
-  }, topic, false);
+  }, topic);
 });
 
 addMessageListener("Test:WaitForMessage", () => {

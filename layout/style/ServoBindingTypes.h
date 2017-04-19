@@ -10,9 +10,9 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/ServoTypes.h"
 #include "mozilla/UniquePtr.h"
+#include "nsStyleAutoArray.h"
 #include "nsTArray.h"
 
-struct RawServoAnimationValue;
 struct RawServoStyleSet;
 
 #define SERVO_ARC_TYPE(name_, type_) struct type_;
@@ -20,19 +20,26 @@ struct RawServoStyleSet;
 #undef SERVO_ARC_TYPE
 
 namespace mozilla {
-  class ServoElementSnapshot;
+class ServoElementSnapshot;
+struct StyleAnimation;
+struct URLExtraData;
 namespace dom {
 class Element;
 class StyleChildrenIterator;
 } // namespace dom
+struct AnimationPropertySegment;
+struct ComputedTiming;
 struct Keyframe;
 struct PropertyStyleAnimationValuePair;
+using ComputedKeyframeValues = nsTArray<PropertyStyleAnimationValuePair>;
 } // namespace mozilla
 
 class nsCSSValue;
+struct nsFontFaceRuleContainer;
 class nsIDocument;
 class nsINode;
 class nsPresContext;
+struct nsTimingFunction;
 
 using mozilla::dom::StyleChildrenIterator;
 using mozilla::ServoElementSnapshot;
@@ -41,9 +48,15 @@ typedef nsINode RawGeckoNode;
 typedef mozilla::dom::Element RawGeckoElement;
 typedef nsIDocument RawGeckoDocument;
 typedef nsPresContext RawGeckoPresContext;
+typedef mozilla::URLExtraData RawGeckoURLExtraData;
 typedef nsTArray<mozilla::Keyframe> RawGeckoKeyframeList;
+typedef nsTArray<mozilla::ComputedKeyframeValues> RawGeckoComputedKeyframeValuesList;
 typedef nsTArray<mozilla::PropertyStyleAnimationValuePair> RawGeckoAnimationValueList;
-typedef nsTArray<const RawServoAnimationValue*> RawServoAnimationValueBorrowedList;
+typedef nsStyleAutoArray<mozilla::StyleAnimation> RawGeckoStyleAnimationList;
+typedef nsTArray<nsFontFaceRuleContainer> RawGeckoFontFaceRuleList;
+typedef mozilla::AnimationPropertySegment RawGeckoAnimationPropertySegment;
+typedef mozilla::ComputedTiming RawGeckoComputedTiming;
+typedef nsTArray<const RawServoStyleRule*> RawGeckoServoStyleRuleList;
 
 // We have these helper types so that we can directly generate
 // things like &T or Borrowed<T> on the Rust side in the function, providing
@@ -68,6 +81,7 @@ typedef nsTArray<const RawServoAnimationValue*> RawServoAnimationValueBorrowedLi
 #define SERVO_ARC_TYPE(name_, type_)         \
   DECL_NULLABLE_BORROWED_REF_TYPE_FOR(type_) \
   DECL_BORROWED_REF_TYPE_FOR(type_)          \
+  DECL_BORROWED_MUT_REF_TYPE_FOR(type_)      \
   struct MOZ_MUST_USE_TYPE type_##Strong     \
   {                                          \
     type_* mPtr;                             \
@@ -113,8 +127,16 @@ DECL_BORROWED_MUT_REF_TYPE_FOR(nsCSSValue)
 DECL_OWNED_REF_TYPE_FOR(RawGeckoPresContext)
 DECL_BORROWED_REF_TYPE_FOR(RawGeckoPresContext)
 DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoAnimationValueList)
-DECL_BORROWED_REF_TYPE_FOR(RawServoAnimationValueBorrowedList)
 DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoKeyframeList)
+DECL_BORROWED_REF_TYPE_FOR(RawGeckoKeyframeList)
+DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoComputedKeyframeValuesList)
+DECL_BORROWED_REF_TYPE_FOR(RawGeckoStyleAnimationList)
+DECL_BORROWED_MUT_REF_TYPE_FOR(nsTimingFunction)
+DECL_BORROWED_REF_TYPE_FOR(nsTimingFunction)
+DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoFontFaceRuleList)
+DECL_BORROWED_REF_TYPE_FOR(RawGeckoAnimationPropertySegment)
+DECL_BORROWED_REF_TYPE_FOR(RawGeckoComputedTiming)
+DECL_BORROWED_MUT_REF_TYPE_FOR(RawGeckoServoStyleRuleList)
 
 #undef DECL_ARC_REF_TYPE_FOR
 #undef DECL_OWNED_REF_TYPE_FOR

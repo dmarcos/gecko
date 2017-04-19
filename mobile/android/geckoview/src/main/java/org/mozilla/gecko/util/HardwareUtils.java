@@ -5,12 +5,14 @@
 
 package org.mozilla.gecko.util;
 
+import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.SysInfo;
 
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.os.Build;
+import android.system.Os;
 import android.util.Log;
 
 import org.mozilla.gecko.SysInfo;
@@ -79,15 +81,49 @@ public final class HardwareUtils {
         return SysInfo.getMemSize();
     }
 
+    public static boolean isARMSystem() {
+        return Build.CPU_ABI != null && Build.CPU_ABI.equals("armeabi-v7a");
+    }
+
+    public static boolean isX86System() {
+        if (Build.CPU_ABI != null && Build.CPU_ABI.equals("x86")) {
+            return true;
+        }
+        if (Build.VERSION.SDK_INT >= 21) {
+            // On some devices we have to look into the kernel release string.
+            try {
+                return Os.uname().release.contains("-x86_");
+            } catch (final Exception e) {
+                Log.w(LOGTAG, "Cannot get uname", e);
+            }
+        }
+        return false;
+    }
+
+    public static String getRealAbi() {
+        if (isX86System() && isARMSystem()) {
+            // Some x86 devices try to make us believe we're ARM,
+            // in which case CPU_ABI is not reliable.
+            return "x86";
+        }
+        return Build.CPU_ABI;
+    }
+
     /**
      * @return false if the current system is not supported (e.g. APK/system ABI mismatch).
      */
     public static boolean isSupportedSystem() {
-        // See http://developer.android.com/ndk/guides/abis.html
-        boolean isSystemARM = Build.CPU_ABI != null && Build.CPU_ABI.startsWith("arm");
-        boolean isSystemX86 = Build.CPU_ABI != null && Build.CPU_ABI.startsWith("x86");
+        // We've had crash reports from users on API 10 (with minSDK==15). That shouldn't even install,
+        // but since it does we need to protect against it:
+        if (Build.VERSION.SDK_INT < AppConstants.Versions.MIN_SDK_VERSION) {
+            return false;
+        }
 
-        boolean isAppARM = BuildConfig.ANDROID_CPU_ARCH.startsWith("arm");
+        // See http://developer.android.com/ndk/guides/abis.html
+        final boolean isSystemX86 = isX86System();
+        final boolean isSystemARM = !isSystemX86 && isARMSystem();
+
+        boolean isAppARM = BuildConfig.ANDROID_CPU_ARCH.startsWith("armeabi-v7a");
         boolean isAppX86 = BuildConfig.ANDROID_CPU_ARCH.startsWith("x86");
 
         // Only reject known incompatible ABIs. Better safe than sorry.

@@ -6,12 +6,11 @@
 
 DIRS += [
     'aushelper',
-    'disableSHA1rollout',
     'e10srollout',
     'pdfjs',
     'pocket',
+    'screenshots',
     'webcompat',
-    'shield-recipe-client',
 ]
 
 # Only include the following system add-ons if building Aurora or Nightly
@@ -20,6 +19,7 @@ if not CONFIG['RELEASE_OR_BETA']:
         'flyweb',
         'formautofill',
         'presentation',
+        'shield-recipe-client',
     ]
 
 # Only include mortar system add-ons if we locally enable it
@@ -31,5 +31,6 @@ if CONFIG['MOZ_MORTAR']:
 # Nightly-only system add-ons
 if CONFIG['NIGHTLY_BUILD']:
     DIRS += [
+        'activity-stream',
         'webcompat-reporter',
     ]

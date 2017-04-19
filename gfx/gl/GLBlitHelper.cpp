@@ -756,16 +756,20 @@ GLBlitHelper::BlitPlanarYCbCrImage(layers::PlanarYCbCrImage* yuvImage)
         mGL->fActiveTexture(LOCAL_GL_TEXTURE0 + i);
         mGL->fGetIntegerv(LOCAL_GL_TEXTURE_BINDING_2D, &oldTex[i]);
     }
-    BindAndUploadYUVTexture(Channel_Y, yuvData->mYStride, yuvData->mYSize.height, yuvData->mYChannel, needsAllocation);
-    BindAndUploadYUVTexture(Channel_Cb, yuvData->mCbCrStride, yuvData->mCbCrSize.height, yuvData->mCbChannel, needsAllocation);
-    BindAndUploadYUVTexture(Channel_Cr, yuvData->mCbCrStride, yuvData->mCbCrSize.height, yuvData->mCrChannel, needsAllocation);
+
+    {
+        const ResetUnpackState reset(mGL);
+        BindAndUploadYUVTexture(Channel_Y, yuvData->mYStride, yuvData->mYSize.height, yuvData->mYChannel, needsAllocation);
+        BindAndUploadYUVTexture(Channel_Cb, yuvData->mCbCrStride, yuvData->mCbCrSize.height, yuvData->mCbChannel, needsAllocation);
+        BindAndUploadYUVTexture(Channel_Cr, yuvData->mCbCrStride, yuvData->mCbCrSize.height, yuvData->mCrChannel, needsAllocation);
+    }
 
     if (needsAllocation) {
         mGL->fUniform2f(mYTexScaleLoc, (float)yuvData->mYSize.width/yuvData->mYStride, 1.0f);
         mGL->fUniform2f(mCbCrTexScaleLoc, (float)yuvData->mCbCrSize.width/yuvData->mCbCrStride, 1.0f);
     }
 
-    float* yuvToRgb = gfxUtils::Get3x3YuvColorMatrix(yuvData->mYUVColorSpace);
+    const auto& yuvToRgb = gfxUtils::YuvToRgbMatrix3x3ColumnMajor(yuvData->mYUVColorSpace);
     mGL->fUniformMatrix3fv(mYuvColorMatrixLoc, 1, 0, yuvToRgb);
 
     mGL->fDrawArrays(LOCAL_GL_TRIANGLE_STRIP, 0, 4);
@@ -831,7 +835,7 @@ GLBlitHelper::BlitImageToFramebuffer(layers::Image* srcImage,
     switch (srcImage->GetFormat()) {
     case ImageFormat::PLANAR_YCBCR:
         type = ConvertPlanarYCbCr;
-        srcOrigin = OriginPos::TopLeft;
+        srcOrigin = OriginPos::BottomLeft;
         break;
 
 #ifdef MOZ_WIDGET_ANDROID
@@ -839,7 +843,6 @@ GLBlitHelper::BlitImageToFramebuffer(layers::Image* srcImage,
         type = ConvertSurfaceTexture;
         srcOrigin = srcImage->AsSurfaceTextureImage()->GetOriginPos();
         break;
-
     case ImageFormat::EGLIMAGE:
         type = ConvertEGLImage;
         srcOrigin = srcImage->AsEGLImageImage()->GetOriginPos();
@@ -869,13 +872,8 @@ GLBlitHelper::BlitImageToFramebuffer(layers::Image* srcImage,
     mGL->fViewport(0, 0, destSize.width, destSize.height);
 
     switch (type) {
-    case ConvertPlanarYCbCr: {
-            const auto saved = mGL->GetIntAs<GLint>(LOCAL_GL_UNPACK_ALIGNMENT);
-            mGL->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 1);
-            const auto ret = BlitPlanarYCbCrImage(static_cast<PlanarYCbCrImage*>(srcImage));
-            mGL->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, saved);
-            return ret;
-        }
+    case ConvertPlanarYCbCr:
+        return BlitPlanarYCbCrImage(static_cast<PlanarYCbCrImage*>(srcImage));
 
 #ifdef MOZ_WIDGET_ANDROID
     case ConvertSurfaceTexture:

@@ -5,7 +5,7 @@
 <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
 <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
 
-<script type="application/javascript;version=1.7">
+<script type="application/javascript">
 
 var expectedTypes = [
   "localStorage",
@@ -52,7 +52,7 @@ function* Tests()
 
   // Listen for dom-storage2-changed notification
   SpecialPowers.Services.obs.addObserver(onStorageChanged,
-    "dom-storage2-changed", false);
+    "dom-storage2-changed");
 
   // add an empty-value key
   localStorage.setItem("empty", "");

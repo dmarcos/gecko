@@ -2,11 +2,53 @@
 Mozilla ESLint Plugin
 =====================
 
+Environments
+============
+
+These environments are available by specifying a comment at the top of the file,
+e.g.
+
+   /* eslint-env mozilla/chrome-worker */
+
+There are also built-in ESLint environments available as well:
+http://eslint.org/docs/user-guide/configuring#specifying-environments
+
+browser-window
+--------------
+
+Defines the environment for scripts that are in the main browser.xul scope (
+note: includes the places-overlay environment).
+
+places-overlay
+--------------
+
+Defines the environment for scripts that are in a scope where placesOverlay.xul
+is included.
+
+chrome-worker
+-------------
+
+Defines the environment for chrome workers. This differs from normal workers by
+the fact that `ctypes` can be accessed as well.
+
+frame-script
+------------
+
+Defines the environment for frame scripts.
+
+Rules
+=====
+
 avoid-removeChild
 -----------------
 
 Rejects using element.parentNode.removeChild(element) when element.remove()
 can be used instead.
+
+avoid-nsISupportsString-preferences
+-----------------------------------
+
+Rejects using getComplexValue and setComplexValue with nsISupportsString.
 
 balanced-listeners
 ------------------
@@ -14,6 +56,26 @@ balanced-listeners
 Checks that for every occurence of 'addEventListener' or 'on' there is an
 occurence of 'removeEventListener' or 'off' with the same event name.
 
+import-browser-window-globals
+-----------------------------
+
+For scripts included in browser-window, this will automatically inject the
+browser-window global scopes into the file.
+
+import-content-task-globals
+---------------------------
+
+For files containing ContentTask.spawn calls, this will automatically declare
+the frame script variables in the global scope. ContentTask is only available
+to test files, so by default the configs only specify it for the mochitest based
+configurations.
+
+This saves setting the file as a mozilla/frame-script environment.
+
+Note: due to the way ESLint works, it appears it is only easy to declare these
+variables on a file global scope, rather than function global. This may mean that
+they are incorrectly allowed, but given they are test files, this should be
+detected during testing.
 
 import-globals
 --------------
@@ -22,13 +84,6 @@ Checks the filename of imported files e.g. ``Cu.import("some/path/Blah.jsm")``
 adds Blah to the global scope.
 
 Note: uses modules.json for a list of globals listed in each file.
-
-import-browserjs-globals
-------------------------
-
-When included files from the main browser UI scripts will be loaded and any
-declared globals will be defined for the current file. This is mostly useful for
-browser-chrome mochitests that call browser functions.
 
 
 import-globals-from
@@ -168,6 +223,17 @@ object is assigned to another variable e.g.::
    var b = gBrowser;
    b.content // Would not be detected as a CPOW.
 
+use-default-preference-values
+---------------
+
+Require providing a second parameter to get*Pref methods instead of
+using a try/catch block.
+
+use-ownerGlobal
+---------------
+
+Require .ownerGlobal instead of .ownerDocument.defaultView.
+
 
 var-only-at-top-level
 ---------------------
@@ -194,9 +260,6 @@ Example configuration::
 
    "rules": {
      "mozilla/balanced-listeners": 2,
-     "mozilla/components-imports": 1,
-     "mozilla/import-globals-from": 1,
-     "mozilla/import-headjs-globals": 1,
      "mozilla/mark-test-function-used": 1,
      "mozilla/var-only-at-top-level": 1,
      "mozilla/no-cpows-in-tests": 1,

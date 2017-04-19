@@ -89,6 +89,10 @@ public class AccountsHelper implements BundleEventListener {
         }
 
         if ("Accounts:CreateFirefoxAccountFromJSON".equals(event)) {
+            // As we are about to create a new account, let's ensure our in-memory accounts cache
+            // is empty so that there are no undesired side-effects.
+            AndroidFxAccount.invalidateCaches();
+
             AndroidFxAccount fxAccount = null;
             try {
                 final GeckoBundle json = message.getBundle("json");
@@ -150,6 +154,10 @@ public class AccountsHelper implements BundleEventListener {
             }
 
         } else if ("Accounts:UpdateFirefoxAccountFromJSON".equals(event)) {
+            // We might be significantly changing state of the account; let's ensure our in-memory
+            // accounts cache is empty so that there are no undesired side-effects.
+            AndroidFxAccount.invalidateCaches();
+
             final Account account = FirefoxAccounts.getFirefoxAccount(mContext);
             if (account == null) {
                 if (callback != null) {
@@ -174,9 +182,19 @@ public class AccountsHelper implements BundleEventListener {
             }
 
             final boolean verified = json.getBoolean("verified", false);
-            final byte[] unwrapkB = Utils.hex2Byte(json.getString("unwrapBKey"));
-            final byte[] sessionToken = Utils.hex2Byte(json.getString("sessionToken"));
-            final byte[] keyFetchToken = Utils.hex2Byte(json.getString("keyFetchToken"));
+            final byte[] unwrapkB = Utils.hex2Byte(json.getString("unwrapBKey", ""));
+            final byte[] sessionToken = Utils.hex2Byte(json.getString("sessionToken", ""));
+            final byte[] keyFetchToken = Utils.hex2Byte(json.getString("keyFetchToken", ""));
+
+            if (unwrapkB.length == 0 || sessionToken.length == 0 || keyFetchToken.length == 0) {
+                final String error = "Cannot update Firefox Account from JSON: invalid key/tokens";
+                Log.e(LOGTAG, error);
+                if (callback != null) {
+                    callback.sendError(error);
+                }
+                return;
+            }
+
             final State state = new Engaged(email, uid, verified, unwrapkB,
                                             sessionToken, keyFetchToken);
 

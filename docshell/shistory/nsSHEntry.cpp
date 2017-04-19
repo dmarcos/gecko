@@ -59,19 +59,14 @@ nsSHEntry::nsSHEntry(const nsSHEntry& aOther)
 {
 }
 
-static bool
-ClearParentPtr(nsISHEntry* aEntry, void* /* aData */)
-{
-  if (aEntry) {
-    aEntry->SetParent(nullptr);
-  }
-  return true;
-}
-
 nsSHEntry::~nsSHEntry()
 {
   // Null out the mParent pointers on all our kids.
-  mChildren.EnumerateForwards(ClearParentPtr, nullptr);
+  for (nsISHEntry* entry : mChildren) {
+    if (entry) {
+      entry->SetParent(nullptr);
+    }
+  }
 }
 
 NS_IMPL_ISUPPORTS(nsSHEntry, nsISHContainer, nsISHEntry, nsISHEntryInternal)
@@ -298,6 +293,19 @@ nsSHEntry::SetLayoutHistoryState(nsILayoutHistoryState* aState)
 }
 
 NS_IMETHODIMP
+nsSHEntry::InitLayoutHistoryState(nsILayoutHistoryState** aState)
+{
+  if (!mShared->mLayoutHistoryState) {
+    nsCOMPtr<nsILayoutHistoryState> historyState;
+    historyState = NS_NewLayoutHistoryState();
+    nsresult rv = SetLayoutHistoryState(historyState);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  return GetLayoutHistoryState(aState);
+}
+
+NS_IMETHODIMP
 nsSHEntry::GetLoadType(uint32_t* aResult)
 {
   *aResult = mLoadType;
@@ -518,10 +526,6 @@ nsSHEntry::GetTriggeringPrincipal(nsIPrincipal** aTriggeringPrincipal)
 NS_IMETHODIMP
 nsSHEntry::SetTriggeringPrincipal(nsIPrincipal* aTriggeringPrincipal)
 {
-  MOZ_ASSERT(aTriggeringPrincipal, "need a valid triggeringPrincipal");
-  if (!aTriggeringPrincipal) {
-    return NS_ERROR_FAILURE;
-  }
   mShared->mTriggeringPrincipal = aTriggeringPrincipal;
   return NS_OK;
 }

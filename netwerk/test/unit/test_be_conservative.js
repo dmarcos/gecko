@@ -73,6 +73,7 @@ class InputStreamCallback {
 
   stop() {
     this.stopped = true;
+    this.output.close();
   }
 }
 
@@ -81,11 +82,17 @@ class TLSServerSecurityObserver {
     this.input = input;
     this.output = output;
     this.callbacks = [];
+    this.stopped = false;
   }
 
   onHandshakeDone(socket, status) {
     do_print("TLS handshake done");
     do_print(`TLS version used: ${status.tlsVersionUsed}`);
+
+    if (this.stopped) {
+      do_print("handshake done callback stopped - bailing");
+      return;
+    }
 
     let callback = new InputStreamCallback(this.output);
     this.callbacks.push(callback);
@@ -93,6 +100,9 @@ class TLSServerSecurityObserver {
   }
 
   stop() {
+    this.stopped = true;
+    this.input.close();
+    this.output.close();
     this.callbacks.forEach((callback) => {
       callback.stop();
     });

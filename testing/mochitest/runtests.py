@@ -13,6 +13,8 @@ SCRIPT_DIR = os.path.abspath(os.path.realpath(os.path.dirname(__file__)))
 sys.path.insert(0, SCRIPT_DIR)
 
 from argparse import Namespace
+from collections import defaultdict
+from contextlib import closing
 import ctypes
 import glob
 import json
@@ -80,6 +82,15 @@ except ImportError:
 
 here = os.path.abspath(os.path.dirname(__file__))
 
+NO_TESTS_FOUND = """
+No tests were found for flavor '{}' and the following manifest filters:
+{}
+
+Make sure the test paths (if any) are spelt correctly and the corresponding
+--flavor and --subsuite are being used. See `mach mochitest --help` for a
+list of valid flavors.
+""".lstrip()
+
 
 ########################################
 # Option for MOZ (former NSPR) logging #
@@ -145,8 +156,10 @@ class MessageLogger(object):
                           'chrome://mochitests/content/browser/',
                           'chrome://mochitests/content/chrome/']
 
-    def __init__(self, logger, buffering=True):
+    def __init__(self, logger, buffering=True, structured=True):
         self.logger = logger
+        self.structured = structured
+        self.gecko_id = 'GECKO'
 
         # Even if buffering is enabled, we only want to buffer messages between
         # TEST-START/TEST-END. So it is off to begin, but will be enabled after
@@ -160,11 +173,12 @@ class MessageLogger(object):
         # Failures reporting, after the end of the tests execution
         self.errors = []
 
-    def valid_message(self, obj):
-        """True if the given object is a valid structured message
+    def validate(self, obj):
+        """Tests whether the given object is a valid structured message
         (only does a superficial validation)"""
-        return isinstance(obj, dict) and 'action' in obj and obj[
-            'action'] in MessageLogger.VALID_ACTIONS
+        if not (isinstance(obj, dict) and 'action' in obj and obj[
+                'action'] in MessageLogger.VALID_ACTIONS):
+            raise ValueError
 
     def _fix_test_name(self, message):
         """Normalize a logged test path to match the relative path from the sourcedir.
@@ -194,18 +208,21 @@ class MessageLogger(object):
                 continue
             try:
                 message = json.loads(fragment)
-                if not self.valid_message(message):
+                self.validate(message)
+            except ValueError:
+                if self.structured:
+                    message = dict(
+                        action='process_output',
+                        process=self.gecko_id,
+                        data=fragment,
+                    )
+                else:
                     message = dict(
                         action='log',
                         level='info',
                         message=fragment,
-                        unstructured=True)
-            except ValueError:
-                message = dict(
-                    action='log',
-                    level='info',
-                    message=fragment,
-                    unstructured=True)
+                    )
+
             self._fix_test_name(message)
             self._fix_message_format(message)
             messages.append(message)
@@ -221,11 +238,6 @@ class MessageLogger(object):
         if message['action'] == 'buffering_off':
             self.buffering = False
             return
-
-        unstructured = False
-        if 'unstructured' in message:
-            unstructured = True
-            message.pop('unstructured')
 
         # Error detection also supports "raw" errors (in log messages) because some tests
         # manually dump 'TEST-UNEXPECTED-FAIL'.
@@ -248,15 +260,12 @@ class MessageLogger(object):
 
             # Logging the error message
             self.logger.log_raw(message)
-        # If we don't do any buffering, or the tests haven't started, or the message was
-        # unstructured, it is directly logged.
-        elif any([not self.buffering,
-                  unstructured,
-                  message['action'] not in self.BUFFERED_ACTIONS]):
-            self.logger.log_raw(message)
-        else:
-            # Buffering the message
+        # Determine if message should be buffered
+        elif self.buffering and self.structured and message['action'] in self.BUFFERED_ACTIONS:
             self.buffered_messages.append(message)
+        # Otherwise log the message directly
+        else:
+            self.logger.log_raw(message)
 
         # If a test ended, we clean the buffer
         if message['action'] == 'test_end':
@@ -383,8 +392,14 @@ class MochitestServer(object):
         self._profileDir = options['profilePath']
         self.webServer = options['webServer']
         self.httpPort = options['httpPort']
+        if options.get('remoteWebServer') == "10.0.2.2":
+            # probably running an Android emulator and 10.0.2.2 will
+            # not be visible from host
+            shutdownServer = "127.0.0.1"
+        else:
+            shutdownServer = self.webServer
         self.shutdownURL = "http://%(server)s:%(port)s/server/shutdown" % {
-            "server": self.webServer,
+            "server": shutdownServer,
             "port": self.httpPort}
         self.testPrefix = "undefined"
 
@@ -474,7 +489,7 @@ class MochitestServer(object):
 
     def stop(self):
         try:
-            with urllib2.urlopen(self.shutdownURL) as c:
+            with closing(urllib2.urlopen(self.shutdownURL)) as c:
                 c.read()
 
             # TODO: need ProcessHandler.poll()
@@ -487,6 +502,8 @@ class MochitestServer(object):
                 # self._process.terminate()
                 self._process.proc.terminate()
         except:
+            self._log.info("Failed to stop web server on %s" % self.shutdownURL)
+            traceback.print_exc()
             self._process.kill()
 
 
@@ -777,16 +794,20 @@ class MochitestDesktop(object):
     DEFAULT_TIMEOUT = 60.0
     mediaDevices = None
 
+    patternFiles = {}
+
     # XXX use automation.py for test name to avoid breaking legacy
     # TODO: replace this with 'runtests.py' or 'mochitest' or the like
     test_name = 'automation.py'
 
-    def __init__(self, logger_options, quiet=False):
+    def __init__(self, flavor, logger_options, quiet=False):
         self.update_mozinfo()
+        self.flavor = flavor
         self.server = None
         self.wsserver = None
         self.websocketProcessBridge = None
         self.sslTunnel = None
+        self.tests_by_manifest = defaultdict(list)
         self._active_tests = None
         self._locations = None
 
@@ -807,7 +828,12 @@ class MochitestDesktop(object):
                                                  })
             MochitestDesktop.log = self.log
 
-        self.message_logger = MessageLogger(logger=self.log, buffering=quiet)
+        # Jetpack flavors still don't use the structured logger. We need to process their output
+        # slightly differently.
+        structured = not self.flavor.startswith('jetpack')
+        self.message_logger = MessageLogger(
+                logger=self.log, buffering=quiet, structured=structured)
+
         # Max time in seconds to wait for server startup before tests will fail -- if
         # this seems big, it's mostly for debug machines where cold startup
         # (particularly after a build) takes forever.
@@ -967,6 +993,10 @@ class MochitestDesktop(object):
                 self.urlOpts.append("dumpDMDAfterTest=true")
             if options.debugger:
                 self.urlOpts.append("interactiveDebugger=true")
+            if options.jscov_dir_prefix:
+                self.urlOpts.append("jscovDirPrefix=%s" % options.jscov_dir_prefix)
+            if options.cleanupCrashes:
+                self.urlOpts.append("cleanupCrashes=true")
 
     def normflavor(self, flavor):
         """
@@ -1292,7 +1322,7 @@ toolbar#nav-bar {
     def logPreamble(self, tests):
         """Logs a suite_start message and test_start/test_end at the beginning of a run.
         """
-        self.log.suite_start([t['path'] for t in tests])
+        self.log.suite_start(self.tests_by_manifest)
         for test in tests:
             if 'disabled' in test:
                 self.log.test_start(test['path'])
@@ -1300,6 +1330,54 @@ toolbar#nav-bar {
                     test['path'],
                     'SKIP',
                     message=test['disabled'])
+
+    def loadFailurePatternFile(self, pat_file):
+        if pat_file in self.patternFiles:
+            return self.patternFiles[pat_file]
+        if not os.path.isfile(pat_file):
+            self.log.error("TEST-UNEXPECTED-ERROR | runtests.py | "
+                           "Cannot find failure pattern file " + pat_file)
+            return None
+
+        # Using ":error" to ensure it shows up in the failure summary.
+        self.log.warning(
+            "[runtests.py:error] Using {} to filter failures. If there "
+            "is any number mismatch below, you could have fixed "
+            "something documented in that file. Please reduce the "
+            "failure count appropriately.".format(pat_file))
+        patternRE = re.compile(r"""
+            ^\s*\*\s*               # list bullet
+            (test_\S+|\.{3})        # test name
+            (?:\s*(`.+?`|asserts))? # failure pattern
+            (?::.+)?                # optional description
+            \s*\[(\d+|\*)\]         # expected count
+            \s*$
+        """, re.X)
+        patterns = {}
+        with open(pat_file) as f:
+            last_name = None
+            for line in f:
+                match = patternRE.match(line)
+                if not match:
+                    continue
+                name = match.group(1)
+                name = last_name if name == "..." else name
+                last_name = name
+                pat = match.group(2)
+                if pat is not None:
+                    pat = "ASSERTION" if pat == "asserts" else pat[1:-1]
+                count = match.group(3)
+                count = None if count == "*" else int(count)
+                if name not in patterns:
+                    patterns[name] = []
+                patterns[name].append((pat, count))
+        self.patternFiles[pat_file] = patterns
+        return patterns
+
+    def getFailurePatterns(self, pat_file, test_name):
+        patterns = self.loadFailurePatternFile(pat_file)
+        if patterns:
+            return patterns.get(test_name, None)
 
     def getActiveTests(self, options, disabled=True):
         """
@@ -1372,16 +1450,13 @@ toolbar#nav-bar {
                 exists=False, disabled=disabled, filters=filters, **info)
 
             if len(tests) == 0:
-                self.log.error("no tests to run using specified "
-                               "combination of filters: {}".format(
-                                   manifest.fmt_filters()))
+                self.log.error(NO_TESTS_FOUND.format(options.flavor, manifest.fmt_filters()))
 
         paths = []
 
         # When running mochitest locally the manifest is based on topsrcdir,
         # but when running in automation it is based on the test root.
         manifest_root = build_obj.topsrcdir if build_obj else self.testRootAbs
-        manifests = set()
         for test in tests:
             if len(tests) == 1 and 'disabled' in test:
                 del test['disabled']
@@ -1396,7 +1471,8 @@ toolbar#nav-bar {
                     (test['name'], test['manifest']))
                 continue
 
-            manifests.add(os.path.relpath(test['manifest'], manifest_root))
+            manifest_relpath = os.path.relpath(test['manifest'], manifest_root)
+            self.tests_by_manifest[manifest_relpath].append(tp)
 
             testob = {'path': tp}
             if 'disabled' in test:
@@ -1405,6 +1481,12 @@ toolbar#nav-bar {
                 testob['expected'] = test['expected']
             if 'scheme' in test:
                 testob['scheme'] = test['scheme']
+            if options.failure_pattern_file:
+                pat_file = os.path.join(os.path.dirname(test['manifest']),
+                                        options.failure_pattern_file)
+                patterns = self.getFailurePatterns(pat_file, test['name'])
+                if patterns:
+                    testob['expected'] = patterns
             paths.append(testob)
 
         def path_sort(ob1, ob2):
@@ -1426,7 +1508,7 @@ toolbar#nav-bar {
         if 'MOZ_UPLOAD_DIR' in os.environ:
             artifact = os.path.join(os.environ['MOZ_UPLOAD_DIR'], 'manifests.list')
             with open(artifact, 'a') as fh:
-                fh.write('\n'.join(sorted(manifests)))
+                fh.write('\n'.join(sorted(self.tests_by_manifest.keys())))
 
         self._active_tests = paths
         return self._active_tests
@@ -1483,7 +1565,7 @@ toolbar#nav-bar {
 
     def buildBrowserEnv(self, options, debugger=False, env=None):
         """build the environment variables for the specific test and operating system"""
-        if mozinfo.info["asan"]:
+        if mozinfo.info["asan"] and mozinfo.isLinux and mozinfo.bits == 64:
             lsanPath = SCRIPT_DIR
         else:
             lsanPath = None
@@ -1494,6 +1576,9 @@ toolbar#nav-bar {
             debugger=debugger,
             dmdPath=options.dmdPath,
             lsanPath=lsanPath)
+
+        if hasattr(options, "topsrcdir"):
+            browserEnv["MOZ_DEVELOPER_REPO_DIR"] = options.topsrcdir
 
         # These variables are necessary for correct application startup; change
         # via the commandline at your own risk.
@@ -1958,7 +2043,7 @@ toolbar#nav-bar {
             else:
                 shutdownLeaks = None
 
-            if mozinfo.info["asan"] and (mozinfo.isLinux or mozinfo.isMac):
+            if mozinfo.info["asan"] and mozinfo.isLinux and mozinfo.bits == 64:
                 lsanLeaks = LSANLeaks(self.log)
             else:
                 lsanLeaks = None
@@ -2010,7 +2095,10 @@ toolbar#nav-bar {
                          outputTimeout=timeout)
             proc = runner.process_handler
             self.log.info("runtests.py | Application pid: %d" % proc.pid)
-            self.log.process_start("Main app process")
+
+            gecko_id = "GECKO(%d)" % proc.pid
+            self.log.process_start(gecko_id)
+            self.message_logger.gecko_id = gecko_id
 
             # start marionette and kick off the tests
             marionette_args = marionette_args or {}
@@ -2204,6 +2292,10 @@ toolbar#nav-bar {
             options.e10s = False
         mozinfo.update({"e10s": options.e10s})  # for test manifest parsing.
 
+        # Add flag to mozinfo to indicate that code coverage is enabled.
+        if os.getenv('GCOV_PREFIX') is not None:
+            mozinfo.update({"coverage": True})
+
         self.setTestRoot(options)
 
         # Despite our efforts to clean up servers started by this script, in practice
@@ -2345,7 +2437,7 @@ toolbar#nav-bar {
                 options.app = self.immersiveHelperPath
 
             if options.jsdebugger:
-                options.browserArgs.extend(['-jsdebugger'])
+                options.browserArgs.extend(['-jsdebugger', '-wait-for-jsdebugger'])
 
             # Remove the leak detection file so it can't "leak" to the tests run.
             # The file is not there if leak logging was not enabled in the
@@ -2618,8 +2710,11 @@ toolbar#nav-bar {
             return message
 
         def fix_stack(self, message):
-            if message['action'] == 'log' and self.stackFixerFunction:
-                message['message'] = self.stackFixerFunction(message['message'])
+            if self.stackFixerFunction:
+                if message['action'] == 'log':
+                    message['message'] = self.stackFixerFunction(message['message'])
+                elif message['action'] == 'process_output':
+                    message['data'] = self.stackFixerFunction(message['data'])
             return message
 
         def record_last_test(self, message):
@@ -2643,8 +2738,9 @@ toolbar#nav-bar {
             return message
 
         def trackLSANLeaks(self, message):
-            if self.lsanLeaks and message['action'] == 'log':
-                self.lsanLeaks.log(message['message'])
+            if self.lsanLeaks and message['action'] in ('log', 'process_output'):
+                line = message['message'] if message['action'] == 'log' else message['data']
+                self.lsanLeaks.log(line)
             return message
 
         def trackShutdownLeaks(self, message):
@@ -2676,7 +2772,7 @@ def run_test_harness(parser, options):
         key: value for key, value in vars(options).iteritems()
         if key.startswith('log') or key == 'valgrind'}
 
-    runner = MochitestDesktop(logger_options, quiet=options.quiet)
+    runner = MochitestDesktop(options.flavor, logger_options, quiet=options.quiet)
 
     options.runByDir = False
 

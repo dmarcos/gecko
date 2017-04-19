@@ -39,11 +39,14 @@
 #include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/Nullable.h"
+#include "mozilla/UniquePtr.h"
 #include "Units.h"
 #include "DOMIntersectionObserver.h"
 
+class mozAutoDocUpdate;
 class nsIFrame;
 class nsIDOMMozNamedAttrMap;
+class nsIMozBrowserFrame;
 class nsIURI;
 class nsIScrollableFrame;
 class nsAttrValueOrString;
@@ -282,6 +285,15 @@ public:
   DeclarationBlock* GetInlineStyleDeclaration() const;
 
   /**
+   * Get the mapped attributes, if any, for this element.
+   */
+  const nsMappedAttributes* GetMappedAttributes() const;
+
+  void ClearMappedServoStyle() {
+    mAttrsAndChildren.ClearMappedServoStyle();
+  }
+
+  /**
    * Set the inline style declaration for this element. This will send
    * an appropriate AttributeChanged notification if aNotify is true.
    */
@@ -306,10 +318,9 @@ public:
   /**
    * Returns a new nsISMILAttr that allows the caller to animate the given
    * attribute on this element.
-   *
-   * The CALLER OWNS the result and is responsible for deleting it.
    */
-  virtual nsISMILAttr* GetAnimatedAttr(int32_t aNamespaceID, nsIAtom* aName)
+  virtual UniquePtr<nsISMILAttr> GetAnimatedAttr(int32_t aNamespaceID,
+                                                 nsIAtom* aName)
   {
     return nullptr;
   }
@@ -333,6 +344,16 @@ public:
    * Returns if the element is interactive content as per HTML specification.
    */
   virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const;
+
+  /**
+   * Returns |this| as an nsIMozBrowserFrame* if the element is a frame or
+   * iframe element.
+   *
+   * We have this method, rather than using QI, so that we can use it during
+   * the servo traversal, where we can't QI DOM nodes because of non-thread-safe
+   * refcounts.
+   */
+  virtual nsIMozBrowserFrame* GetAsMozBrowserFrame() { return nullptr; }
 
   /**
    * Is the attribute named stored in the mapped attributes?
@@ -431,15 +452,13 @@ public:
     UnsetFlags(NODE_HAS_DIRTY_DESCENDANTS_FOR_SERVO);
   }
 
-  inline bool ShouldTraverseForServo();
-
   inline void NoteDirtyDescendantsForServo();
 
 #ifdef DEBUG
   inline bool DirtyDescendantsBitIsPropagatedForServo();
 #endif
 
-  bool HasServoData() {
+  bool HasServoData() const {
 #ifdef MOZ_STYLO
     return !!mServoData.Get();
 #else
@@ -448,6 +467,29 @@ public:
   }
 
   void ClearServoData();
+
+  /**
+   * Gets the custom element data used by web components custom element.
+   * Custom element data is created at the first attempt to enqueue a callback.
+   *
+   * @return The custom element data or null if none.
+   */
+  inline CustomElementData* GetCustomElementData() const
+  {
+    nsDOMSlots *slots = GetExistingDOMSlots();
+    if (slots) {
+      return slots->mCustomElementData;
+    }
+    return nullptr;
+  }
+
+  /**
+   * Sets the custom element data, ownership of the
+   * callback data is taken by this element.
+   *
+   * @param aData The custom element data.
+   */
+  void SetCustomElementData(CustomElementData* aData);
 
 protected:
   /**
@@ -501,24 +543,39 @@ private:
   EventStates StyleStateFromLocks() const;
 
 protected:
-  // Methods for the ESM to manage state bits.  These will handle
-  // setting up script blockers when they notify, so no need to do it
-  // in the callers unless desired.
+  // Methods for the ESM, nsGlobalWindow and focus manager to manage state bits.
+  // These will handle setting up script blockers when they notify, so no need
+  // to do it in the callers unless desired.  States passed here must only be
+  // those in EXTERNALLY_MANAGED_STATES.
   virtual void AddStates(EventStates aStates)
   {
     NS_PRECONDITION(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
-                    "Should only be adding ESM-managed states here");
+                    "Should only be adding externally-managed states here");
     AddStatesSilently(aStates);
     NotifyStateChange(aStates);
   }
   virtual void RemoveStates(EventStates aStates)
   {
     NS_PRECONDITION(!aStates.HasAtLeastOneOfStates(INTRINSIC_STATES),
-                    "Should only be removing ESM-managed states here");
+                    "Should only be removing externally-managed states here");
     RemoveStatesSilently(aStates);
     NotifyStateChange(aStates);
   }
 public:
+  // Public methods to manage state bits in MANUALLY_MANAGED_STATES.
+  void AddManuallyManagedStates(EventStates aStates)
+  {
+    MOZ_ASSERT(MANUALLY_MANAGED_STATES.HasAllStates(aStates),
+               "Should only be adding manually-managed states here");
+    AddStates(aStates);
+  }
+  void RemoveManuallyManagedStates(EventStates aStates)
+  {
+    MOZ_ASSERT(MANUALLY_MANAGED_STATES.HasAllStates(aStates),
+               "Should only be removing manually-managed states here");
+    RemoveStates(aStates);
+  }
+
   virtual void UpdateEditableState(bool aNotify) override;
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
@@ -602,6 +659,18 @@ public:
   virtual BorrowedAttrInfo GetAttrInfoAt(uint32_t aIndex) const override;
   virtual uint32_t GetAttrCount() const override;
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
+
+  /**
+   * Get the class list of this element (this corresponds to the value of the
+   * class attribute).  This may be null if there are no classes, but that's not
+   * guaranteed (e.g. we could have class="").
+   */
+  const nsAttrValue* GetClasses() const {
+    if (MayHaveClass()) {
+      return DoGetClasses();
+    }
+    return nullptr;
+  }
 
 #ifdef DEBUG
   virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override
@@ -766,6 +835,25 @@ public:
                            ErrorResult& aError);
   already_AddRefed<nsIHTMLCollection>
     GetElementsByClassName(const nsAString& aClassNames);
+
+  CSSPseudoElementType GetPseudoElementType() const {
+    if (!HasProperties()) {
+      return CSSPseudoElementType::NotPseudo;
+    }
+    nsresult rv = NS_OK;
+    auto raw = GetProperty(nsGkAtoms::pseudoProperty, &rv);
+    if (rv == NS_PROPTABLE_PROP_NOT_THERE) {
+      return CSSPseudoElementType::NotPseudo;
+    }
+    return CSSPseudoElementType(reinterpret_cast<uintptr_t>(raw));
+  }
+
+  void SetPseudoElementType(CSSPseudoElementType aPseudo) {
+    static_assert(sizeof(CSSPseudoElementType) <= sizeof(uintptr_t),
+                  "Need to be able to store this in a void*");
+    MOZ_ASSERT(aPseudo != CSSPseudoElementType::NotPseudo);
+    SetProperty(nsGkAtoms::pseudoProperty, reinterpret_cast<void*>(aPseudo));
+  }
 
 private:
   /**
@@ -1066,9 +1154,18 @@ public:
    */
   virtual BorrowedAttrInfo GetAttrInfo(int32_t aNamespaceID, nsIAtom* aName) const;
 
-  virtual void NodeInfoChanged()
-  {
-  }
+  /**
+   * Called when we have been adopted, and the information of the
+   * node has been changed.
+   *
+   * The new document can be reached via OwnerDoc().
+   *
+   * If you override this method,
+   * please call up to the parent NodeInfoChanged.
+   *
+   * If you change this, change also the similar method in Link.
+   */
+  virtual void NodeInfoChanged(nsIDocument* aOldDoc) {}
 
   /**
    * Parse a string into an nsAttrValue for a CORS attribute.  This
@@ -1087,20 +1184,6 @@ public:
    * but if not should have been parsed via ParseCORSValue).
    */
   static CORSMode AttrValueToCORSMode(const nsAttrValue* aValue);
-
-  // These are just used to implement nsIDOMElement using
-  // NS_FORWARD_NSIDOMELEMENT_TO_GENERIC and for quickstubs.
-  void
-    GetElementsByTagName(const nsAString& aQualifiedName,
-                         nsIDOMHTMLCollection** aResult);
-  nsresult
-    GetElementsByTagNameNS(const nsAString& aNamespaceURI,
-                           const nsAString& aLocalName,
-                           nsIDOMHTMLCollection** aResult);
-  nsresult
-    GetElementsByClassName(const nsAString& aClassNames,
-                           nsIDOMHTMLCollection** aResult);
-  void GetClassList(nsISupports** aClassList);
 
   virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) final override;
 
@@ -1261,6 +1344,7 @@ protected:
    * @param aFireMutation should mutation-events be fired?
    * @param aNotify       should we notify document-observers?
    * @param aCallAfterSetAttr should we call AfterSetAttr?
+   * @param aComposedDocument The current composed document of the element.
    */
   nsresult SetAttrAndNotify(int32_t aNamespaceID,
                             nsIAtom* aName,
@@ -1270,7 +1354,9 @@ protected:
                             uint8_t aModType,
                             bool aFireMutation,
                             bool aNotify,
-                            bool aCallAfterSetAttr);
+                            bool aCallAfterSetAttr,
+                            nsIDocument* aComposedDocument,
+                            const mozAutoDocUpdate& aGuard);
 
   /**
    * Scroll to a new position using behavior evaluated from CSS and
@@ -1306,16 +1392,14 @@ protected:
    * caller will not try to set the attr in any other way if this method
    * returns true (the value of aRetval does not matter for that purpose).
    *
-   * @param aDocument the current document of this node (an optimization)
    * @param aName the name of the attribute
    * @param aValue the nsAttrValue to set
    * @param [out] aRetval the nsresult status of the operation, if any.
    * @return true if the setting was attempted, false otherwise.
    */
-  virtual bool SetMappedAttribute(nsIDocument* aDocument,
-                                    nsIAtom* aName,
-                                    nsAttrValue& aValue,
-                                    nsresult* aRetval);
+  virtual bool SetMappedAttribute(nsIAtom* aName,
+                                  nsAttrValue& aValue,
+                                  nsresult* aRetval);
 
   /**
    * Hook that is called by Element::SetAttr to allow subclasses to
@@ -1328,16 +1412,17 @@ protected:
    * @param aName the localname of the attribute being set
    * @param aValue the value it's being set to represented as either a string or
    *        a parsed nsAttrValue. Alternatively, if the attr is being removed it
-   *        will be null. BeforeSetAttr is allowed to modify aValue by parsing
-   *        the string to an nsAttrValue (to avoid having to reparse it in
-   *        ParseAttribute).
+   *        will be null.
    * @param aNotify Whether we plan to notify document observers.
    */
   // Note that this is inlined so that when subclasses call it it gets
   // inlined.  Those calls don't go through a vtable.
   virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                 nsAttrValueOrString* aValue,
-                                 bool aNotify);
+                                 const nsAttrValueOrString* aValue,
+                                 bool aNotify)
+  {
+    return NS_OK;
+  }
 
   /**
    * Hook that is called by Element::SetAttr to allow subclasses to
@@ -1435,9 +1520,16 @@ protected:
   nsDOMTokenList* GetTokenList(nsIAtom* aAtom,
                                const DOMTokenListSupportedTokenArray aSupportedTokens = nullptr);
 
-  nsDataHashtable<nsPtrHashKey<DOMIntersectionObserver>, int32_t>* RegisteredIntersectionObservers();
+  nsDataHashtable<nsRefPtrHashKey<DOMIntersectionObserver>, int32_t>*
+    RegisteredIntersectionObservers();
 
 private:
+  /**
+   * Hook for implementing GetClasses.  This is guaranteed to only be
+   * called if the NODE_MAY_HAVE_CLASS flag is set.
+   */
+  const nsAttrValue* DoGetClasses() const;
+
   /**
    * Get this element's client area rect in app units.
    * @return the frame's client area
@@ -1650,31 +1742,6 @@ NS_IMETHOD GetTagName(nsAString& aTagName) final override                     \
   Element::GetTagName(aTagName);                                              \
   return NS_OK;                                                               \
 }                                                                             \
-NS_IMETHOD GetId(nsAString& aId) final override                               \
-{                                                                             \
-  Element::GetId(aId);                                                        \
-  return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD SetId(const nsAString& aId) final override                         \
-{                                                                             \
-  Element::SetId(aId);                                                        \
-  return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD GetClassName(nsAString& aClassName) final override                 \
-{                                                                             \
-  Element::GetClassName(aClassName);                                          \
-  return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD SetClassName(const nsAString& aClassName) final override           \
-{                                                                             \
-  Element::SetClassName(aClassName);                                          \
-  return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD GetClassList(nsISupports** aClassList) final override              \
-{                                                                             \
-  Element::GetClassList(aClassList);                                          \
-  return NS_OK;                                                               \
-}                                                                             \
 NS_IMETHOD GetAttributes(nsIDOMMozNamedAttrMap** aAttributes) final override  \
 {                                                                             \
   NS_ADDREF(*aAttributes = Attributes());                                     \
@@ -1689,41 +1756,12 @@ NS_IMETHOD GetAttribute(const nsAString& name, nsAString& _retval) final      \
   _retval = attr;                                                             \
   return NS_OK;                                                               \
 }                                                                             \
-NS_IMETHOD GetAttributeNS(const nsAString& namespaceURI,                      \
-                          const nsAString& localName,                         \
-                          nsAString& _retval) final override                  \
-{                                                                             \
-  Element::GetAttributeNS(namespaceURI, localName, _retval);                  \
-  return NS_OK;                                                               \
-}                                                                             \
 NS_IMETHOD SetAttribute(const nsAString& name,                                \
                         const nsAString& value) override                      \
 {                                                                             \
   mozilla::ErrorResult rv;                                                    \
   Element::SetAttribute(name, value, rv);                                     \
   return rv.StealNSResult();                                                  \
-}                                                                             \
-NS_IMETHOD SetAttributeNS(const nsAString& namespaceURI,                      \
-                          const nsAString& qualifiedName,                     \
-                          const nsAString& value) final override              \
-{                                                                             \
-  mozilla::ErrorResult rv;                                                    \
-  Element::SetAttributeNS(namespaceURI, qualifiedName, value, rv);            \
-  return rv.StealNSResult();                                                      \
-}                                                                             \
-using Element::RemoveAttribute;                                               \
-NS_IMETHOD RemoveAttribute(const nsAString& name) final override              \
-{                                                                             \
-  mozilla::ErrorResult rv;                                                    \
-  RemoveAttribute(name, rv);                                                  \
-  return rv.StealNSResult();                                                      \
-}                                                                             \
-NS_IMETHOD RemoveAttributeNS(const nsAString& namespaceURI,                   \
-                             const nsAString& localName) final override       \
-{                                                                             \
-  mozilla::ErrorResult rv;                                                    \
-  Element::RemoveAttributeNS(namespaceURI, localName, rv);                    \
-  return rv.StealNSResult();                                                      \
 }                                                                             \
 using Element::HasAttribute;                                                  \
 NS_IMETHOD HasAttribute(const nsAString& name,                                \
@@ -1732,45 +1770,11 @@ NS_IMETHOD HasAttribute(const nsAString& name,                                \
   *_retval = HasAttribute(name);                                              \
   return NS_OK;                                                               \
 }                                                                             \
-NS_IMETHOD HasAttributeNS(const nsAString& namespaceURI,                      \
-                          const nsAString& localName,                         \
-                          bool* _retval) final override                       \
-{                                                                             \
-  *_retval = Element::HasAttributeNS(namespaceURI, localName);                \
-  return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD HasAttributes(bool* _retval) final override                        \
-{                                                                             \
-  *_retval = Element::HasAttributes();                                        \
-  return NS_OK;                                                               \
-}                                                                             \
 NS_IMETHOD GetAttributeNode(const nsAString& name,                            \
                             nsIDOMAttr** _retval) final override              \
 {                                                                             \
   NS_IF_ADDREF(*_retval = Element::GetAttributeNode(name));                   \
   return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD SetAttributeNode(nsIDOMAttr* newAttr,                              \
-                            nsIDOMAttr** _retval) final override              \
-{                                                                             \
-  if (!newAttr) {                                                             \
-    return NS_ERROR_INVALID_POINTER;                                          \
-  }                                                                           \
-  mozilla::ErrorResult rv;                                                    \
-  mozilla::dom::Attr* attr = static_cast<mozilla::dom::Attr*>(newAttr);       \
-  *_retval = Element::SetAttributeNode(*attr, rv).take();                     \
-  return rv.StealNSResult();                                                      \
-}                                                                             \
-NS_IMETHOD RemoveAttributeNode(nsIDOMAttr* oldAttr,                           \
-                               nsIDOMAttr** _retval) final override           \
-{                                                                             \
-  if (!oldAttr) {                                                             \
-    return NS_ERROR_INVALID_POINTER;                                          \
-  }                                                                           \
-  mozilla::ErrorResult rv;                                                    \
-  mozilla::dom::Attr* attr = static_cast<mozilla::dom::Attr*>(oldAttr);       \
-  *_retval = Element::RemoveAttributeNode(*attr, rv).take();                  \
-  return rv.StealNSResult();                                                      \
 }                                                                             \
 NS_IMETHOD GetAttributeNodeNS(const nsAString& namespaceURI,                  \
                               const nsAString& localName,                     \
@@ -1779,34 +1783,5 @@ NS_IMETHOD GetAttributeNodeNS(const nsAString& namespaceURI,                  \
   NS_IF_ADDREF(*_retval = Element::GetAttributeNodeNS(namespaceURI,           \
                                                       localName));            \
   return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD SetAttributeNodeNS(nsIDOMAttr* newAttr,                            \
-                              nsIDOMAttr** _retval) final override            \
-{                                                                             \
-  mozilla::ErrorResult rv;                                                    \
-  mozilla::dom::Attr* attr = static_cast<mozilla::dom::Attr*>(newAttr);       \
-  *_retval = Element::SetAttributeNodeNS(*attr, rv).take();                   \
-  return rv.StealNSResult();                                                      \
-}                                                                             \
-NS_IMETHOD GetElementsByTagName(const nsAString& name,                        \
-                                nsIDOMHTMLCollection** _retval) final         \
-                                                                override      \
-{                                                                             \
-  Element::GetElementsByTagName(name, _retval);                               \
-  return NS_OK;                                                               \
-}                                                                             \
-NS_IMETHOD GetElementsByTagNameNS(const nsAString& namespaceURI,              \
-                                  const nsAString& localName,                 \
-                                  nsIDOMHTMLCollection** _retval) final       \
-                                                                  override    \
-{                                                                             \
-  return Element::GetElementsByTagNameNS(namespaceURI, localName,             \
-                                         _retval);                            \
-}                                                                             \
-NS_IMETHOD GetElementsByClassName(const nsAString& classes,                   \
-                                  nsIDOMHTMLCollection** _retval) final       \
-                                                                  override    \
-{                                                                             \
-  return Element::GetElementsByClassName(classes, _retval);                   \
 }
 #endif // mozilla_dom_Element_h__

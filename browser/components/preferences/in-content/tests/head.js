@@ -119,21 +119,19 @@ function waitForEvent(aSubject, aEventName, aTimeoutMs, aTarget) {
   return eventDeferred.promise.then(cleanup, cleanup);
 }
 
-function openPreferencesViaOpenPreferencesAPI(aPane, aAdvancedTab, aOptions) {
+function openPreferencesViaOpenPreferencesAPI(aPane, aOptions) {
   let deferred = Promise.defer();
   gBrowser.selectedTab = gBrowser.addTab("about:blank");
-  openPreferences(aPane, aAdvancedTab ? {advancedTab: aAdvancedTab} : undefined);
+  openPreferences(aPane);
   let newTabBrowser = gBrowser.selectedBrowser;
 
   newTabBrowser.addEventListener("Initialized", function() {
     newTabBrowser.contentWindow.addEventListener("load", function() {
       let win = gBrowser.contentWindow;
       let selectedPane = win.history.state;
-      let doc = win.document;
-      let selectedAdvancedTab = aAdvancedTab && doc.getElementById("advancedPrefs").selectedTab.id;
       if (!aOptions || !aOptions.leaveOpen)
         gBrowser.removeCurrentTab();
-      deferred.resolve({selectedPane, selectedAdvancedTab});
+      deferred.resolve({selectedPane});
     }, {once: true});
   }, {capture: true, once: true});
 
@@ -180,4 +178,43 @@ function promiseWindowDialogOpen(buttonAction, url) {
 
 function promiseAlertDialogOpen(buttonAction) {
   return promiseWindowDialogOpen(buttonAction, "chrome://global/content/commonDialog.xul");
+}
+
+function addPersistentStoragePerm(origin) {
+  let uri = NetUtil.newURI(origin);
+  let principal = Services.scriptSecurityManager.createCodebasePrincipal(uri, {});
+  Services.perms.addFromPrincipal(principal, "persistent-storage", Ci.nsIPermissionManager.ALLOW_ACTION);
+}
+
+function promiseSiteDataManagerSitesUpdated() {
+  return TestUtils.topicObserved("sitedatamanager:sites-updated", () => true);
+}
+
+function openSiteDataSettingsDialog() {
+  let doc = gBrowser.selectedBrowser.contentDocument;
+  let settingsBtn = doc.getElementById("siteDataSettings");
+  let dialogOverlay = doc.getElementById("dialogOverlay");
+  let dialogLoadPromise = promiseLoadSubDialog("chrome://browser/content/preferences/siteDataSettings.xul");
+  let dialogInitPromise = TestUtils.topicObserved("sitedata-settings-init", () => true);
+  let fullyLoadPromise = Promise.all([ dialogLoadPromise, dialogInitPromise ]).then(() => {
+    is(dialogOverlay.style.visibility, "visible", "The Settings dialog should be visible");
+  });
+  settingsBtn.doCommand();
+  return fullyLoadPromise;
+}
+
+function assertSitesListed(doc, origins) {
+  let frameDoc = doc.getElementById("dialogFrame").contentDocument;
+  let removeBtn = frameDoc.getElementById("removeSelected");
+  let removeAllBtn = frameDoc.getElementById("removeAll");
+  let sitesList = frameDoc.getElementById("sitesList");
+  let totalSitesNumber = sitesList.getElementsByTagName("richlistitem").length;
+  is(totalSitesNumber, origins.length, "Should list the right sites number");
+  origins.forEach(origin => {
+    let site = sitesList.querySelector(`richlistitem[data-origin="${origin}"]`);
+    let host = site.getAttribute("host");
+    ok(origin.includes(host), `Should list the site of ${origin}`);
+  });
+  is(removeBtn.disabled, false, "Should enable the removeSelected button");
+  is(removeAllBtn.disabled, false, "Should enable the removeAllBtn button");
 }

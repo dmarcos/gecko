@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 if (AppConstants.MOZ_SERVICES_CLOUDSYNC) {
   XPCOMUtils.defineLazyModuleGetter(this, "CloudSync",
@@ -38,10 +39,10 @@ var gSyncUI = {
   // once syncing completes (bug 1239042).
   _syncStartTime: 0,
   _syncAnimationTimer: 0,
+  _withinLastWeekFormat: null,
+  _oneWeekOrOlderFormat: null,
 
   init() {
-    Cu.import("resource://services-common/stringbundle.js");
-
     // Proceed to set up the UI if Sync has already started up.
     // Otherwise we'll do it when Sync is firing up.
     if (this.weaveService.ready) {
@@ -60,18 +61,17 @@ var gSyncUI = {
 
     // Remove the observer if the window is closed before the observer
     // was triggered.
-    window.addEventListener("unload", function onUnload() {
-      gSyncUI._unloaded = true;
-      window.removeEventListener("unload", onUnload);
-      Services.obs.removeObserver(gSyncUI, "weave:service:ready");
-      Services.obs.removeObserver(gSyncUI, "quit-application");
+    window.addEventListener("unload", () => {
+      this._unloaded = true;
+      Services.obs.removeObserver(this, "weave:service:ready");
+      Services.obs.removeObserver(this, "quit-application");
 
-      if (Weave.Status.ready) {
-        gSyncUI._obs.forEach(function(topic) {
-          Services.obs.removeObserver(gSyncUI, topic);
+      if (this.weaveService.ready) {
+        this._obs.forEach(topic => {
+          Services.obs.removeObserver(this, topic);
         });
       }
-    });
+    }, { once: true });
   },
 
   initUI: function SUI_initUI() {
@@ -224,8 +224,9 @@ var gSyncUI = {
   },
 
   _getAppName() {
-    let brand = new StringBundle("chrome://branding/locale/brand.properties");
-    return brand.get("brandShortName");
+    let brand = Services.strings.createBundle(
+      "chrome://branding/locale/brand.properties");
+    return brand.GetStringFromName("brandShortName");
   },
 
   // Commands
@@ -236,7 +237,7 @@ var gSyncUI = {
       if (!needsSetup) {
         setTimeout(() => Weave.Service.errorHandler.syncAndReportErrors(), 0);
       }
-      Services.obs.notifyObservers(null, "cloudsync:user-sync", null);
+      Services.obs.notifyObservers(null, "cloudsync:user-sync");
     }).catch(err => {
       this.log.error("Failed to force a sync", err);
     });
@@ -297,10 +298,7 @@ var gSyncUI = {
   */
   maybeMoveSyncedTabsButton() {
     const prefName = "browser.migrated-sync-button";
-    let migrated = false;
-    try {
-      migrated = Services.prefs.getBoolPref(prefName);
-    } catch (_) {}
+    let migrated = Services.prefs.getBoolPref(prefName, false);
     if (migrated) {
       return;
     }
@@ -370,21 +368,31 @@ var gSyncUI = {
     }
   }),
 
+  getWithinLastWeekFormat() {
+    return this._withinLastWeekFormat ||
+           (this._withinLastWeekFormat =
+             new Intl.DateTimeFormat(undefined, {weekday: "long", hour: "numeric", minute: "numeric"}));
+  },
+
+  getOneWeekOrOlderFormat() {
+    return this._oneWeekOrOlderFormat ||
+           (this._oneWeekOrOlderFormat =
+             new Intl.DateTimeFormat(undefined, {month: "long", day: "numeric"}));
+  },
+
   formatLastSyncDate(date) {
-    let dateFormat;
     let sixDaysAgo = (() => {
       let tempDate = new Date();
       tempDate.setDate(tempDate.getDate() - 6);
       tempDate.setHours(0, 0, 0, 0);
       return tempDate;
     })();
-    // It may be confusing for the user to see "Last Sync: Monday" when the last sync was a indeed a Monday but 3 weeks ago
-    if (date < sixDaysAgo) {
-      dateFormat = {month: "long", day: "numeric"};
-    } else {
-      dateFormat = {weekday: "long", hour: "numeric", minute: "numeric"};
-    }
-    let lastSyncDateString = date.toLocaleDateString(undefined, dateFormat);
+
+    // It may be confusing for the user to see "Last Sync: Monday" when the last
+    // sync was indeed a Monday, but 3 weeks ago.
+    let dateFormat = date < sixDaysAgo ? this.getOneWeekOrOlderFormat() : this.getWithinLastWeekFormat();
+
+    let lastSyncDateString = dateFormat.format(date);
     return this._stringBundle.formatStringFromName("lastSync2.label", [lastSyncDateString], 1);
   },
 
@@ -475,9 +483,8 @@ var gSyncUI = {
 XPCOMUtils.defineLazyGetter(gSyncUI, "_stringBundle", function() {
   // XXXzpao these strings should probably be moved from /services to /browser... (bug 583381)
   //        but for now just make it work
-  return Cc["@mozilla.org/intl/stringbundle;1"].
-         getService(Ci.nsIStringBundleService).
-         createBundle("chrome://weave/locale/services/sync.properties");
+  return Services.strings.createBundle(
+    "chrome://weave/locale/sync.properties");
 });
 
 XPCOMUtils.defineLazyGetter(gSyncUI, "log", function() {

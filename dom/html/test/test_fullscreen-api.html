@@ -2,7 +2,6 @@
 <html>
 <head>
   <title>Test for Bug 545812</title>
-  <script type="application/javascript" src="/MochiKit/packed.js"></script>
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
   <script type="application/javascript" src="/tests/SimpleTest/EventUtils.js"></script>
@@ -62,19 +61,44 @@ function nextTest() {
   SimpleTest.executeSoon(runNextTest);
 }
 
+var gLinuxE10sSkipList = [
+  { "test": "file_fullscreen-plugins.html", "reason": "bug 1330553" },
+  { "test": "file_fullscreen-api.html", "reason": "bug 1332040" },
+  { "test": "file_fullscreen-scrollbar.html", "reason": "bug 1350875" }
+];
+
+function shouldSkipTest(test) {
+  if (!SpecialPowers.isMainProcess() &&
+      navigator.platform.indexOf('Linux') >= 0) {
+    for (let item of gLinuxE10sSkipList) {
+      if (item.test == test) {
+        todo(false, `${test} skipped due to ${item.reason}`);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function runNextTest() {
   if (gTestIndex < gTestWindows.length) {
-    info("Run test " + gTestWindows[gTestIndex]);
-    testWindow = window.open(gTestWindows[gTestIndex], "", "width=500,height=500,scrollbars=yes");
-    // We'll wait for the window to load, then make sure our window is refocused
-    // before starting the test, which will get kicked off on "focus".
-    // This ensures that we're essentially back on the primary "desktop" on
-    // OS X Lion before we run the test.
-    testWindow.addEventListener("load", function() {
-      SimpleTest.waitForFocus(function() {
-        SimpleTest.waitForFocus(testWindow.begin, testWindow);
-      });
-    }, {once: true});
+    let test = gTestWindows[gTestIndex];
+    if (shouldSkipTest(test)) {
+      info(`Skip test ${test}`);
+      SimpleTest.executeSoon(runNextTest);
+    } else {
+      info(`Run test ${test}`);
+      testWindow = window.open(test, "", "width=500,height=500,scrollbars=yes");
+      // We'll wait for the window to load, then make sure our window is refocused
+      // before starting the test, which will get kicked off on "focus".
+      // This ensures that we're essentially back on the primary "desktop" on
+      // OS X Lion before we run the test.
+      testWindow.addEventListener("load", function() {
+        SimpleTest.waitForFocus(function() {
+          SimpleTest.waitForFocus(testWindow.begin, testWindow);
+        });
+      }, {once: true});
+    }
     gTestIndex++;
   } else {
     SimpleTest.finish();

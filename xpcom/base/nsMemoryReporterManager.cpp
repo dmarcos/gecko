@@ -42,6 +42,7 @@
 #endif
 
 using namespace mozilla;
+using namespace dom;
 
 #if defined(MOZ_MEMORY)
 #  define HAVE_JEMALLOC_STATS 1
@@ -1562,6 +1563,12 @@ nsMemoryReporterManager::Init()
 
 #ifdef DEBUG
   RegisterStrongReporter(new DeadlockDetectorReporter());
+#endif
+
+#ifdef MOZ_GECKO_PROFILER
+  // We have to register this here rather than in profiler_init() because
+  // profiler_init() runs prior to nsMemoryReporterManager's creation.
+  RegisterStrongReporter(new GeckoProfilerReporter());
 #endif
 
 #ifdef MOZ_DMD

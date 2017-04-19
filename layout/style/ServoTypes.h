@@ -7,6 +7,8 @@
 #ifndef mozilla_ServoTypes_h
 #define mozilla_ServoTypes_h
 
+#include "mozilla/TypedEnumBits.h"
+
 /*
  * Type definitions used to interact with Servo. This gets included by nsINode,
  * so don't add significant include dependencies to this file.
@@ -50,6 +52,38 @@ enum class TraversalRootBehavior {
   Normal,
   UnstyledChildrenOnly,
 };
+
+// Indicates whether the Servo style system should perform normal processing or
+// whether it should traverse in a mode that doesn't generate any change hints,
+// which is what's required when handling frame reconstruction.  The change
+// hints in this case are unneeded, since the old frames have already been
+// destroyed.
+enum class TraversalRestyleBehavior {
+  Normal,
+  ForReconstruct,
+};
+
+// Represents which tasks are performed in a SequentialTask of UpdateAnimations.
+enum class UpdateAnimationsTasks : uint8_t {
+  CSSAnimations    = 1 << 0,
+  CSSTransitions   = 1 << 1,
+  EffectProperties = 1 << 2,
+  CascadeResults   = 1 << 3,
+};
+
+// The mode to use when parsing lengths.
+enum class LengthParsingMode {
+  // In CSS, lengths must have units, except for zero values, where the unit can
+  // be omitted.
+  // https://www.w3.org/TR/css3-values/#lengths
+  Default,
+  // In SVG, a coordinate or length value without a unit identifier (e.g., "25")
+  // is assumed to be in user units (px).
+  // https://www.w3.org/TR/SVG/coords.html#Units
+  SVG,
+};
+
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(UpdateAnimationsTasks)
 
 } // namespace mozilla
 

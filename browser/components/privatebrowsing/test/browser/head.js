@@ -16,17 +16,10 @@ function whenNewWindowLoaded(aOptions, aCallback) {
   return win;
 }
 
-function openWindow(aParent, aOptions, a3) {
-  let { Promise: { defer } } = Components.utils.import("resource://gre/modules/Promise.jsm", {});
-  let { promise, resolve } = defer();
-
+function openWindow(aParent, aOptions) {
   let win = aParent.OpenBrowserWindow(aOptions);
-
-  win.addEventListener("load", function() {
-    resolve(win);
-  }, {once: true});
-
-  return promise;
+  return TestUtils.topicObserved("browser-delayed-startup-finished",
+                                 subject => subject == win).then(() => win);
 }
 
 function newDirectory() {
@@ -50,7 +43,7 @@ function newFileInDirectory(aDir) {
 
 function clearHistory() {
   // simulate clearing the private data
-  Services.obs.notifyObservers(null, "browser:purge-session-history", "");
+  Services.obs.notifyObservers(null, "browser:purge-session-history");
 }
 
 function _initTest() {

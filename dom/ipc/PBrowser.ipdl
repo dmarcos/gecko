@@ -9,7 +9,6 @@ include protocol PBlob;
 include protocol PColorPicker;
 include protocol PContent;
 include protocol PContentBridge;
-include protocol PDatePicker;
 include protocol PDocAccessible;
 include protocol PDocumentRenderer;
 include protocol PFilePicker;
@@ -17,6 +16,9 @@ include protocol PIndexedDBPermissionRequest;
 include protocol PRenderFrame;
 include protocol PPluginWidget;
 include protocol PRemotePrintJob;
+include protocol PChildToParentStream;
+include protocol PParentToChildStream;
+include protocol PFileDescriptorSet;
 include DOMTypes;
 include JavaScriptTypes;
 include URIParams;
@@ -29,7 +31,6 @@ using class mozilla::gfx::Matrix from "mozilla/gfx/Matrix.h";
 using struct gfxSize from "gfxPoint.h";
 using CSSRect from "Units.h";
 using CSSSize from "Units.h";
-using mozilla::LayoutDeviceIntRect from "Units.h";
 using mozilla::LayoutDeviceIntPoint from "Units.h";
 using mozilla::LayoutDevicePoint from "Units.h";
 using mozilla::ScreenIntPoint from "Units.h";
@@ -44,8 +45,8 @@ using struct mozilla::void_t from "ipc/IPCMessageUtils.h";
 using mozilla::WindowsHandle from "ipc/IPCMessageUtils.h";
 using nscolor from "nsColor.h";
 using class mozilla::WidgetCompositionEvent from "ipc/nsGUIEventIPC.h";
-using struct mozilla::widget::IMENotification from "nsIWidget.h";
-using struct nsIMEUpdatePreference from "nsIWidget.h";
+using struct mozilla::widget::IMENotification from "mozilla/widget/IMEData.h";
+using struct mozilla::widget::IMENotificationRequests from "mozilla/widget/IMEData.h";
 using mozilla::gfx::IntSize from "mozilla/gfx/Point.h";
 using mozilla::gfx::IntPoint from "mozilla/gfx/Point.h";
 using mozilla::gfx::IntRect from "mozilla/gfx/Rect.h";
@@ -61,6 +62,7 @@ using class mozilla::WidgetPluginEvent from "ipc/nsGUIEventIPC.h";
 using struct mozilla::dom::RemoteDOMEvent from "mozilla/dom/TabMessageUtils.h";
 using mozilla::dom::ScreenOrientationInternal from "mozilla/dom/ScreenOrientation.h";
 using struct mozilla::layers::TextureFactoryIdentifier from "mozilla/layers/CompositorTypes.h";
+using mozilla::layers::CompositorOptions from "mozilla/layers/CompositorOptions.h";
 using mozilla::CSSToScreenScale from "Units.h";
 using mozilla::CommandInt from "mozilla/EventForwards.h";
 using mozilla::WritingMode from "mozilla/WritingModes.h";
@@ -117,7 +119,6 @@ nested(upto inside_cpow) sync protocol PBrowser
     manager PContent or PContentBridge;
 
     manages PColorPicker;
-    manages PDatePicker;
     manages PDocAccessible;
     manages PDocumentRenderer;
     manages PFilePicker;
@@ -218,11 +219,11 @@ parent:
      *
      *  contentCache Cache of content
      *  notification Whole data of the notification
-     *  preference   Native widget preference for IME updates
+     *  requests     Requests of notification for IME of the native widget
      */
     nested(inside_cpow) sync NotifyIMEFocus(ContentCache contentCache,
                                             IMENotification notification)
-      returns (nsIMEUpdatePreference preference);
+      returns (IMENotificationRequests requests);
 
     /**
      * Notifies chrome that there has been a change in text content
@@ -443,12 +444,6 @@ parent:
      */
     async PColorPicker(nsString title, nsString initialColor);
 
-    /**
-     * Create an asynchronous date picker on the parent side,
-     * but don't open it yet.
-     */
-    async PDatePicker(nsString title, nsString initialDate);
-
     async PFilePicker(nsString aTitle, int16_t aMode);
 
     /**
@@ -479,7 +474,8 @@ parent:
                                 nsString aURL, nsString aName, nsString aFeatures)
       returns (bool windowOpened,
                TextureFactoryIdentifier textureFactoryIdentifier,
-               uint64_t layersId);
+               uint64_t layersId,
+               CompositorOptions compositorOptions);
 
     /**
      * Tells the containing widget whether the given input block results in a
@@ -598,7 +594,7 @@ parent:
     // this is sync so we can ensure that messages to the window compositor
     // arrive before the TabChild attempts to use its cross-process compositor
     // bridge.
-    sync EnsureLayersConnected();
+    sync EnsureLayersConnected() returns (CompositorOptions compositorOptions);
 
     /**
      * Notify the parent that the session history state has been updated.
@@ -636,6 +632,8 @@ child:
 
     async InitRendering(TextureFactoryIdentifier textureFactoryIdentifier,
                         uint64_t layersId,
+                        CompositorOptions compositorOptions,
+                        bool layersConnected,
                         nullable PRenderFrame renderFrame);
 
     async LoadURL(nsCString uri, ShowInfo info);
@@ -646,15 +644,6 @@ child:
                            LayoutDeviceIntPoint chromeDisp) compressall;
 
     async SizeModeChanged(nsSizeMode sizeMode);
-
-    /**
-     * Sending an activate message moves focus to the child.
-     */
-    async Activate();
-
-    async Deactivate();
-
-    async ParentActivated(bool aActivated);
 
     async SetKeyboardIndicators(UIStateChangeType showAccelerators,
                                 UIStateChangeType showFocusRings);
@@ -905,10 +894,10 @@ child:
     async NotifyPartialSHistoryDeactive();
 
     /**
-     * Tell the child that it is a fresh process created for a Large-Allocation
-     * load.
+     * Tell the TabChild that it should expect a Large-Allocation load to occur.
+     * Loads which occur until this flag is cleared will not leave the process.
      */
-    async SetIsLargeAllocation(bool aIsLA, bool aNewProcess);
+    async AwaitLargeAlloc();
 
 /*
  * FIXME: write protocol!

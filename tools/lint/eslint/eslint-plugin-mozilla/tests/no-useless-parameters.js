@@ -3,27 +3,24 @@
 
 "use strict";
 
-//------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------
 // Requirements
-//------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------
 
 var rule = require("../lib/rules/no-useless-parameters");
 
-//------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------
 // Tests
-//------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------
 
 function callError(message) {
-  return [{message: message, type: "CallExpression"}];
+  return [{message, type: "CallExpression"}];
 }
 
 exports.runTest = function(ruleTester) {
   ruleTester.run("no-useless-parameters", rule, {
     valid: [
       "Services.prefs.clearUserPref('browser.search.custom');",
-      "Services.prefs.getBoolPref('browser.search.custom');",
-      "Services.prefs.getCharPref('browser.search.custom');",
-      "Services.prefs.getIntPref('browser.search.custom');",
       "Services.removeObserver('notification name', {});",
       "Services.io.newURI('http://example.com');",
       "Services.io.newURI('http://example.com', 'utf8');",
@@ -32,25 +29,20 @@ exports.runTest = function(ruleTester) {
       "elt.addEventListener('click', handler, {once: true});",
       "elt.removeEventListener('click', handler);",
       "elt.removeEventListener('click', handler, true);",
+      "Services.obs.addObserver(this, 'topic', true);",
+      "Services.obs.addObserver(this, 'topic');",
+      "Services.prefs.addObserver('branch', this, true);",
+      "Services.prefs.addObserver('branch', this);",
+      "array.appendElement(elt);",
+      "Services.obs.notifyObservers(obj, 'topic', 'data');",
+      "Services.obs.notifyObservers(obj, 'topic');",
       "window.getComputedStyle(elt);",
-      "window.getComputedStyle(elt, ':before');",
+      "window.getComputedStyle(elt, ':before');"
     ],
     invalid: [
       {
         code: "Services.prefs.clearUserPref('browser.search.custom', false);",
         errors: callError("clearUserPref takes only 1 parameter.")
-      },
-      {
-        code: "Services.prefs.getBoolPref('browser.search.custom', true);",
-        errors: callError("getBoolPref takes only 1 parameter.")
-      },
-      {
-        code: "Services.prefs.getCharPref('browser.search.custom', 'a');",
-        errors: callError("getCharPref takes only 1 parameter.")
-      },
-      {
-        code: "Services.prefs.getIntPref('browser.search.custom', 42);",
-        errors: callError("getIntPref takes only 1 parameter.")
       },
       {
         code: "Services.removeObserver('notification name', {}, false);",
@@ -82,11 +74,42 @@ exports.runTest = function(ruleTester) {
       },
       {
         code: "elt.addEventListener('click', handler, false);",
-        errors: callError("addEventListener's third parameter can be omitted when it's false.")
+        errors: callError(
+          "addEventListener's third parameter can be omitted when it's false.")
       },
       {
         code: "elt.removeEventListener('click', handler, false);",
-        errors: callError("removeEventListener's third parameter can be omitted when it's false.")
+        errors: callError(
+          "removeEventListener's third parameter can be omitted when it's" +
+          " false.")
+      },
+      {
+        code: "Services.obs.addObserver(this, 'topic', false);",
+        errors: callError(
+          "addObserver's third parameter can be omitted when it's" +
+          " false.")
+      },
+      {
+        code: "Services.prefs.addObserver('branch', this, false);",
+        errors: callError(
+          "addObserver's third parameter can be omitted when it's" +
+          " false.")
+      },
+      {
+        code: "array.appendElement(elt, false);",
+        errors: callError(
+          "appendElement's second parameter can be omitted when it's" +
+          " false.")
+      },
+      {
+        code: "Services.obs.notifyObservers(obj, 'topic', null);",
+        errors: callError(
+          "notifyObservers's third parameter can be omitted.")
+      },
+      {
+        code: "Services.obs.notifyObservers(obj, 'topic', '');",
+        errors: callError(
+          "notifyObservers's third parameter can be omitted.")
       },
       {
         code: "window.getComputedStyle(elt, null);",

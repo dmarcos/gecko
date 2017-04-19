@@ -23,7 +23,7 @@ function promiseTopicObserved(topic) {
   Services.obs.addObserver(function PTO_observe(obsSubject, obsTopic, obsData) {
     Services.obs.removeObserver(PTO_observe, obsTopic);
     deferred.resolve([obsSubject, obsData]);
-  }, topic, false);
+  }, topic);
   return deferred.promise;
 }
 
@@ -68,6 +68,9 @@ function promiseTabLoadEvent(tab, url) {
 
 const PREF_SECURITY_DELAY_INITIAL = Services.prefs.getIntPref("security.notification_enable_delay");
 
+// Tests that call setup() should have a `tests` array defined for the actual
+// tests to be run.
+/* global tests */
 function setup() {
   BrowserTestUtils.openNewForegroundTab(gBrowser, "http://example.com/")
                   .then(goNext);
@@ -101,8 +104,8 @@ function* runNextTest() {
     });
     onPopupEvent("popuphidden", function() {
       info("[" + nextTest.id + "] popup hidden");
-      nextTest.onHidden(this);
-      goNext();
+      Task.spawn(() => nextTest.onHidden(this))
+          .then(() => goNext(), ex => Assert.ok(false, "onHidden failed: " + ex));
     }, () => shownState);
     info("[" + nextTest.id + "] added listeners; panel is open: " + PopupNotifications.isPanelOpen);
   }
@@ -259,6 +262,14 @@ function onPopupEvent(eventName, callback, condition) {
 function waitForNotificationPanel() {
   return new Promise(resolve => {
     onPopupEvent("popupshown", function() {
+      resolve(this);
+    });
+  });
+}
+
+function waitForNotificationPanelHidden() {
+  return new Promise(resolve => {
+    onPopupEvent("popuphidden", function() {
       resolve(this);
     });
   });

@@ -20,6 +20,7 @@
 
 #include "nsDocShell.h"
 #include "nsGlobalWindow.h"
+#include "nsHashPropertyBag.h"
 #include "nsIBaseWindow.h"
 #include "nsIBrowserDOMWindow.h"
 #include "nsIDocShell.h"
@@ -62,6 +63,7 @@
 #include "nsIPrefService.h"
 #include "nsSandboxFlags.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/Storage.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TabParent.h"
@@ -472,12 +474,6 @@ CheckUserContextCompatibility(nsIDocShell* aDocShell)
   }
 
   return subjectPrincipal->GetUserContextId() == userContextId;
-}
-
-NS_IMETHODIMP
-nsWindowWatcher::OpenWindowWithoutParent(nsITabParent** aResult)
-{
-  return OpenWindowWithTabParent(nullptr, EmptyCString(), true, 1.0f, aResult);
 }
 
 nsresult
@@ -1103,10 +1099,9 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
     if (subjectPrincipal &&
         !nsContentUtils::IsSystemOrExpandedPrincipal(subjectPrincipal) &&
         docShell->ItemType() != nsIDocShellTreeItem::typeChrome) {
-      OriginAttributes attrs;
-      attrs.Inherit(subjectPrincipal->OriginAttributesRef());
-      isPrivateBrowsingWindow = !!attrs.mPrivateBrowsingId;
-      docShell->SetOriginAttributes(attrs);
+      isPrivateBrowsingWindow =
+        !!subjectPrincipal->OriginAttributesRef().mPrivateBrowsingId;
+      docShell->SetOriginAttributes(subjectPrincipal->OriginAttributesRef());
     } else {
       nsCOMPtr<nsIDocShellTreeItem> parentItem;
       GetWindowTreeItem(aParent, getter_AddRefs(parentItem));
@@ -1214,6 +1209,29 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
   // Before loading the URI we want to be 100% sure that we use the correct
   // userContextId.
   MOZ_ASSERT(CheckUserContextCompatibility(newDocShell));
+
+  // If this tab or window has been opened by a window.open call, we have to provide
+  // all the data needed to send a webNavigation.onCreatedNavigationTarget event.
+  if (parentDocShell && newDocShellItem) {
+    nsCOMPtr<nsIObserverService> obsSvc =
+      mozilla::services::GetObserverService();
+
+    if (obsSvc) {
+      RefPtr<nsHashPropertyBag> props = new nsHashPropertyBag();
+
+      if (uriToLoad) {
+        // The url notified in the webNavigation.onCreatedNavigationTarget event.
+        props->SetPropertyAsACString(NS_LITERAL_STRING("url"),
+                                     uriToLoad->GetSpecOrDefault());
+      }
+
+      props->SetPropertyAsInterface(NS_LITERAL_STRING("sourceTabDocShell"), parentDocShell);
+      props->SetPropertyAsInterface(NS_LITERAL_STRING("createdTabDocShell"), newDocShellItem);
+
+      obsSvc->NotifyObservers(static_cast<nsIPropertyBag2*>(props),
+                              "webNavigation-createdNavigationTarget-from-js", nullptr);
+    }
+  }
 
   if (uriToLoad && aNavigate) {
     newDocShell->LoadURI(
@@ -1652,6 +1670,7 @@ nsWindowWatcher::GetWindowByName(const nsAString& aTargetName,
   if (startItem) {
     // Note: original requestor is null here, per idl comments
     startItem->FindItemWithName(aTargetName, nullptr, nullptr,
+                                /* aSkipTabGroup = */ false,
                                 getter_AddRefs(treeItem));
   } else {
     // Note: original requestor is null here, per idl comments
@@ -1928,8 +1947,8 @@ nsWindowWatcher::CalculateChromeFlagsForParent(mozIDOMWindowProxy* aParent,
     chromeFlags |= nsIWebBrowserChrome::CHROME_WINDOW_RAISED;
   }
 
-  chromeFlags |= WinHasOption(aFeatures, "macsuppressanimation", 0, nullptr) ?
-    nsIWebBrowserChrome::CHROME_MAC_SUPPRESS_ANIMATION : 0;
+  chromeFlags |= WinHasOption(aFeatures, "suppressanimation", 0, nullptr) ?
+    nsIWebBrowserChrome::CHROME_SUPPRESS_ANIMATION : 0;
 
   chromeFlags |= WinHasOption(aFeatures, "chrome", 0, nullptr) ?
     nsIWebBrowserChrome::CHROME_OPENAS_CHROME : 0;
@@ -2108,6 +2127,7 @@ nsWindowWatcher::SafeGetWindowByName(const nsAString& aName,
   nsCOMPtr<nsIDocShellTreeItem> foundItem;
   if (startItem) {
     startItem->FindItemWithName(aName, nullptr, callerItem,
+                                /* aSkipTabGroup = */ false,
                                 getter_AddRefs(foundItem));
   } else {
     FindItemWithName(aName, nullptr, callerItem,
@@ -2252,7 +2272,7 @@ nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
                                   mozIDOMWindowProxy* aParent,
                                   bool aIsCallerChrome,
                                   const SizeSpec& aSizeSpec,
-                                  Maybe<float> aOpenerFullZoom)
+                                  const Maybe<float>& aOpenerFullZoom)
 {
   // We should only be sizing top-level windows if we're in the parent
   // process.
@@ -2386,22 +2406,52 @@ nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
       screenHeight = NSToIntRound(screenHeight / scale);
 
       if (aSizeSpec.SizeSpecified()) {
-        /* Unlike position, force size out-of-bounds check only if
-           size actually was specified. Otherwise, intrinsically sized
-           windows are broken. */
-        if (height < 100) {
-          height = 100;
-          winHeight = height + (sizeChromeHeight ? 0 : chromeHeight);
-        }
-        if (winHeight > screenHeight) {
-          height = screenHeight - (sizeChromeHeight ? 0 : chromeHeight);
-        }
-        if (width < 100) {
-          width = 100;
-          winWidth = width + (sizeChromeWidth ? 0 : chromeWidth);
-        }
-        if (winWidth > screenWidth) {
-          width = screenWidth - (sizeChromeWidth ? 0 : chromeWidth);
+        if (!nsContentUtils::ShouldResistFingerprinting()) {
+          /* Unlike position, force size out-of-bounds check only if
+             size actually was specified. Otherwise, intrinsically sized
+             windows are broken. */
+          if (height < 100) {
+            height = 100;
+            winHeight = height + (sizeChromeHeight ? 0 : chromeHeight);
+          }
+          if (winHeight > screenHeight) {
+            height = screenHeight - (sizeChromeHeight ? 0 : chromeHeight);
+          }
+          if (width < 100) {
+            width = 100;
+            winWidth = width + (sizeChromeWidth ? 0 : chromeWidth);
+          }
+          if (winWidth > screenWidth) {
+            width = screenWidth - (sizeChromeWidth ? 0 : chromeWidth);
+          }
+        } else {
+          int32_t targetContentWidth  = 0;
+          int32_t targetContentHeight = 0;
+
+          nsContentUtils::CalcRoundedWindowSizeForResistingFingerprinting(
+            chromeWidth,
+            chromeHeight,
+            screenWidth,
+            screenHeight,
+            width,
+            height,
+            sizeChromeWidth,
+            sizeChromeHeight,
+            &targetContentWidth,
+            &targetContentHeight
+          );
+
+          if (aSizeSpec.mInnerWidthSpecified ||
+              aSizeSpec.mOuterWidthSpecified) {
+            width = targetContentWidth;
+            winWidth = width + (sizeChromeWidth ? 0 : chromeWidth);
+          }
+
+          if (aSizeSpec.mInnerHeightSpecified ||
+              aSizeSpec.mOuterHeightSpecified) {
+            height = targetContentHeight;
+            winHeight = height + (sizeChromeHeight ? 0 : chromeHeight);
+          }
         }
       }
 

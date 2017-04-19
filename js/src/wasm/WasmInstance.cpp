@@ -19,7 +19,9 @@
 #include "wasm/WasmInstance.h"
 
 #include "jit/BaselineJIT.h"
+#include "jit/InlinableNatives.h"
 #include "jit/JitCommon.h"
+
 #include "wasm/WasmModule.h"
 
 #include "jsobjinlines.h"
@@ -106,22 +108,19 @@ js::wasm::ShutDownInstanceStaticData()
 const void**
 Instance::addressOfSigId(const SigIdDesc& sigId) const
 {
-    MOZ_ASSERT(sigId.globalDataOffset() >= InitialGlobalDataBytes);
-    return (const void**)(codeSegment().globalData() + sigId.globalDataOffset());
+    return (const void**)(globalSegment().globalData() + sigId.globalDataOffset());
 }
 
 FuncImportTls&
 Instance::funcImportTls(const FuncImport& fi)
 {
-    MOZ_ASSERT(fi.tlsDataOffset() >= InitialGlobalDataBytes);
-    return *(FuncImportTls*)(codeSegment().globalData() + fi.tlsDataOffset());
+    return *(FuncImportTls*)(globalSegment().globalData() + fi.tlsDataOffset());
 }
 
 TableTls&
 Instance::tableTls(const TableDesc& td) const
 {
-    MOZ_ASSERT(td.globalDataOffset >= InitialGlobalDataBytes);
-    return *(TableTls*)(codeSegment().globalData() + td.globalDataOffset);
+    return *(TableTls*)(globalSegment().globalData() + td.globalDataOffset);
 }
 
 bool
@@ -304,7 +303,7 @@ Instance::growMemory_i32(Instance* instance, uint32_t delta)
     uint32_t ret = WasmMemoryObject::grow(memory, delta, cx);
 
     // If there has been a moving grow, this Instance should have been notified.
-    MOZ_RELEASE_ASSERT(instance->tlsData_.memoryBase ==
+    MOZ_RELEASE_ASSERT(instance->tlsData()->memoryBase ==
                        instance->memory_->buffer().dataPointerEither());
 
     return ret;
@@ -318,9 +317,132 @@ Instance::currentMemory_i32(Instance* instance)
     return byteLength / wasm::PageSize;
 }
 
+// asm.js has the ability to call directly into Math builtins, which wasm can't
+// do. Instead, wasm code generators have to pass the builtins as function
+// imports, resulting in slow import calls.
+//
+// However, we can optimize this by detecting that an import is just a JSNative
+// builtin and have wasm call straight to the builtin's C++ code, since the
+// ABIs perfectly match at the call site.
+//
+// Even though we could call into float32 variants of the math functions, we
+// do not do it, so as not to change the results.
+
+#define FOREACH_UNCACHED_MATH_BUILTIN(_) \
+    _(math_sin, MathSin)           \
+    _(math_tan, MathTan)           \
+    _(math_cos, MathCos)           \
+    _(math_exp, MathExp)           \
+    _(math_log, MathLog)           \
+    _(math_asin, MathASin)         \
+    _(math_atan, MathATan)         \
+    _(math_acos, MathACos)         \
+    _(math_log10, MathLog10)       \
+    _(math_log2, MathLog2)         \
+    _(math_log1p, MathLog1P)       \
+    _(math_expm1, MathExpM1)       \
+    _(math_sinh, MathSinH)         \
+    _(math_tanh, MathTanH)         \
+    _(math_cosh, MathCosH)         \
+    _(math_asinh, MathASinH)       \
+    _(math_atanh, MathATanH)       \
+    _(math_acosh, MathACosH)       \
+    _(math_sign, MathSign)         \
+    _(math_trunc, MathTrunc)       \
+    _(math_cbrt, MathCbrt)
+
+#define UNARY_FLOAT_WRAPPER(func)                 \
+    float func##_f32(float x) {                   \
+        return float(func(double(x)));            \
+    }
+
+#define BINARY_FLOAT_WRAPPER(func)                \
+    float func##_f32(float x, float y) {          \
+        return float(func(double(x), double(y))); \
+    }
+
+#define DEFINE_FLOAT_WRAPPER(name, _) UNARY_FLOAT_WRAPPER(name##_uncached)
+FOREACH_UNCACHED_MATH_BUILTIN(DEFINE_FLOAT_WRAPPER)
+
+BINARY_FLOAT_WRAPPER(ecmaAtan2)
+BINARY_FLOAT_WRAPPER(ecmaHypot)
+BINARY_FLOAT_WRAPPER(ecmaPow)
+
+#undef DEFINE_FLOAT_WRAPPER
+#undef BINARY_FLOAT_WRAPPER
+#undef UNARY_FLOAT_WRAPPER
+
+static void*
+IsMatchingBuiltin(HandleFunction f, const Sig& sig)
+{
+    if (!f->isNative() || !f->jitInfo() || f->jitInfo()->type() != JSJitInfo::InlinableNative)
+        return nullptr;
+
+    ExprType ret = sig.ret();
+    const ValTypeVector& args = sig.args();
+
+#define UNARY_BUILTIN(double_func, float_func)                 \
+        if (args.length() != 1)                                \
+            break;                                             \
+        if (args[0] == ValType::F64 && ret == ExprType::F64)   \
+            return JS_FUNC_TO_DATA_PTR(void*, double_func);    \
+        if (args[0] == ValType::F32 && ret == ExprType::F32)   \
+            return JS_FUNC_TO_DATA_PTR(void*, float_func);     \
+        break;
+
+#define BINARY_BUILTIN(double_func, float_func)                                         \
+        if (args.length() != 2)                                                         \
+            break;                                                                      \
+        if (args[0] == ValType::F64 && args[1] == ValType::F64 && ret == ExprType::F64) \
+            return JS_FUNC_TO_DATA_PTR(void*, double_func);                             \
+        if (args[0] == ValType::F32 && args[1] == ValType::F32 && ret == ExprType::F32) \
+            return JS_FUNC_TO_DATA_PTR(void*, float_func);                              \
+        break;
+
+    switch (f->jitInfo()->inlinableNative) {
+#define MAKE_CASE(funcName, inlinableNative)                        \
+      case InlinableNative::inlinableNative:                        \
+        UNARY_BUILTIN(funcName##_uncached, funcName##_uncached_f32)
+
+      FOREACH_UNCACHED_MATH_BUILTIN(MAKE_CASE)
+
+      case InlinableNative::MathATan2:
+        BINARY_BUILTIN(ecmaAtan2, ecmaAtan2_f32)
+      case InlinableNative::MathHypot:
+        BINARY_BUILTIN(ecmaHypot, ecmaHypot_f32)
+      case InlinableNative::MathPow:
+        BINARY_BUILTIN(ecmaPow, ecmaPow_f32)
+
+      default:
+        break;
+    }
+
+#undef MAKE_CASE
+#undef UNARY_BUILTIN
+#undef BINARY_BUILTIN
+#undef FOREACH_UNCACHED_MATH_BUILTIN
+
+    return nullptr;
+}
+
+static void*
+MaybeGetMatchingBuiltin(JSContext* cx, HandleFunction f, const Sig& sig)
+{
+    void* funcPtr = IsMatchingBuiltin(f, sig);
+    if (!funcPtr)
+        return nullptr;
+
+    void* thunkPtr = nullptr;
+    if (!cx->runtime()->wasm().getBuiltinThunk(cx, funcPtr, sig, &thunkPtr))
+        return nullptr;
+
+    return thunkPtr;
+}
+
 Instance::Instance(JSContext* cx,
                    Handle<WasmInstanceObject*> object,
                    UniqueCode code,
+                   UniqueGlobalSegment globals,
                    HandleWasmMemoryObject memory,
                    SharedTableVector&& tables,
                    Handle<FunctionVector> funcImports,
@@ -328,6 +450,7 @@ Instance::Instance(JSContext* cx,
   : compartment_(cx->compartment()),
     object_(object),
     code_(Move(code)),
+    globals_(Move(globals)),
     memory_(memory),
     tables_(Move(tables)),
     enterFrameTrapsEnabled_(false)
@@ -335,11 +458,14 @@ Instance::Instance(JSContext* cx,
     MOZ_ASSERT(funcImports.length() == metadata().funcImports.length());
     MOZ_ASSERT(tables_.length() == metadata().tables.length());
 
-    tlsData_.cx = cx;
-    tlsData_.instance = this;
-    tlsData_.globalData = code_->segment().globalData();
-    tlsData_.memoryBase = memory ? memory->buffer().dataPointerEither().unwrap() : nullptr;
-    tlsData_.stackLimit = *(void**)cx->stackLimitAddressForJitCode(StackForUntrustedScript);
+    tlsData()->cx = cx;
+    tlsData()->instance = this;
+    tlsData()->globalData = globals_->globalData();
+    tlsData()->memoryBase = memory ? memory->buffer().dataPointerEither().unwrap() : nullptr;
+#ifndef WASM_HUGE_MEMORY
+    tlsData()->boundsCheckLimit = memory ? memory->buffer().wasmBoundsCheckLimit() : 0;
+#endif
+    tlsData()->stackLimit = *(void**)cx->stackLimitAddressForJitCode(JS::StackForUntrustedScript);
 
     for (size_t i = 0; i < metadata().funcImports.length(); i++) {
         HandleFunction f = funcImports[i];
@@ -349,12 +475,17 @@ Instance::Instance(JSContext* cx,
             WasmInstanceObject* calleeInstanceObj = ExportedFunctionToInstanceObject(f);
             const CodeRange& codeRange = calleeInstanceObj->getExportedFunctionCodeRange(f);
             Instance& calleeInstance = calleeInstanceObj->instance();
-            import.tls = &calleeInstance.tlsData_;
-            import.code = calleeInstance.codeSegment().base() + codeRange.funcNonProfilingEntry();
+            import.tls = calleeInstance.tlsData();
+            import.code = calleeInstance.codeSegment().base() + codeRange.funcNormalEntry();
             import.baselineScript = nullptr;
             import.obj = calleeInstanceObj;
+        } else if (void* thunk = MaybeGetMatchingBuiltin(cx, f, fi.sig())) {
+            import.tls = tlsData();
+            import.code = thunk;
+            import.baselineScript = nullptr;
+            import.obj = f;
         } else {
-            import.tls = &tlsData_;
+            import.tls = tlsData();
             import.code = codeBase() + fi.interpExitCodeOffset();
             import.baselineScript = nullptr;
             import.obj = f;
@@ -368,7 +499,7 @@ Instance::Instance(JSContext* cx,
         table.base = tables_[i]->base();
     }
 
-    uint8_t* globalData = code_->segment().globalData();
+    uint8_t* globalData = globals_->globalData();
 
     for (size_t i = 0; i < metadata().globals.length(); i++) {
         const GlobalDesc& global = metadata().globals[i];
@@ -508,7 +639,7 @@ SharedMem<uint8_t*>
 Instance::memoryBase() const
 {
     MOZ_ASSERT(metadata().usesMemory());
-    MOZ_ASSERT(tlsData_.memoryBase == memory_->buffer().dataPointerEither());
+    MOZ_ASSERT(tlsData()->memoryBase == memory_->buffer().dataPointerEither());
     return memory_->buffer().dataPointerEither();
 }
 
@@ -534,10 +665,7 @@ bool
 Instance::callExport(JSContext* cx, uint32_t funcIndex, CallArgs args)
 {
     // If there has been a moving grow, this Instance should have been notified.
-    MOZ_RELEASE_ASSERT(!memory_ || tlsData_.memoryBase == memory_->buffer().dataPointerEither());
-
-    if (!cx->compartment()->wasm.ensureProfilingState(cx))
-        return false;
+    MOZ_RELEASE_ASSERT(!memory_ || tlsData()->memoryBase == memory_->buffer().dataPointerEither());
 
     const FuncExport& func = metadata().lookupFuncExport(funcIndex);
 
@@ -653,7 +781,7 @@ Instance::callExport(JSContext* cx, uint32_t funcIndex, CallArgs args)
 
         // Call the per-exported-function trampoline created by GenerateEntry.
         auto funcPtr = JS_DATA_TO_FUNC_PTR(ExportFuncPtr, codeBase() + func.entryOffset());
-        if (!CALL_GENERATED_2(funcPtr, exportArgs.begin(), &tlsData_))
+        if (!CALL_GENERATED_2(funcPtr, exportArgs.begin(), tlsData()))
             return false;
     }
 
@@ -755,8 +883,10 @@ Instance::onMovingGrowMemory(uint8_t* prevMemoryBase)
 {
     MOZ_ASSERT(!isAsmJS());
     ArrayBufferObject& buffer = memory_->buffer().as<ArrayBufferObject>();
-    tlsData_.memoryBase = buffer.dataPointer();
-    code_->segment().onMovingGrow(prevMemoryBase, metadata(), buffer);
+    tlsData()->memoryBase = buffer.dataPointer();
+#ifndef WASM_HUGE_MEMORY
+    tlsData()->boundsCheckLimit = buffer.wasmBoundsCheckLimit();
+#endif
 }
 
 void
@@ -778,61 +908,6 @@ Instance::deoptimizeImportExit(uint32_t funcImportIndex)
     import.baselineScript = nullptr;
 }
 
-static void
-UpdateEntry(const Code& code, bool profilingEnabled, void** entry)
-{
-    const CodeRange& codeRange = *code.lookupRange(*entry);
-    void* from = code.segment().base() + codeRange.funcNonProfilingEntry();
-    void* to = code.segment().base() + codeRange.funcProfilingEntry();
-
-    if (!profilingEnabled)
-        Swap(from, to);
-
-    MOZ_ASSERT(*entry == from);
-    *entry = to;
-}
-
-bool
-Instance::ensureProfilingState(JSContext* cx, bool newProfilingEnabled)
-{
-    if (code_->profilingEnabled() == newProfilingEnabled)
-        return true;
-
-    if (!code_->ensureProfilingState(cx, newProfilingEnabled))
-        return false;
-
-    // Imported wasm functions and typed function tables point directly to
-    // either the profiling or non-profiling prologue and must therefore be
-    // updated when the profiling mode is toggled.
-
-    for (const FuncImport& fi : metadata().funcImports) {
-        FuncImportTls& import = funcImportTls(fi);
-        if (import.obj && import.obj->is<WasmInstanceObject>()) {
-            Code& code = import.obj->as<WasmInstanceObject>().instance().code();
-            UpdateEntry(code, newProfilingEnabled, &import.code);
-        }
-    }
-
-    for (const SharedTable& table : tables_) {
-        if (!table->isTypedFunction())
-            continue;
-
-        // This logic will have to be generalized to match the import logic
-        // above if wasm can create typed function tables since a single table
-        // can contain elements from multiple instances.
-        MOZ_ASSERT(metadata().kind == ModuleKind::AsmJS);
-
-        void** array = table->internalArray();
-        uint32_t length = table->length();
-        for (size_t i = 0; i < length; i++) {
-            if (array[i])
-                UpdateEntry(*code_, newProfilingEnabled, &array[i]);
-        }
-    }
-
-    return true;
-}
-
 void
 Instance::ensureEnterFrameTrapsState(JSContext* cx, bool enabled)
 {
@@ -851,10 +926,48 @@ Instance::addSizeOfMisc(MallocSizeOf mallocSizeOf,
                         size_t* code,
                         size_t* data) const
 {
-    *data += mallocSizeOf(this);
+    *data += mallocSizeOf(this) + globals_->sizeOfMisc(mallocSizeOf);
 
     code_->addSizeOfMisc(mallocSizeOf, seenMetadata, seenBytes, code, data);
 
     for (const SharedTable& table : tables_)
          *data += table->sizeOfIncludingThisIfNotSeen(mallocSizeOf, seenTables);
+}
+
+/* static */ UniqueGlobalSegment
+GlobalSegment::create(uint32_t globalDataLength)
+{
+    MOZ_ASSERT(globalDataLength % gc::SystemPageSize() == 0);
+
+    auto gs = MakeUnique<GlobalSegment>();
+    if (!gs)
+        return nullptr;
+
+    TlsData* tlsData =
+        reinterpret_cast<TlsData*>(js_calloc(offsetof(TlsData, globalArea) + globalDataLength));
+    if (!tlsData)
+        return nullptr;
+
+#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64)
+    // We will emit SIMD memory accesses that require 16-byte alignment.
+    MOZ_RELEASE_ASSERT((uintptr_t(tlsData) % 16) == 0);
+#endif
+
+    gs->tlsData_ = tlsData;
+    gs->globalDataLength_ = globalDataLength;
+
+    return gs;
+}
+
+GlobalSegment::~GlobalSegment()
+{
+    js_free(tlsData_);
+}
+
+size_t
+GlobalSegment::sizeOfMisc(MallocSizeOf mallocSizeOf) const
+{
+    // Note, once the GlobalSegment is shared among instances, we will have to
+    // take that sharing into account.
+    return mallocSizeOf(this) + mallocSizeOf(tlsData_);
 }

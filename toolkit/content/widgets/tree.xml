@@ -717,9 +717,19 @@
           this._touchY = -1;
         ]]>
       </handler>
-      <handler event="MozMousePixelScroll" preventdefault="true"/>
-      <handler event="DOMMouseScroll" preventdefault="true">
+      <handler event="MozMousePixelScroll">
         <![CDATA[
+          if (!(this.getAttribute("allowunderflowscroll") == "true" &&
+                this.getAttribute("hidevscroll") == "true"))
+            event.preventDefault();
+        ]]>
+      </handler>
+      <handler event="DOMMouseScroll">
+        <![CDATA[
+          if (!(this.getAttribute("allowunderflowscroll") == "true" &&
+                this.getAttribute("hidevscroll") == "true"))
+            event.preventDefault();
+
           if (this._editingColumn)
             return;
           if (event.axis == event.HORIZONTAL_AXIS)
@@ -901,84 +911,84 @@
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByOffset(-1, 0, event);
+          this._moveByOffset(-1, 0, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_DOWN" modifiers="accel any">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByOffset(1, this.view.rowCount - 1, event);
+          this._moveByOffset(1, this.view.rowCount - 1, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_UP" modifiers="accel any, shift">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByOffsetShift(-1, 0, event);
+          this._moveByOffsetShift(-1, 0, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_DOWN" modifiers="accel any, shift">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByOffsetShift(1, this.view.rowCount - 1, event);
+          this._moveByOffsetShift(1, this.view.rowCount - 1, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_PAGE_UP" modifiers="accel any">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByPage(-1, 0, event);
+          this._moveByPage(-1, 0, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_PAGE_DOWN" modifiers="accel any">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByPage(1, this.view.rowCount - 1, event);
+          this._moveByPage(1, this.view.rowCount - 1, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_PAGE_UP" modifiers="accel any, shift">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByPageShift(-1, 0, event);
+          this._moveByPageShift(-1, 0, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_PAGE_DOWN" modifiers="accel any, shift">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveByPageShift(1, this.view.rowCount - 1, event);
+          this._moveByPageShift(1, this.view.rowCount - 1, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_HOME" modifiers="accel any">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveToEdge(0, event);
+          this._moveToEdge(0, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_END" modifiers="accel any">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveToEdge(this.view.rowCount - 1, event);
+          this._moveToEdge(this.view.rowCount - 1, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_HOME" modifiers="accel any, shift">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveToEdgeShift(0, event);
+          this._moveToEdgeShift(0, event);
         ]]>
       </handler>
       <handler event="keydown" keycode="VK_END" modifiers="accel any, shift">
         <![CDATA[
           if (this._editingColumn)
             return;
-          _moveToEdgeShift(this.view.rowCount - 1, event);
+          this._moveToEdgeShift(this.view.rowCount - 1, event);
         ]]>
       </handler>
       <handler event="keypress">
@@ -1487,7 +1497,7 @@
           <![CDATA[
             // We no longer cache the picker content, remove the old content.
             while (aPopup.childNodes.length > 2)
-              aPopup.removeChild(aPopup.firstChild);
+              aPopup.firstChild.remove();
 
             var refChild = aPopup.firstChild;
 

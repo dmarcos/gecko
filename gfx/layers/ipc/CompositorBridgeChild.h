@@ -51,7 +51,7 @@ class CompositorBridgeChild final : public PCompositorBridgeChild,
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CompositorBridgeChild, override);
 
-  explicit CompositorBridgeChild(LayerManager *aLayerManager);
+  explicit CompositorBridgeChild(LayerManager *aLayerManager, uint32_t aNamespace);
 
   void Destroy();
 
@@ -65,13 +65,14 @@ public:
   /**
    * Initialize the singleton compositor bridge for a content process.
    */
-  static bool InitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint);
-  static bool ReinitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint);
+  static bool InitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint, uint32_t aNamespace);
+  static bool ReinitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint, uint32_t aNamespace);
 
   static RefPtr<CompositorBridgeChild> CreateRemote(
     const uint64_t& aProcessToken,
     LayerManager* aLayerManager,
-    Endpoint<PCompositorBridgeChild>&& aEndpoint);
+    Endpoint<PCompositorBridgeChild>&& aEndpoint,
+    uint32_t aNamespace);
 
   /**
    * Initialize the CompositorBridgeChild, create CompositorBridgeParent, and
@@ -104,7 +105,7 @@ public:
   virtual mozilla::ipc::IPCResult
   RecvCompositorUpdated(const uint64_t& aLayersId,
                         const TextureFactoryIdentifier& aNewIdentifier,
-                        const uint64_t& aSequenceNumber) override;
+                        const uint64_t& aSeqNo) override;
 
   virtual mozilla::ipc::IPCResult
   RecvUpdatePluginConfigurations(const LayoutDeviceIntPoint& aContentOffset,
@@ -153,7 +154,7 @@ public:
   bool SendWillClose();
   bool SendPause();
   bool SendResume();
-  bool SendNotifyChildCreated(const uint64_t& id);
+  bool SendNotifyChildCreated(const uint64_t& id, CompositorOptions* aOptions);
   bool SendAdoptChild(const uint64_t& id);
   bool SendMakeSnapshot(const SurfaceDescriptor& inSnapshot, const gfx::IntRect& dirtyRect);
   bool SendFlushRendering();
@@ -223,9 +224,17 @@ public:
 
   void WillEndTransaction();
 
+  PWebRenderBridgeChild* AllocPWebRenderBridgeChild(const wr::PipelineId& aPipelineId,
+                                                    const LayoutDeviceIntSize&,
+                                                    TextureFactoryIdentifier*,
+                                                    uint32_t*) override;
+  bool DeallocPWebRenderBridgeChild(PWebRenderBridgeChild* aActor) override;
+
   uint64_t DeviceResetSequenceNumber() const {
     return mDeviceResetSequenceNumber;
   }
+
+  uint64_t GetNextExternalImageId();
 
 private:
   // Private destructor, to discourage deletion outside of Release():
@@ -259,6 +268,9 @@ private:
                                                  const uint64_t& aEpoch,
                                                  const bool& aActive) override;
 
+  already_AddRefed<nsIEventTarget>
+  GetSpecificMessageEventTarget(const Message& aMsg) override;
+
   // Class used to store the shared FrameMetrics, mutex, and APZCId  in a hash table
   class SharedFrameMetricsData {
   public:
@@ -286,6 +298,9 @@ private:
   };
 
   RefPtr<LayerManager> mLayerManager;
+
+  uint32_t mNamespace;
+
   // When not multi-process, hold a reference to the CompositorBridgeParent to keep it
   // alive. This reference should be null in multi-process.
   RefPtr<CompositorBridgeParent> mCompositorBridgeParent;

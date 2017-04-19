@@ -24,8 +24,6 @@ DevToolsModules(
     'css-properties.js',
     'csscoverage.js',
     'device.js',
-    'director-manager.js',
-    'director-registry.js',
     'emulation.js',
     'environment.js',
     'errordocs.js',
@@ -66,6 +64,7 @@ DevToolsModules(
     'webextension-inspected-window.js',
     'webextension.js',
     'webgl.js',
+    'window.js',
     'worker-list.js',
     'worker.js',
 )

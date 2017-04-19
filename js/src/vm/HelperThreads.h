@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
- * Definitions for managing off-main-thread work using a process wide list
+ * Definitions for managing off-thread work using a process wide list
  * of worklist items and pool of threads. Worklist items are engine internal,
  * and are distinct from e.g. web workers.
  */
@@ -35,6 +35,7 @@ namespace js {
 
 class AutoLockHelperThreadState;
 class AutoUnlockHelperThreadState;
+class CompileError;
 class PromiseTask;
 struct HelperThread;
 struct ParseTask;
@@ -105,8 +106,14 @@ class GlobalHelperThreadState
     // Parse tasks waiting for an atoms-zone GC to complete.
     ParseTaskVector parseWaitingOnGC_;
 
-    // Source compression worklist.
+    // Source compression worklist of tasks that we do not yet know can start.
+    SourceCompressionTaskVector compressionPendingList_;
+
+    // Source compression worklist of tasks that can start.
     SourceCompressionTaskVector compressionWorklist_;
+
+    // Finished source compression tasks.
+    SourceCompressionTaskVector compressionFinishedList_;
 
     // Runtimes which have sweeping / allocating work to do.
     GCHelperStateVector gcHelperWorklist_;
@@ -133,6 +140,9 @@ class GlobalHelperThreadState
 
     void lock();
     void unlock();
+#ifdef DEBUG
+    bool isLockedByCurrentThread();
+#endif
 
     enum CondVar {
         // For notifying threads waiting for work that they may be able to make progress.
@@ -187,8 +197,16 @@ class GlobalHelperThreadState
         return parseWaitingOnGC_;
     }
 
+    SourceCompressionTaskVector& compressionPendingList(const AutoLockHelperThreadState&) {
+        return compressionPendingList_;
+    }
+
     SourceCompressionTaskVector& compressionWorklist(const AutoLockHelperThreadState&) {
         return compressionWorklist_;
+    }
+
+    SourceCompressionTaskVector& compressionFinishedList(const AutoLockHelperThreadState&) {
+        return compressionFinishedList_;
     }
 
     GCHelperStateVector& gcHelperWorklist(const AutoLockHelperThreadState&) {
@@ -206,6 +224,10 @@ class GlobalHelperThreadState
     bool canStartCompressionTask(const AutoLockHelperThreadState& lock);
     bool canStartGCHelperTask(const AutoLockHelperThreadState& lock);
     bool canStartGCParallelTask(const AutoLockHelperThreadState& lock);
+
+    // Used by a major GC to signal processing enqueued compression tasks.
+    void startHandlingCompressionTasks(const AutoLockHelperThreadState&);
+    void scheduleCompressionTasks(const AutoLockHelperThreadState&);
 
     // Unlike the methods above, the value returned by this method can change
     // over time, even if the helper thread state lock is held throughout.
@@ -226,7 +248,7 @@ class GlobalHelperThreadState
         return Move(firstWasmError);
     }
     void noteWasmFailure(const AutoLockHelperThreadState&) {
-        // Be mindful to signal the main thread after calling this function.
+        // Be mindful to signal the active thread after calling this function.
         numWasmFailedJobs++;
     }
     void setWasmError(const AutoLockHelperThreadState&, UniqueChars error) {
@@ -238,7 +260,7 @@ class GlobalHelperThreadState
     }
 
     JSScript* finishParseTask(JSContext* cx, ParseTaskKind kind, void* token);
-    void cancelParseTask(JSContext* cx, ParseTaskKind kind, void* token);
+    void cancelParseTask(JSRuntime* rt, ParseTaskKind kind, void* token);
 
     void mergeParseTaskCompartment(JSContext* cx, ParseTask* parseTask,
                                    Handle<GlobalObject*> global,
@@ -249,7 +271,7 @@ class GlobalHelperThreadState
   private:
     /*
      * Number of wasm jobs that encountered failure for the active module.
-     * Their parent is logically the main thread, and this number serves for harvesting.
+     * Their parent is logically the active thread, and this number serves for harvesting.
      */
     uint32_t numWasmFailedJobs;
     /*
@@ -262,8 +284,6 @@ class GlobalHelperThreadState
     JSScript* finishScriptParseTask(JSContext* cx, void* token);
     JSScript* finishScriptDecodeTask(JSContext* cx, void* token);
     JSObject* finishModuleParseTask(JSContext* cx, void* token);
-    bool compressionInProgress(SourceCompressionTask* task, const AutoLockHelperThreadState& lock);
-    SourceCompressionTask* compressionTaskForSource(ScriptSource* ss, const AutoLockHelperThreadState& lock);
 
     bool hasActiveThreads(const AutoLockHelperThreadState&);
     void waitForAllThreads();
@@ -306,7 +326,6 @@ HelperThreadState()
 /* Individual helper thread, one allocated per core. */
 struct HelperThread
 {
-    mozilla::Maybe<PerThreadData> threadData;
     mozilla::Maybe<Thread> thread;
 
     /*
@@ -382,7 +401,7 @@ struct HelperThread
     void handleWasmWorkload(AutoLockHelperThreadState& locked);
     void handlePromiseTaskWorkload(AutoLockHelperThreadState& locked);
     void handleIonWorkload(AutoLockHelperThreadState& locked);
-    void handleParseWorkload(AutoLockHelperThreadState& locked, uintptr_t stackLimit);
+    void handleParseWorkload(AutoLockHelperThreadState& locked);
     void handleCompressionWorkload(AutoLockHelperThreadState& locked);
     void handleGCHelperWorkload(AutoLockHelperThreadState& locked);
     void handleGCParallelWorkload(AutoLockHelperThreadState& locked);
@@ -406,6 +425,10 @@ EnsureHelperThreadsInitialized();
 // --thread-count=N option.
 void
 SetFakeCPUCount(size_t count);
+
+// Get the current helper thread, or null.
+HelperThread*
+CurrentHelperThread();
 
 // Pause the current thread until it's pause flag is unset.
 void
@@ -452,7 +475,7 @@ using CompilationSelector = mozilla::Variant<JSScript*,
  * Cancel scheduled or in progress Ion compilations.
  */
 void
-CancelOffThreadIonCompile(CompilationSelector selector, bool discardLazyLinkList);
+CancelOffThreadIonCompile(const CompilationSelector& selector, bool discardLazyLinkList);
 
 inline void
 CancelOffThreadIonCompile(JSScript* script)
@@ -525,9 +548,14 @@ struct AutoEnqueuePendingParseTasksAfterGC {
     ~AutoEnqueuePendingParseTasksAfterGC();
 };
 
-/* Start a compression job for the specified token. */
+// Enqueue a compression job to be processed if there's a major GC.
 bool
-StartOffThreadCompression(ExclusiveContext* cx, SourceCompressionTask* task);
+EnqueueOffThreadCompression(JSContext* cx, SourceCompressionTask* task);
+
+// Cancel all scheduled, in progress, or finished compression tasks for
+// runtime.
+void
+CancelOffThreadCompressions(JSRuntime* runtime);
 
 class MOZ_RAII AutoLockHelperThreadState : public LockGuard<Mutex>
 {
@@ -562,7 +590,6 @@ class MOZ_RAII AutoUnlockHelperThreadState : public UnlockGuard<Mutex>
 struct ParseTask
 {
     ParseTaskKind kind;
-    ExclusiveContext* cx;
     OwningCompileOptions options;
     // Anonymous union, the only correct interpretation is provided by the
     // ParseTaskKind value, or from the virtual parse function.
@@ -581,10 +608,10 @@ struct ParseTask
     };
     LifoAlloc alloc;
 
-    // Rooted pointer to the global object used by 'cx'.
-    JSObject* exclusiveContextGlobal;
+    // Rooted pointer to the global object to use while parsing.
+    JSObject* parseGlobal;
 
-    // Callback invoked off the main thread when the parse finishes.
+    // Callback invoked off thread when the parse finishes.
     JS::OffThreadCompileCallback callback;
     void* callbackData;
 
@@ -596,26 +623,30 @@ struct ParseTask
     // Holds the ScriptSourceObject generated for the script compilation.
     ScriptSourceObject* sourceObject;
 
+    // Holds the SourceCompressionTask, if any were enqueued for the
+    // ScriptSource of sourceObject.
+    SourceCompressionTask* sourceCompressionTask;
+
     // Any errors or warnings produced during compilation. These are reported
     // when finishing the script.
-    Vector<frontend::CompileError*> errors;
+    Vector<CompileError*, 0, SystemAllocPolicy> errors;
     bool overRecursed;
     bool outOfMemory;
 
-    ParseTask(ParseTaskKind kind, ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
-              JSContext* initCx, const char16_t* chars, size_t length,
+    ParseTask(ParseTaskKind kind, JSContext* cx, JSObject* parseGlobal,
+              const char16_t* chars, size_t length,
               JS::OffThreadCompileCallback callback, void* callbackData);
-    ParseTask(ParseTaskKind kind, ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
-              JSContext* initCx, JS::TranscodeBuffer& buffer, size_t cursor,
+    ParseTask(ParseTaskKind kind, JSContext* cx, JSObject* parseGlobal,
+              JS::TranscodeBuffer& buffer, size_t cursor,
               JS::OffThreadCompileCallback callback, void* callbackData);
     bool init(JSContext* cx, const ReadOnlyCompileOptions& options);
 
     void activate(JSRuntime* rt);
-    virtual void parse() = 0;
+    virtual void parse(JSContext* cx) = 0;
     bool finish(JSContext* cx);
 
     bool runtimeMatches(JSRuntime* rt) {
-        return cx->runtimeMatches(rt);
+        return parseGlobal->runtimeFromAnyThread() == rt;
     }
 
     virtual ~ParseTask();
@@ -625,26 +656,26 @@ struct ParseTask
 
 struct ScriptParseTask : public ParseTask
 {
-    ScriptParseTask(ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
-                    JSContext* initCx, const char16_t* chars, size_t length,
+    ScriptParseTask(JSContext* cx, JSObject* parseGlobal,
+                    const char16_t* chars, size_t length,
                     JS::OffThreadCompileCallback callback, void* callbackData);
-    void parse() override;
+    void parse(JSContext* cx) override;
 };
 
 struct ModuleParseTask : public ParseTask
 {
-    ModuleParseTask(ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
-                    JSContext* initCx, const char16_t* chars, size_t length,
+    ModuleParseTask(JSContext* cx, JSObject* parseGlobal,
+                    const char16_t* chars, size_t length,
                     JS::OffThreadCompileCallback callback, void* callbackData);
-    void parse() override;
+    void parse(JSContext* cx) override;
 };
 
 struct ScriptDecodeTask : public ParseTask
 {
-    ScriptDecodeTask(ExclusiveContext* cx, JSObject* exclusiveContextGlobal,
-                     JSContext* initCx, JS::TranscodeBuffer& buffer, size_t cursor,
+    ScriptDecodeTask(JSContext* cx, JSObject* parseGlobal,
+                     JS::TranscodeBuffer& buffer, size_t cursor,
                      JS::OffThreadCompileCallback callback, void* callbackData);
-    void parse() override;
+    void parse(JSContext* cx) override;
 };
 
 // Return whether, if a new parse task was started, it would need to wait for
@@ -652,55 +683,76 @@ struct ScriptDecodeTask : public ParseTask
 extern bool
 OffThreadParsingMustWaitForGC(JSRuntime* rt);
 
-// Compression tasks are allocated on the stack by their triggering thread,
-// which will block on the compression completing as the task goes out of scope
-// to ensure it completes at the required time.
-struct SourceCompressionTask
+// It is not desirable to eagerly compress: if lazy functions that are tied to
+// the ScriptSource were to be executed relatively soon after parsing, they
+// would need to block on decompression, which hurts responsiveness.
+//
+// To this end, compression tasks are heap allocated and enqueued in a pending
+// list by ScriptSource::setSourceCopy. When a major GC occurs, we schedule
+// pending compression tasks and move the ones that are ready to be compressed
+// to the worklist. Currently, a compression task is considered ready 2 major
+// GCs after being enqueued. Completed tasks are handled during the sweeping
+// phase by AttachCompressedSourcesTask, which runs in parallel with other GC
+// sweeping tasks.
+class SourceCompressionTask
 {
-    friend class ScriptSource;
     friend struct HelperThread;
+    friend class ScriptSource;
 
-    // Thread performing the compression.
-    HelperThread* helperThread;
+    // The runtime that the ScriptSource is associated with, in the sense that
+    // it uses the runtime's immutable string cache.
+    JSRuntime* runtime_;
 
-  private:
-    // Context from the triggering thread. Don't use this off thread!
-    ExclusiveContext* cx;
+    // The major GC number of the runtime when the task was enqueued.
+    static const uint64_t MajorGCNumberWaitingForFixup = UINT64_MAX;
+    uint64_t majorGCNumber_;
 
-    ScriptSource* ss;
+    // The source to be compressed.
+    ScriptSourceHolder sourceHolder_;
 
-    // Atomic flag to indicate to a helper thread that it should abort
-    // compression on the source.
-    mozilla::Atomic<bool, mozilla::Relaxed> abort_;
-
-    // Stores the result of the compression.
-    enum ResultType {
-        OOM,
-        Aborted,
-        Success
-    } result;
-
-    mozilla::Maybe<SharedImmutableString> resultString;
+    // The resultant compressed string. If the compressed string is larger
+    // than the original, or we OOM'd during compression, or nothing else
+    // except the task is holding the ScriptSource alive when scheduled to
+    // compress, this will remain None upon completion.
+    mozilla::Maybe<SharedImmutableString> resultString_;
 
   public:
-    explicit SourceCompressionTask(ExclusiveContext* cx)
-      : helperThread(nullptr)
-      , cx(cx)
-      , ss(nullptr)
-      , abort_(false)
-      , result(OOM)
-    {}
+    // The majorGCNumber is used for scheduling tasks. If the task is being
+    // enqueued from an off-thread parsing task, leave the GC number
+    // UINT64_MAX to be fixed up when the parse task finishes.
+    SourceCompressionTask(JSRuntime* rt, ScriptSource* source)
+      : runtime_(rt),
+        majorGCNumber_(CurrentThreadCanAccessRuntime(rt)
+                       ? rt->gc.majorGCCount()
+                       : MajorGCNumberWaitingForFixup),
+        sourceHolder_(source)
+    { }
 
-    ~SourceCompressionTask()
-    {
-        complete();
+    bool runtimeMatches(JSRuntime* runtime) const {
+        return runtime == runtime_;
     }
 
-    ResultType work();
-    bool complete();
-    void abort() { abort_ = true; }
-    bool active() const { return !!ss; }
-    ScriptSource* source() { return ss; }
+    void fixupMajorGCNumber(JSRuntime* runtime) {
+        MOZ_ASSERT(majorGCNumber_ == MajorGCNumberWaitingForFixup);
+        majorGCNumber_ = runtime->gc.majorGCCount();
+    }
+
+    bool shouldStart() const {
+        // We wait 2 major GCs to start compressing, in order to avoid
+        // immediate compression.
+        if (majorGCNumber_ == MajorGCNumberWaitingForFixup)
+            return false;
+        return runtime_->gc.majorGCCount() > majorGCNumber_ + 1;
+    }
+
+    bool shouldCancel() const {
+        // If the refcount is exactly 1, then nothing else is holding on to the
+        // ScriptSource, so no reason to compress it and we should cancel the task.
+        return sourceHolder_.get()->refs == 1;
+    }
+
+    void work();
+    void complete();
 };
 
 } /* namespace js */

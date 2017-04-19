@@ -21,19 +21,8 @@ var systemAppOrigin = (function () {
   return systemOrigin;
 })();
 
-var threshold = 25;
-try {
-  threshold = Services.prefs.getIntPref("ui.dragThresholdX");
-} catch (e) {
-  // Fall back to default value
-}
-
-var delay = 500;
-try {
-  delay = Services.prefs.getIntPref("ui.click_hold_context_menus.delay");
-} catch (e) {
-  // Fall back to default value
-}
+var threshold = Services.prefs.getIntPref("ui.dragThresholdX", 25);
+var delay = Services.prefs.getIntPref("ui.click_hold_context_menus.delay", 500);
 
 function SimulatorCore(simulatorTarget) {
   this.simulatorTarget = simulatorTarget;
@@ -275,14 +264,12 @@ SimulatorCore.prototype = {
         }
       }
       let unwrapped = XPCNativeWrapper.unwrap(target);
-      /* eslint-disable no-inline-comments */
       unwrapped.sendTouchEvent(name, clone([0]),       // event type, id
                                clone([evt.clientX]),   // x
                                clone([evt.clientY]),   // y
                                clone([1]), clone([1]), // rx, ry
                                clone([0]), clone([0]), // rotation, force
                                1);                     // count
-      /* eslint-enable no-inline-comments */
       return;
     }
     let document = target.ownerDocument;
@@ -357,12 +344,10 @@ SimulatorCore.prototype = {
     // delay. But Firefox didn't support this property now, we can't get
     // this value from utils.getVisitedDependentComputedStyle() to check
     // if we should suppress 300ms delay.
-    /* eslint-disable no-inline-comments */
     if (!allowZoom.value ||                   // user-scalable = no
         minZoom.value === maxZoom.value ||    // minimum-scale = maximum-scale
         autoSize.value                        // width = device-width
     ) {
-    /* eslint-enable no-inline-comments */
       return 0;
     }
     return 300;

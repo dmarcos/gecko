@@ -13,8 +13,8 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/LinkedList.h"
-#include "mozilla/RestyleManagerBase.h"
-#include "mozilla/RestyleManagerHandle.h"
+#include "mozilla/RestyleManager.h"
+#include "mozilla/RestyleManager.h"
 
 #include "nsCOMPtr.h"
 #include "nsILayoutHistoryState.h"
@@ -48,19 +48,19 @@ class FlattenedChildIterator;
 } // namespace dom
 } // namespace mozilla
 
-class nsCSSFrameConstructor : public nsFrameManager
+class nsCSSFrameConstructor final : public nsFrameManager
 {
 public:
   typedef mozilla::CSSPseudoElementType CSSPseudoElementType;
   typedef mozilla::dom::Element Element;
 
   friend class mozilla::RestyleManager;
-  friend class mozilla::RestyleManagerBase;
+  friend class mozilla::GeckoRestyleManager;
   friend class mozilla::ServoRestyleManager;
 
   nsCSSFrameConstructor(nsIDocument* aDocument, nsIPresShell* aPresShell);
   ~nsCSSFrameConstructor(void) {
-    NS_ASSERTION(mUpdateCount == 0, "Dying in the middle of our own update?");
+    MOZ_ASSERT(mUpdateCount == 0, "Dying in the middle of our own update?");
   }
 
   // get the alternate text for a content node
@@ -73,12 +73,12 @@ private:
   nsCSSFrameConstructor& operator=(const nsCSSFrameConstructor& aCopy) = delete;
 
 public:
-  mozilla::RestyleManagerHandle RestyleManager() const
+  mozilla::RestyleManager* RestyleManager() const
     { return mPresShell->GetPresContext()->RestyleManager(); }
 
   nsIFrame* ConstructRootFrame();
 
-  nsresult ReconstructDocElementHierarchy();
+  void ReconstructDocElementHierarchy();
 
   // Create frames for content nodes that are marked as needing frames. This
   // should be called before ProcessPendingRestyles.
@@ -87,7 +87,8 @@ public:
   void CreateNeededFrames();
 
 private:
-  void CreateNeededFrames(nsIContent* aContent);
+  void CreateNeededFrames(nsIContent* aContent,
+                          TreeMatchContext& aTreeMatchContext);
 
   enum Operation {
     CONTENTAPPEND,
@@ -105,7 +106,8 @@ private:
   void IssueSingleInsertNofications(nsIContent* aContainer,
                                     nsIContent* aStartChild,
                                     nsIContent* aEndChild,
-                                    bool aAllowLazyConstruction);
+                                    bool aAllowLazyConstruction,
+                                    bool aForReconstruction);
 
   /**
    * Data that represents an insertion point for some child content.
@@ -148,12 +150,40 @@ private:
   InsertionPoint GetRangeInsertionPoint(nsIContent* aContainer,
                                         nsIContent* aStartChild,
                                         nsIContent* aEndChild,
-                                        bool aAllowLazyConstruction);
+                                        bool aAllowLazyConstruction,
+                                        bool aForReconstruction);
 
   // Returns true if parent was recreated due to frameset child, false otherwise.
   bool MaybeRecreateForFrameset(nsIFrame* aParentFrame,
                                   nsIContent* aStartChild,
                                   nsIContent* aEndChild);
+
+  /**
+   * For each child in the aStartChild/aEndChild range, calls
+   * NoteDirtyDescendantsForServo on their flattened tree parents.  This is
+   * used when content is inserted into the document and we decide that
+   * we can do lazy frame construction.  It handles children being rebound to
+   * different insertion points by calling NoteDirtyDescendantsForServo on each
+   * child's flattened tree parent.  Only used when we are styled by Servo.
+   */
+  void LazilyStyleNewChildRange(nsIContent* aStartChild, nsIContent* aEndChild);
+
+  /**
+   * For each child in the aStartChild/aEndChild range, calls StyleNewChildren
+   * on their flattened tree parents.  This is used when content is inserted
+   * into the document and we decide that we cannot do lazy frame construction.
+   * It handles children being rebound to different insertion points by calling
+   * StyleNewChildren on each child's flattened tree parent.  Only used when we
+   * are styled by Servo.
+   */
+  void StyleNewChildRange(nsIContent* aStartChild, nsIContent* aEndChild);
+
+  /**
+   * Calls StyleSubtreeForReconstruct on each child in the aStartChild/aEndChild
+   * range. Only used when we are styled by Servo.
+   */
+  void StyleChildRangeForReconstruct(nsIContent* aStartChild,
+                                     nsIContent* aEndChild);
 
 public:
   /**
@@ -202,29 +232,73 @@ public:
 
   // If aAllowLazyConstruction is true then frame construction of the new
   // children can be done lazily.
-  nsresult ContentAppended(nsIContent* aContainer,
-                           nsIContent* aFirstNewContent,
-                           bool        aAllowLazyConstruction);
+  //
+  // When constructing frames lazily, we can keep the tree match context in a
+  // much easier way than nsFrameConstructorState, and thus, we're allowed to
+  // provide a TreeMatchContext to avoid calling InitAncestors repeatedly deep
+  // in the DOM.
+  void ContentAppended(nsIContent* aContainer,
+                       nsIContent* aFirstNewContent,
+                       bool aAllowLazyConstruction,
+                       TreeMatchContext* aProvidedTreeMatchContext = nullptr)
+  {
+    ContentAppended(aContainer, aFirstNewContent, aAllowLazyConstruction, false,
+                    aProvidedTreeMatchContext);
+  }
 
   // If aAllowLazyConstruction is true then frame construction of the new child
   // can be done lazily.
-  nsresult ContentInserted(nsIContent*            aContainer,
-                           nsIContent*            aChild,
-                           nsILayoutHistoryState* aFrameState,
-                           bool                   aAllowLazyConstruction);
+  void ContentInserted(nsIContent* aContainer,
+                       nsIContent* aChild,
+                       nsILayoutHistoryState* aFrameState,
+                       bool aAllowLazyConstruction);
 
   // Like ContentInserted but handles inserting the children of aContainer in
   // the range [aStartChild, aEndChild).  aStartChild must be non-null.
   // aEndChild may be null to indicate the range includes all kids after
-  // aStartChild.  If aAllowLazyConstruction is true then frame construction of
+  // aStartChild.
+  //
+  // If aAllowLazyConstruction is true then frame construction of
   // the new children can be done lazily. It is only allowed to be true when
   // inserting a single node.
-  nsresult ContentRangeInserted(nsIContent*            aContainer,
-                                nsIContent*            aStartChild,
-                                nsIContent*            aEndChild,
-                                nsILayoutHistoryState* aFrameState,
-                                bool                   aAllowLazyConstruction);
+  //
+  // See ContentAppended to see why we allow passing an already initialized
+  // TreeMatchContext.
+  void ContentRangeInserted(nsIContent* aContainer,
+                            nsIContent* aStartChild,
+                            nsIContent* aEndChild,
+                            nsILayoutHistoryState* aFrameState,
+                            bool aAllowLazyConstruction,
+                            TreeMatchContext* aProvidedTreeMatchContext = nullptr)
+  {
+    ContentRangeInserted(aContainer, aStartChild, aEndChild, aFrameState,
+                         aAllowLazyConstruction, false,
+                         aProvidedTreeMatchContext);
+  }
 
+private:
+  // Helpers for the public ContentAppended, ContentInserted and
+  // ContentRangeInserted functions above.
+  //
+  // aForReconstruction indicates whether this call is for frame reconstruction
+  // via RecreateFramesFor or lazy frame construction via CreateNeededFrames.
+  // (This latter case admittedly isn't always for "reconstruction" per se, but
+  // the important thing is that aForReconstruction is false for real content
+  // insertions, and true for other cases.)
+  void ContentAppended(nsIContent* aContainer,
+                       nsIContent* aFirstNewContent,
+                       bool aAllowLazyConstruction,
+                       bool aForReconstruction,
+                       TreeMatchContext* aProvidedTreeMatchContext);
+  void ContentRangeInserted(nsIContent* aContainer,
+                            nsIContent* aStartChild,
+                            nsIContent* aEndChild,
+                            nsILayoutHistoryState* aFrameState,
+                            bool aAllowLazyConstruction,
+                            bool aForReconstruction,
+                            TreeMatchContext* aProvidedTreeMatchContext);
+
+public:
   enum RemoveFlags {
     REMOVE_CONTENT, REMOVE_FOR_RECONSTRUCTION, REMOVE_DESTROY_FRAMES };
   /**
@@ -243,15 +317,15 @@ public:
    * only when aFlags == REMOVE_DESTROY_FRAMES, otherwise it will only be
    * captured if we reconstructed frames for an ancestor.
    */
-  nsresult ContentRemoved(nsIContent*  aContainer,
-                          nsIContent*  aChild,
-                          nsIContent*  aOldNextSibling,
-                          RemoveFlags  aFlags,
-                          bool*        aDidReconstruct,
-                          nsIContent** aDestroyedFramesFor = nullptr);
+  void ContentRemoved(nsIContent*  aContainer,
+                      nsIContent*  aChild,
+                      nsIContent*  aOldNextSibling,
+                      RemoveFlags  aFlags,
+                      bool*        aDidReconstruct,
+                      nsIContent** aDestroyedFramesFor = nullptr);
 
-  nsresult CharacterDataChanged(nsIContent* aContent,
-                                CharacterDataChangeInfo* aInfo);
+  void CharacterDataChanged(nsIContent* aContent,
+                            CharacterDataChangeInfo* aInfo);
 
   // If aContent is a text node that has been optimized away due to being
   // whitespace next to a block boundary (or for some other reason), stop
@@ -260,8 +334,8 @@ public:
   // Returns the frame for aContent if there is one.
   nsIFrame* EnsureFrameForTextNode(nsGenericDOMDataNode* aContent);
 
-  // generate the child frames and process bindings
-  nsresult GenerateChildFrames(nsContainerFrame* aFrame);
+  // Generate the child frames and process bindings
+  void GenerateChildFrames(nsContainerFrame* aFrame);
 
   // Should be called when a frame is going to be destroyed and
   // WillDestroyFrameTree hasn't been called yet.
@@ -303,11 +377,11 @@ public:
    */
   InsertionPoint GetInsertionPoint(nsIContent* aContainer, nsIContent* aChild);
 
-  nsresult CreateListBoxContent(nsContainerFrame* aParentFrame,
-                                nsIFrame*         aPrevFrame,
-                                nsIContent*       aChild,
-                                nsIFrame**        aResult,
-                                bool              aIsAppend);
+  void CreateListBoxContent(nsContainerFrame* aParentFrame,
+                            nsIFrame*         aPrevFrame,
+                            nsIContent*       aChild,
+                            nsIFrame**        aResult,
+                            bool              aIsAppend);
 
   // GetInitialContainingBlock() is deprecated in favor of GetRootElementFrame();
   // nsIFrame* GetInitialContainingBlock() { return mRootElementFrame; }
@@ -364,7 +438,8 @@ private:
   already_AddRefed<nsStyleContext>
   ResolveStyleContext(nsStyleContext*          aParentStyleContext,
                       nsIContent*              aContent,
-                      nsFrameConstructorState* aState);
+                      nsFrameConstructorState* aState,
+                      Element*                 aOriginatingElementOrNull = nullptr);
 
   // Add the frame construction items for the given aContent and aParentFrame
   // to the list.  This might add more than one item in some rare cases.
@@ -418,14 +493,14 @@ private:
    * @param [out] aNewContent the content node we create
    * @param [out] aNewFrame the new frame we create
    */
-  nsresult CreateAttributeContent(nsIContent* aParentContent,
-                                  nsIFrame* aParentFrame,
-                                  int32_t aAttrNamespace,
-                                  nsIAtom* aAttrName,
-                                  nsStyleContext* aStyleContext,
-                                  nsCOMArray<nsIContent>& aGeneratedContent,
-                                  nsIContent** aNewContent,
-                                  nsIFrame** aNewFrame);
+  void CreateAttributeContent(nsIContent* aParentContent,
+                              nsIFrame* aParentFrame,
+                              int32_t aAttrNamespace,
+                              nsIAtom* aAttrName,
+                              nsStyleContext* aStyleContext,
+                              nsCOMArray<nsIContent>& aGeneratedContent,
+                              nsIContent** aNewContent,
+                              nsIFrame** aNewFrame);
 
   /**
    * Create a text node containing the given string. If aText is non-null
@@ -463,11 +538,11 @@ private:
   // aParentFrame.  aPrevSibling must be the frame after which aFrameList is to
   // be placed on aParentFrame's principal child list.  It may be null if
   // aFrameList is being added at the beginning of the child list.
-  nsresult AppendFramesToParent(nsFrameConstructorState&       aState,
-                                nsContainerFrame*              aParentFrame,
-                                nsFrameItems&                  aFrameList,
-                                nsIFrame*                      aPrevSibling,
-                                bool                           aIsRecursiveCall = false);
+  void AppendFramesToParent(nsFrameConstructorState&       aState,
+                            nsContainerFrame*              aParentFrame,
+                            nsFrameItems&                  aFrameList,
+                            nsIFrame*                      aPrevSibling,
+                            bool                           aIsRecursiveCall = false);
 
   // BEGIN TABLE SECTION
   /**
@@ -1299,7 +1374,6 @@ protected:
   static nsIFrame* CreatePlaceholderFrameFor(nsIPresShell*     aPresShell,
                                              nsIContent*       aContent,
                                              nsIFrame*         aFrame,
-                                             nsStyleContext*   aParentStyle,
                                              nsContainerFrame* aParentFrame,
                                              nsIFrame*         aPrevInFlow,
                                              nsFrameState      aTypeBit);
@@ -1358,7 +1432,6 @@ private:
                            nsIContent* aContent);
 
   void AddPageBreakItem(nsIContent* aContent,
-                        nsStyleContext* aMainStyleContext,
                         FrameConstructionItemList& aItems);
 
   // Function to find FrameConstructionData for aElement.  Will return
@@ -1691,7 +1764,7 @@ private:
   // InitializeSelectFrame puts scrollFrame in aFrameItems if aBuildCombobox is false
   // aBuildCombobox indicates if we are building a combobox that has a dropdown
   // popup widget or not.
-  nsresult
+  void
   InitializeSelectFrame(nsFrameConstructorState& aState,
                         nsContainerFrame*        aScrollFrame,
                         nsContainerFrame*        aScrolledFrame,
@@ -1720,7 +1793,7 @@ private:
    * @param aDestroyedFramesFor if non-null, it will contain the content that
    *   was actually reframed - it may be different than aContent.
    */
-  nsresult
+  void
   RecreateFramesForContent(nsIContent*  aContent,
                            bool         aAsyncInsert,
                            RemoveFlags  aFlags,
@@ -1738,7 +1811,6 @@ private:
   // content that was reframed.
   bool MaybeRecreateContainerForFrameRemoval(nsIFrame*    aFrame,
                                              RemoveFlags  aFlags,
-                                             nsresult*    aResult,
                                              nsIContent** aDestroyedFramesFor);
 
   nsIFrame* CreateContinuingOuterTableFrame(nsIPresShell*     aPresShell,
@@ -1863,9 +1935,9 @@ private:
                              bool                     aIsAppend,
                              nsIFrame*                aPrevSibling);
 
-  nsresult ReframeContainingBlock(nsIFrame*    aFrame,
-                                  RemoveFlags  aFlags,
-                                  nsIContent** aReframeContent);
+  void ReframeContainingBlock(nsIFrame*    aFrame,
+                              RemoveFlags  aFlags,
+                              nsIContent** aReframeContent);
 
   //----------------------------------------
 
@@ -1919,18 +1991,18 @@ private:
   void RecoverLetterFrames(nsContainerFrame* aBlockFrame);
 
   //
-  nsresult RemoveLetterFrames(nsIPresShell*     aPresShell,
-                              nsContainerFrame* aBlockFrame);
+  void RemoveLetterFrames(nsIPresShell*     aPresShell,
+                          nsContainerFrame* aBlockFrame);
 
   // Recursive helper for RemoveLetterFrames
-  nsresult RemoveFirstLetterFrames(nsIPresShell*     aPresShell,
-                                   nsContainerFrame* aFrame,
-                                   nsContainerFrame* aBlockFrame,
-                                   bool*             aStopLooking);
+  void RemoveFirstLetterFrames(nsIPresShell*     aPresShell,
+                               nsContainerFrame* aFrame,
+                               nsContainerFrame* aBlockFrame,
+                               bool*             aStopLooking);
 
   // Special remove method for those pesky floating first-letter frames
-  nsresult RemoveFloatingFirstLetterFrames(nsIPresShell*    aPresShell,
-                                           nsIFrame*        aBlockFrame);
+  void RemoveFloatingFirstLetterFrames(nsIPresShell*    aPresShell,
+                                       nsIFrame*        aBlockFrame);
 
   // Capture state for the frame tree rooted at the frame associated with the
   // content object, aContent
@@ -1961,12 +2033,12 @@ private:
                              nsContainerFrame*        aBlockFrame,
                              nsFrameItems&            aFrameItems);
 
-  nsresult InsertFirstLineFrames(nsFrameConstructorState& aState,
-                                 nsIContent*              aContent,
-                                 nsIFrame*                aBlockFrame,
-                                 nsContainerFrame**       aParentFrame,
-                                 nsIFrame*                aPrevSibling,
-                                 nsFrameItems&            aFrameItems);
+  void InsertFirstLineFrames(nsFrameConstructorState& aState,
+                             nsIContent*              aContent,
+                             nsIFrame*                aBlockFrame,
+                             nsContainerFrame**       aParentFrame,
+                             nsIFrame*                aPrevSibling,
+                             nsFrameItems&            aFrameItems);
 
   /**
    * Find the right frame to use for aContent when looking for sibling
@@ -2061,17 +2133,8 @@ private:
                       nsIContent*            aContent,
                       mozilla::StyleDisplay& aDisplay);
 
-  void QuotesDirty() {
-    NS_PRECONDITION(mUpdateCount != 0, "Instant quote updates are bad news");
-    mQuotesDirty = true;
-    mDocument->SetNeedLayoutFlush();
-  }
-
-  void CountersDirty() {
-    NS_PRECONDITION(mUpdateCount != 0, "Instant counter updates are bad news");
-    mCountersDirty = true;
-    mDocument->SetNeedLayoutFlush();
-  }
+  void QuotesDirty();
+  void CountersDirty();
 
   /**
    * Add the pair (aContent, aStyleContext) to the undisplayed items

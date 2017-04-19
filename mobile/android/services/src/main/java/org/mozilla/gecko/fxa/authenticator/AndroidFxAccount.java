@@ -30,7 +30,6 @@ import org.mozilla.gecko.fxa.FxAccountConstants;
 import org.mozilla.gecko.fxa.login.State;
 import org.mozilla.gecko.fxa.login.State.StateLabel;
 import org.mozilla.gecko.fxa.login.StateFactory;
-import org.mozilla.gecko.fxa.login.TokensAndKeysState;
 import org.mozilla.gecko.fxa.sync.FxAccountProfileService;
 import org.mozilla.gecko.sync.ExtendedJSONObject;
 import org.mozilla.gecko.sync.Utils;
@@ -80,6 +79,7 @@ public class AndroidFxAccount {
 
   public static final String ACCOUNT_KEY_DEVICE_ID = "deviceId";
   public static final String ACCOUNT_KEY_DEVICE_REGISTRATION_VERSION = "deviceRegistrationVersion";
+  private static final String ACCOUNT_KEY_DEVICE_REGISTRATION_TIMESTAMP = "deviceRegistrationTimestamp";
 
   // Account authentication token type for fetching account profile.
   public static final String PROFILE_OAUTH_TOKEN_TYPE = "oauth::profile";
@@ -402,6 +402,7 @@ public class AndroidFxAccount {
     }
     o.put("fxaDeviceId", getDeviceId());
     o.put("fxaDeviceRegistrationVersion", getDeviceRegistrationVersion());
+    o.put("fxaDeviceRegistrationTimestamp", getDeviceRegistrationTimestamp());
     return o;
   }
 
@@ -608,24 +609,6 @@ public class AndroidFxAccount {
     }
   }
 
-  public byte[] getSessionToken() throws InvalidFxAState {
-    State state = getState();
-    StateLabel stateLabel = state.getStateLabel();
-    if (stateLabel == StateLabel.Cohabiting || stateLabel == StateLabel.Married) {
-      TokensAndKeysState tokensAndKeysState = (TokensAndKeysState) state;
-      return tokensAndKeysState.getSessionToken();
-    }
-    throw new InvalidFxAState("Cannot get sessionToken: not in a TokensAndKeysState state");
-  }
-
-  public static class InvalidFxAState extends Exception {
-    private static final long serialVersionUID = -8537626959811195978L;
-
-    public InvalidFxAState(String message) {
-      super(message);
-    }
-  }
-
   /**
    * <b>For debugging only!</b>
    */
@@ -691,6 +674,15 @@ public class AndroidFxAccount {
     intent.putExtra(FxAccountConstants.ACCOUNT_OAUTH_SERVICE_ENDPOINT_KEY, getOAuthServerURI());
     // Deleted broadcasts are package-private, so there's no security risk include the tokens in the extras
     intent.putExtra(FxAccountConstants.ACCOUNT_DELETED_INTENT_ACCOUNT_AUTH_TOKENS, tokens.toArray(new String[tokens.size()]));
+
+    try {
+      intent.putExtra(FxAccountConstants.ACCOUNT_DELETED_INTENT_ACCOUNT_SESSION_TOKEN, getState().getSessionToken());
+    } catch (State.NotASessionTokenState e) {
+      // Ignore, if sessionToken is null we won't try to do anything anyway.
+    }
+    intent.putExtra(FxAccountConstants.ACCOUNT_DELETED_INTENT_ACCOUNT_SERVER_URI, getAccountServerURI());
+    intent.putExtra(FxAccountConstants.ACCOUNT_DELETED_INTENT_ACCOUNT_DEVICE_ID, getDeviceId());
+
     return intent;
   }
 
@@ -829,6 +821,23 @@ public class AndroidFxAccount {
     }
   }
 
+  public synchronized long getDeviceRegistrationTimestamp() {
+    final String timestampStr = accountManager.getUserData(account, ACCOUNT_KEY_DEVICE_REGISTRATION_TIMESTAMP);
+
+    if (TextUtils.isEmpty(timestampStr)) {
+      return 0L;
+    }
+
+    // Long.parseLong might throw; while it's not expected that this might happen, let's not risk
+    // crashing here as this method will be called on startup.
+    try {
+      return Long.parseLong(timestampStr);
+    } catch (NumberFormatException e) {
+      Logger.warn(LOG_TAG, "Couldn't parse deviceRegistrationTimestamp; defaulting to 0L.", e);
+      return 0L;
+    }
+  }
+
   public synchronized void setDeviceId(String id) {
     accountManager.setUserData(account, ACCOUNT_KEY_DEVICE_ID, id);
   }
@@ -838,14 +847,21 @@ public class AndroidFxAccount {
         Integer.toString(deviceRegistrationVersion));
   }
 
+  public synchronized void setDeviceRegistrationTimestamp(long timestamp) {
+    accountManager.setUserData(account, ACCOUNT_KEY_DEVICE_REGISTRATION_TIMESTAMP,
+            Long.toString(timestamp));
+  }
+
   public synchronized void resetDeviceRegistrationVersion() {
     setDeviceRegistrationVersion(0);
   }
 
-  public synchronized void setFxAUserData(String id, int deviceRegistrationVersion) {
+  public synchronized void setFxAUserData(String id, int deviceRegistrationVersion, long timestamp) {
     accountManager.setUserData(account, ACCOUNT_KEY_DEVICE_ID, id);
     accountManager.setUserData(account, ACCOUNT_KEY_DEVICE_REGISTRATION_VERSION,
-        Integer.toString(deviceRegistrationVersion));
+            Integer.toString(deviceRegistrationVersion));
+    accountManager.setUserData(account, ACCOUNT_KEY_DEVICE_REGISTRATION_TIMESTAMP,
+            Long.toString(timestamp));
   }
 
   @SuppressLint("ParcelCreator") // The CREATOR field is defined in the super class.

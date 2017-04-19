@@ -28,12 +28,12 @@ function run_test() {
   writeLine("expired.example.com:HSTS\t0\t0\t" + (now - 100000) + ",1,0\n", outputStream);
   writeLine("notexpired.example.com:HSTS\t0\t0\t" + (now + 100000) + ",1,0\n", outputStream);
   // This overrides an entry on the preload list.
-  writeLine("bugzilla.mozilla.org:HSTS\t0\t0\t" + (now + 100000) + ",1,0\n", outputStream);
+  writeLine("includesubdomains.preloaded.test:HSTS\t0\t0\t" + (now + 100000) + ",1,0\n", outputStream);
   writeLine("incsubdomain.example.com:HSTS\t0\t0\t" + (now + 100000) + ",1,1\n", outputStream);
   // This overrides an entry on the preload list.
-  writeLine("login.persona.org:HSTS\t0\t0\t0,2,0\n", outputStream);
+  writeLine("includesubdomains2.preloaded.test:HSTS\t0\t0\t0,2,0\n", outputStream);
   outputStream.close();
-  Services.obs.addObserver(start_test_in_child, "data-storage-ready", false);
+  Services.obs.addObserver(start_test_in_child, "data-storage-ready");
   do_test_pending();
   let SSService = Cc["@mozilla.org/ssservice;1"]
                     .getService(Ci.nsISiteSecurityService);

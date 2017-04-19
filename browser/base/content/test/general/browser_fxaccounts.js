@@ -18,7 +18,7 @@ const TEST_ROOT = "http://example.com/browser/browser/base/content/test/general/
   let stubs = {
     updateUI() {
       return unstubs["updateUI"].call(gFxAccounts).then(() => {
-        Services.obs.notifyObservers(null, "test:browser_fxaccounts:updateUI", null);
+        Services.obs.notifyObservers(null, "test:browser_fxaccounts:updateUI");
       });
     },
     // Opening preferences is trickier than it should be as leaks are reported
@@ -26,7 +26,7 @@ const TEST_ROOT = "http://example.com/browser/browser/base/content/test/general/
     // know when they are done.
     // So just ensure openPreferences is called rather than whether it opens.
     openPreferences() {
-      Services.obs.notifyObservers(null, "test:browser_fxaccounts:openPreferences", null);
+      Services.obs.notifyObservers(null, "test:browser_fxaccounts:openPreferences");
     }
   };
 
@@ -73,7 +73,7 @@ add_task(function* test_nouser() {
   let user = yield fxAccounts.getSignedInUser();
   Assert.strictEqual(user, null, "start with no user signed in");
   let promiseUpdateDone = promiseObserver("test:browser_fxaccounts:updateUI");
-  Services.obs.notifyObservers(null, this.FxAccountsCommon.ONLOGOUT_NOTIFICATION, null);
+  Services.obs.notifyObservers(null, this.FxAccountsCommon.ONLOGOUT_NOTIFICATION);
   yield promiseUpdateDone;
 
   // Check the world - the FxA footer area is visible as it is offering a signin.
@@ -116,6 +116,7 @@ add_task(function* test_verifiedUserEmptyProfile() {
   // we first fetch the profile. We want them both to fire or we aren't testing
   // the state we think we are testing.
   let promiseUpdateDone = promiseObserver("test:browser_fxaccounts:updateUI", 2);
+  gFxAccounts._cachedProfile = null;
   configureProfileURL({}); // successful but empty profile.
   yield setSignedInUser(true); // this will fire the observer that does the update.
   yield promiseUpdateDone;
@@ -135,6 +136,7 @@ add_task(function* test_verifiedUserEmptyProfile() {
 
 add_task(function* test_verifiedUserDisplayName() {
   let promiseUpdateDone = promiseObserver("test:browser_fxaccounts:updateUI", 2);
+  gFxAccounts._cachedProfile = null;
   configureProfileURL({ displayName: "Test User Display Name" });
   yield setSignedInUser(true); // this will fire the observer that does the update.
   yield promiseUpdateDone;
@@ -147,14 +149,23 @@ add_task(function* test_verifiedUserDisplayName() {
   yield signOut();
 });
 
+add_task(function* test_profileNotificationsClearsCache() {
+  let promiseUpdateDone = promiseObserver("test:browser_fxaccounts:updateUI", 1);
+  gFxAccounts._cachedProfile = { foo: "bar" };
+  Services.obs.notifyObservers(null, this.FxAccountsCommon.ON_PROFILE_CHANGE_NOTIFICATION);
+  Assert.ok(!gFxAccounts._cachedProfile);
+  yield promiseUpdateDone;
+});
+
 add_task(function* test_verifiedUserProfileFailure() {
   // profile failure means only one observer fires.
   let promiseUpdateDone = promiseObserver("test:browser_fxaccounts:updateUI", 1);
+  gFxAccounts._cachedProfile = null;
   configureProfileURL(null, 500);
   yield setSignedInUser(true); // this will fire the observer that does the update.
   yield promiseUpdateDone;
 
-  Assert.ok(isFooterVisible())
+  Assert.ok(isFooterVisible());
   Assert.equal(panelUILabel.getAttribute("label"), "foo@example.com");
   Assert.equal(panelUIStatus.getAttribute("tooltiptext"),
                panelUIStatus.getAttribute("signedinTooltiptext"));
@@ -189,7 +200,7 @@ function promiseObserver(topic, count = 1) {
         resolve(aSubject);
       }
     }
-    Services.obs.addObserver(obs, topic, false);
+    Services.obs.addObserver(obs, topic);
   });
 }
 

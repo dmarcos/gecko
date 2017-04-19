@@ -43,6 +43,8 @@ this.SiteDataManager = {
   _quotaUsageRequests: null,
 
   updateSites() {
+    Services.obs.notifyObservers(null, "sitedatamanager:updating-sites");
+
     // Clear old data and requests first
     this._sites.clear();
     this._cancelQuotaUpdate();
@@ -72,7 +74,7 @@ this.SiteDataManager = {
 
     Promise.all([this._updateQuotaPromise, this._updateDiskCachePromise])
            .then(() => {
-             Services.obs.notifyObservers(null, "sitedatamanager:sites-updated", null);
+             Services.obs.notifyObservers(null, "sitedatamanager:sites-updated");
            });
   },
 
@@ -83,7 +85,7 @@ this.SiteDataManager = {
       promises.push(new Promise(resolve => {
         let callback = {
           onUsageResult(request) {
-            site.quotaUsage = request.usage;
+            site.quotaUsage = request.result.usage;
             resolve();
           }
         };
@@ -107,7 +109,13 @@ this.SiteDataManager = {
   },
 
   _updateAppCache() {
-    let groups = this._appCache.getGroups();
+    let groups = null;
+    try {
+      groups =  this._appCache.getGroups();
+    } catch (e) {
+      return;
+    }
+
     for (let site of this._sites.values()) {
       for (let group of groups) {
         let uri = Services.io.newURI(group);
@@ -250,6 +258,7 @@ this.SiteDataManager = {
 
   isPrivateCookie(cookie) {
     let { userContextId } = cookie.originAttributes;
-    return userContextId && !ContextualIdentityService.getIdentityFromId(userContextId).public;
+    // A private cookie is when its userContextId points to a private identity.
+    return userContextId && !ContextualIdentityService.getPublicIdentityFromId(userContextId);
   }
 };

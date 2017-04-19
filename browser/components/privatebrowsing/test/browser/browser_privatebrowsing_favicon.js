@@ -40,7 +40,7 @@ function clearAllPlacesFavicons() {
       }
     };
 
-    Services.obs.addObserver(observer, "places-favicons-expired", false);
+    Services.obs.addObserver(observer, "places-favicons-expired");
     faviconService.expireAllFavicons();
   });
 }
@@ -110,7 +110,7 @@ function observeFavicon(aIsPrivate, aExpectedCookie, aPageURI) {
       }
     };
 
-    Services.obs.addObserver(observer, "http-on-modify-request", false);
+    Services.obs.addObserver(observer, "http-on-modify-request");
   });
 }
 
@@ -140,8 +140,8 @@ function waitOnFaviconResponse(aFaviconURL) {
       }
     };
 
-    Services.obs.addObserver(observer, "http-on-examine-response", false);
-    Services.obs.addObserver(observer, "http-on-examine-cached-response", false);
+    Services.obs.addObserver(observer, "http-on-examine-response");
+    Services.obs.addObserver(observer, "http-on-examine-cached-response");
   });
 }
 
@@ -158,11 +158,11 @@ function waitOnFaviconLoaded(aFaviconURL) {
       },
     };
 
-    PlacesUtils.history.addObserver(observer, false);
+    PlacesUtils.history.addObserver(observer);
   });
 }
 
-function* assignCookies(aBrowser, aURL, aCookieValue){
+function* assignCookies(aBrowser, aURL, aCookieValue) {
   let tabInfo = yield openTab(aBrowser, aURL);
 
   yield ContentTask.spawn(tabInfo.browser, aCookieValue, function* (value) {

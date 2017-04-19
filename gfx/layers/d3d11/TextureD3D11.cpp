@@ -119,13 +119,18 @@ AutoTextureLock::AutoTextureLock(IDXGIKeyedMutex* aMutex,
                                  uint32_t aTimeout)
 {
   mMutex = aMutex;
-  mResult = mMutex->AcquireSync(0, aTimeout);
-  aResult = mResult;
+  if (mMutex) {
+    mResult = mMutex->AcquireSync(0, aTimeout);
+    aResult = mResult;
+  } else {
+    aResult = E_INVALIDARG;
+  }
+
 }
 
 AutoTextureLock::~AutoTextureLock()
 {
-  if (!FAILED(mResult) && mResult != WAIT_TIMEOUT &&
+  if (mMutex && !FAILED(mResult) && mResult != WAIT_TIMEOUT &&
       mResult != WAIT_ABANDONED) {
     mMutex->ReleaseSync(0);
   }
@@ -153,10 +158,10 @@ TextureSourceD3D11::GetShaderResourceView()
   return mSRV;
 }
 
-DataTextureSourceD3D11::DataTextureSourceD3D11(SurfaceFormat aFormat,
-                                               CompositorD3D11* aCompositor,
+DataTextureSourceD3D11::DataTextureSourceD3D11(ID3D11Device* aDevice,
+                                               SurfaceFormat aFormat,
                                                TextureFlags aFlags)
-  : mCompositor(aCompositor)
+  : mDevice(aDevice)
   , mFormat(aFormat)
   , mFlags(aFlags)
   , mCurrentTile(0)
@@ -167,10 +172,10 @@ DataTextureSourceD3D11::DataTextureSourceD3D11(SurfaceFormat aFormat,
   MOZ_COUNT_CTOR(DataTextureSourceD3D11);
 }
 
-DataTextureSourceD3D11::DataTextureSourceD3D11(SurfaceFormat aFormat,
-                                               CompositorD3D11* aCompositor,
+DataTextureSourceD3D11::DataTextureSourceD3D11(ID3D11Device* aDevice,
+                                               SurfaceFormat aFormat,
                                                ID3D11Texture2D* aTexture)
-: mCompositor(aCompositor)
+: mDevice(aDevice)
 , mFormat(aFormat)
 , mFlags(TextureFlags::NO_FLAGS)
 , mCurrentTile(0)
@@ -187,7 +192,15 @@ DataTextureSourceD3D11::DataTextureSourceD3D11(SurfaceFormat aFormat,
   mSize = IntSize(desc.Width, desc.Height);
 }
 
+DataTextureSourceD3D11::DataTextureSourceD3D11(gfx::SurfaceFormat aFormat, TextureSourceProvider* aProvider, ID3D11Texture2D* aTexture)
+ : DataTextureSourceD3D11(aProvider->GetD3D11Device(), aFormat, aTexture)
+{
+}
 
+DataTextureSourceD3D11::DataTextureSourceD3D11(gfx::SurfaceFormat aFormat, TextureSourceProvider* aProvider, TextureFlags aFlags)
+ : DataTextureSourceD3D11(aProvider->GetD3D11Device(), aFormat, aFlags)
+{
+}
 
 DataTextureSourceD3D11::~DataTextureSourceD3D11()
 {
@@ -337,8 +350,8 @@ DXGITextureData::FillInfo(TextureData::Info& aInfo) const
 void
 D3D11TextureData::SyncWithObject(SyncObject* aSyncObject)
 {
-  if (!aSyncObject || !NS_IsMainThread() || mIsForOutOfBandContent) {
-    // When off the main thread we sync using a keyed mutex per texture.
+  if (!aSyncObject || mHasSynchronization) {
+    // When we have per texture synchronization we sync using the keyed mutex.
     return;
   }
 
@@ -394,6 +407,10 @@ D3D11TextureData::Create(IntSize aSize, SurfaceFormat aFormat, SourceSurface* aS
   CD3D11_TEXTURE2D_DESC newDesc(DXGI_FORMAT_B8G8R8A8_UNORM,
                                 aSize.width, aSize.height, 1, 1,
                                 D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+
+  if (aFormat == SurfaceFormat::NV12) {
+    newDesc.Format = DXGI_FORMAT_NV12;
+  }
 
   newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
   if (!NS_IsMainThread() || !!(aFlags & ALLOC_FOR_OUT_OF_BAND_CONTENT)) {
@@ -629,12 +646,13 @@ DXGIYCbCrTextureData::Deallocate(LayersIPCChannel*)
 already_AddRefed<TextureHost>
 CreateTextureHostD3D11(const SurfaceDescriptor& aDesc,
                        ISurfaceAllocator* aDeallocator,
+                       LayersBackend aBackend,
                        TextureFlags aFlags)
 {
   RefPtr<TextureHost> result;
   switch (aDesc.type()) {
     case SurfaceDescriptor::TSurfaceDescriptorBuffer: {
-      result = CreateBackendIndependentTextureHost(aDesc, aDeallocator, aFlags);
+      result = CreateBackendIndependentTextureHost(aDesc, aDeallocator, aBackend, aFlags);
       break;
     }
     case SurfaceDescriptor::TSurfaceDescriptorD3D10: {
@@ -719,45 +737,31 @@ DXGITextureHostD3D11::GetDevice()
   if (mFlags & TextureFlags::INVALID_COMPOSITOR) {
     return nullptr;
   }
-
-  return DeviceManagerDx::Get()->GetCompositorDevice();
-}
-
-static CompositorD3D11* AssertD3D11Compositor(Compositor* aCompositor)
-{
-  CompositorD3D11* compositor = aCompositor ? aCompositor->AsCompositorD3D11()
-                                            : nullptr;
-  if (!compositor) {
-    gfxCriticalNote << "[D3D11] Attempt to set an incompatible compositor";
-  }
-  return compositor;
+  return mDevice;
 }
 
 void
-DXGITextureHostD3D11::SetCompositor(Compositor* aCompositor)
+DXGITextureHostD3D11::SetTextureSourceProvider(TextureSourceProvider* aProvider)
 {
-  CompositorD3D11* d3dCompositor = AssertD3D11Compositor(aCompositor);
-  if (!d3dCompositor) {
-    mCompositor = nullptr;
+  if (!aProvider || !aProvider->GetD3D11Device()) {
+    mDevice = nullptr;
+    mProvider = nullptr;
     mTextureSource = nullptr;
     return;
   }
-  mCompositor = d3dCompositor;
-  if (mTextureSource) {
-    mTextureSource->SetCompositor(aCompositor);
-  }
-}
 
-Compositor*
-DXGITextureHostD3D11::GetCompositor()
-{
-  return mCompositor;
+  mProvider = aProvider;
+  mDevice = aProvider->GetD3D11Device();
+
+  if (mTextureSource) {
+    mTextureSource->SetTextureSourceProvider(aProvider);
+  }
 }
 
 bool
 DXGITextureHostD3D11::Lock()
 {
-  if (!mCompositor) {
+  if (!mProvider) {
     // Make an early return here if we call SetCompositor() with an incompatible
     // compositor. This check tries to prevent the problem where we use that
     // incompatible compositor to compose this texture.
@@ -773,6 +777,9 @@ DXGITextureHostD3D11::LockWithoutCompositor()
   // Unlike the normal Lock() function, this function may be called when
   // mCompositor is nullptr such as during WebVR frame submission. So, there is
   // no 'mCompositor' checking here.
+  if (!mDevice) {
+    mDevice = DeviceManagerDx::Get()->GetCompositorDevice();
+  }
   return LockInternal();
 }
 
@@ -802,7 +809,11 @@ DXGITextureHostD3D11::LockInternal()
       return false;
     }
 
-    mTextureSource = new DataTextureSourceD3D11(mFormat, mCompositor, mTexture);
+    if (mProvider) {
+      mTextureSource = new DataTextureSourceD3D11(mFormat, mProvider, mTexture);
+    } else {
+      mTextureSource = new DataTextureSourceD3D11(mDevice, mFormat, mTexture);
+    }
   }
 
   mIsLocked = LockD3DTexture(mTextureSource->GetD3D11Texture());
@@ -885,35 +896,31 @@ DXGIYCbCrTextureHostD3D11::GetDevice()
     return nullptr;
   }
 
-  return DeviceManagerDx::Get()->GetCompositorDevice();
+  return mProvider->GetD3D11Device();
 }
 
 void
-DXGIYCbCrTextureHostD3D11::SetCompositor(Compositor* aCompositor)
+DXGIYCbCrTextureHostD3D11::SetTextureSourceProvider(TextureSourceProvider* aProvider)
 {
-  mCompositor = AssertD3D11Compositor(aCompositor);
-  if (!mCompositor) {
+  if (!aProvider || !aProvider->GetD3D11Device()) {
+    mProvider = nullptr;
     mTextureSources[0] = nullptr;
     mTextureSources[1] = nullptr;
     mTextureSources[2] = nullptr;
     return;
   }
 
-  if (mTextureSources[0]) {
-    mTextureSources[0]->SetCompositor(aCompositor);
-  }
-}
+  mProvider = aProvider;
 
-Compositor*
-DXGIYCbCrTextureHostD3D11::GetCompositor()
-{
-  return mCompositor;
+  if (mTextureSources[0]) {
+    mTextureSources[0]->SetTextureSourceProvider(aProvider);
+  }
 }
 
 bool
 DXGIYCbCrTextureHostD3D11::Lock()
 {
-  if (!mCompositor) {
+  if (!mProvider) {
     NS_WARNING("no suitable compositor");
     return false;
   }
@@ -929,9 +936,9 @@ DXGIYCbCrTextureHostD3D11::Lock()
 
     MOZ_ASSERT(mTextures[1] && mTextures[2]);
 
-    mTextureSources[0] = new DataTextureSourceD3D11(SurfaceFormat::A8, mCompositor, mTextures[0]);
-    mTextureSources[1] = new DataTextureSourceD3D11(SurfaceFormat::A8, mCompositor, mTextures[1]);
-    mTextureSources[2] = new DataTextureSourceD3D11(SurfaceFormat::A8, mCompositor, mTextures[2]);
+    mTextureSources[0] = new DataTextureSourceD3D11(SurfaceFormat::A8, mProvider, mTextures[0]);
+    mTextureSources[1] = new DataTextureSourceD3D11(SurfaceFormat::A8, mProvider, mTextures[1]);
+    mTextureSources[2] = new DataTextureSourceD3D11(SurfaceFormat::A8, mProvider, mTextures[2]);
     mTextureSources[0]->SetNextSibling(mTextureSources[1]);
     mTextureSources[1]->SetNextSibling(mTextureSources[2]);
   }
@@ -980,7 +987,7 @@ DataTextureSourceD3D11::Update(DataSourceSurface* aSurface,
 
   HRESULT hr;
 
-  if (!mCompositor || !mCompositor->GetDevice()) {
+  if (!mDevice) {
     return false;
   }
 
@@ -992,7 +999,7 @@ DataTextureSourceD3D11::Update(DataSourceSurface* aSurface,
 
   CD3D11_TEXTURE2D_DESC desc(dxgiFormat, mSize.width, mSize.height, 1, 1);
 
-  int32_t maxSize = mCompositor->GetMaxTextureSize();
+  int32_t maxSize = GetMaxTextureSizeFromDevice(mDevice);
   if ((mSize.width <= maxSize && mSize.height <= maxSize) ||
       (mFlags & TextureFlags::DISALLOW_BIGIMAGE)) {
 
@@ -1011,7 +1018,7 @@ DataTextureSourceD3D11::Update(DataSourceSurface* aSurface,
 
     nsIntRegion *regionToUpdate = aDestRegion;
     if (!mTexture) {
-      hr = mCompositor->GetDevice()->CreateTexture2D(&desc, nullptr, getter_AddRefs(mTexture));
+      hr = mDevice->CreateTexture2D(&desc, nullptr, getter_AddRefs(mTexture));
       mIsTiled = false;
       if (FAILED(hr) || !mTexture) {
         Reset();
@@ -1030,6 +1037,9 @@ DataTextureSourceD3D11::Update(DataSourceSurface* aSurface,
       return false;
     }
 
+    RefPtr<ID3D11DeviceContext> context;
+    mDevice->GetImmediateContext(getter_AddRefs(context));
+
     if (regionToUpdate) {
       for (auto iter = regionToUpdate->RectIter(); !iter.Done(); iter.Next()) {
         const IntRect& rect = iter.Get();
@@ -1043,11 +1053,11 @@ DataTextureSourceD3D11::Update(DataSourceSurface* aSurface,
 
         void* data = map.mData + map.mStride * rect.y + BytesPerPixel(aSurface->GetFormat()) * rect.x;
 
-        mCompositor->GetDC()->UpdateSubresource(mTexture, 0, &box, data, map.mStride, map.mStride * rect.height);
+        context->UpdateSubresource(mTexture, 0, &box, data, map.mStride, map.mStride * rect.height);
       }
     } else {
-      mCompositor->GetDC()->UpdateSubresource(mTexture, 0, nullptr, aSurface->GetData(),
-                                              aSurface->Stride(), aSurface->Stride() * mSize.height);
+      context->UpdateSubresource(mTexture, 0, nullptr, aSurface->GetData(),
+                                 aSurface->Stride(), aSurface->Stride() * mSize.height);
     }
 
     aSurface->Unmap();
@@ -1073,7 +1083,7 @@ DataTextureSourceD3D11::Update(DataSourceSurface* aSurface,
                          tileRect.x * bpp;
       initData.SysMemPitch = aSurface->Stride();
 
-      hr = mCompositor->GetDevice()->CreateTexture2D(&desc, &initData, getter_AddRefs(mTileTextures[i]));
+      hr = mDevice->CreateTexture2D(&desc, &initData, getter_AddRefs(mTileTextures[i]));
       if (FAILED(hr) || !mTileTextures[i]) {
         Reset();
         return false;
@@ -1127,7 +1137,7 @@ DataTextureSourceD3D11::Reset()
 IntRect
 DataTextureSourceD3D11::GetTileRect(uint32_t aIndex) const
 {
-  return GetTileRectD3D11(aIndex, mSize, mCompositor->GetMaxTextureSize());
+  return GetTileRectD3D11(aIndex, mSize, GetMaxTextureSizeFromDevice(mDevice));
 }
 
 IntRect
@@ -1138,15 +1148,19 @@ DataTextureSourceD3D11::GetTileRect()
 }
 
 void
-DataTextureSourceD3D11::SetCompositor(Compositor* aCompositor)
+DataTextureSourceD3D11::SetTextureSourceProvider(TextureSourceProvider* aProvider)
 {
-  CompositorD3D11* d3dCompositor = AssertD3D11Compositor(aCompositor);
-  if (!d3dCompositor) {
-    return;
+  ID3D11Device* newDevice = aProvider ? aProvider->GetD3D11Device() : nullptr;
+  if (!mDevice) {
+    mDevice = newDevice;
+  } else if (mDevice != newDevice) {
+    // We do not support switching devices.
+    Reset();
+    mDevice = nullptr;
   }
-  mCompositor = d3dCompositor;
+
   if (mNextSibling) {
-    mNextSibling->SetCompositor(aCompositor);
+    mNextSibling->SetTextureSourceProvider(aProvider);
   }
 }
 
@@ -1195,10 +1209,15 @@ CompositingRenderTargetD3D11::GetSize() const
   return TextureSourceD3D11::GetSize();
 }
 
-SyncObjectD3D11::SyncObjectD3D11(SyncHandle aSyncHandle)
+SyncObjectD3D11::SyncObjectD3D11(SyncHandle aSyncHandle, ID3D11Device* aDevice)
  : mSyncHandle(aSyncHandle)
 {
-  mD3D11Device = DeviceManagerDx::Get()->GetContentDevice();
+  if (!aDevice) {
+    mD3D11Device = DeviceManagerDx::Get()->GetContentDevice();
+    return;
+  }
+
+  mD3D11Device = aDevice;
 }
 
 bool
@@ -1208,9 +1227,7 @@ SyncObjectD3D11::Init()
     return true;
   }
 
-  RefPtr<ID3D11Device> device = DeviceManagerDx::Get()->GetContentDevice();
-
-  HRESULT hr = device->OpenSharedResource(
+  HRESULT hr = mD3D11Device->OpenSharedResource(
     mSyncHandle,
     __uuidof(ID3D11Texture2D),
     (void**)(ID3D11Texture2D**)getter_AddRefs(mD3D11Texture));
@@ -1220,6 +1237,8 @@ SyncObjectD3D11::Init()
         !DeviceManagerDx::Get()->HasDeviceReset())
     {
       gfxDevCrash(LogReason::D3D11FinalizeFrame) << "Without device reset: " << hexa(hr);
+    } else {
+      return false;
     }
   }
 
@@ -1244,7 +1263,7 @@ bool
 SyncObjectD3D11::IsSyncObjectValid()
 {
   RefPtr<ID3D11Device> dev = DeviceManagerDx::Get()->GetContentDevice();
-  if (!dev || (dev != mD3D11Device)) {
+  if (!dev || (NS_IsMainThread() && dev != mD3D11Device)) {
     return false;
   }
   return true;
@@ -1275,12 +1294,18 @@ SyncObjectD3D11::FinalizeFrame()
   box.front = box.top = box.left = 0;
   box.back = box.bottom = box.right = 1;
 
-  RefPtr<ID3D11Device> dev = DeviceManagerDx::Get()->GetContentDevice();
-  if (!dev) {
+  RefPtr<ID3D11Device> dev;
+  mD3D11Texture->GetDevice(getter_AddRefs(dev));
+
+  if (dev == DeviceManagerDx::Get()->GetContentDevice()) {
     if (DeviceManagerDx::Get()->HasDeviceReset()) {
       return;
     }
-    MOZ_CRASH("GFX: Invalid D3D11 content device");
+  }
+
+  if (dev != mD3D11Device) {
+    gfxWarning() << "Attempt to sync texture from invalid device.";
+    return;
   }
 
   RefPtr<ID3D11DeviceContext> ctx;
@@ -1293,5 +1318,11 @@ SyncObjectD3D11::FinalizeFrame()
   mD3D11SyncedTextures.clear();
 }
 
+uint32_t
+GetMaxTextureSizeFromDevice(ID3D11Device* aDevice)
+{
+  return GetMaxTextureSizeForFeatureLevel(aDevice->GetFeatureLevel());
 }
-}
+
+} // namespace layers
+} // namespace mozilla

@@ -228,16 +228,6 @@ public:
                              const nsCString& value, NPError* result) override;
 
     virtual mozilla::ipc::IPCResult
-    AnswerNPN_GetAuthenticationInfo(const nsCString& protocol,
-                                    const nsCString& host,
-                                    const int32_t& port,
-                                    const nsCString& scheme,
-                                    const nsCString& realm,
-                                    nsCString* username,
-                                    nsCString* password,
-                                    NPError* result) override;
-
-    virtual mozilla::ipc::IPCResult
     AnswerNPN_ConvertPoint(const double& sourceX,
                            const bool&   ignoreDestX,
                            const double& sourceY,
@@ -250,9 +240,6 @@ public:
 
     virtual mozilla::ipc::IPCResult
     RecvRedrawPlugin() override;
-
-    virtual mozilla::ipc::IPCResult
-    RecvNegotiatedCarbon() override;
 
     virtual mozilla::ipc::IPCResult
     RecvAsyncNPP_NewResult(const NPError& aResult) override;

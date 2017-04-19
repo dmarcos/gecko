@@ -148,15 +148,34 @@ var tests = [
       EventUtils.synthesizeMouseAtCenter(checkbox, {});
       dismissNotification(popup);
     },
-    onHidden(popup) {
+    *onHidden(popup) {
       let icon = document.getElementById("default-notification-icon");
+      let shown = waitForNotificationPanel();
       EventUtils.synthesizeMouseAtCenter(icon, {});
+      yield shown;
       let notification = popup.childNodes[0];
       let checkbox = notification.checkbox;
       checkCheckbox(checkbox, "This is a checkbox", true);
       checkMainAction(notification, true);
       gNotification.remove();
     }
+  },
+
+  // Test no checkbox hides warning label
+  { id: "no_checkbox",
+    run() {
+      this.notifyObj = new BasicNotification(this.id);
+      this.notifyObj.options.checkbox = null;
+      gNotification = showNotification(this.notifyObj);
+    },
+    onShown(popup) {
+      checkPopup(popup, this.notifyObj);
+      let notification = popup.childNodes[0];
+      checkCheckbox(notification.checkbox, "", false, true);
+      checkMainAction(notification);
+      triggerMainCommand(popup);
+    },
+    onHidden() { },
   },
 ];
 

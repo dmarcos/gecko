@@ -10,6 +10,7 @@ include InputStreamParams;
 include URIParams;
 include PBackgroundSharedTypes;
 include NeckoChannelParams;
+include PURLClassifierInfo;
 
 include protocol PBlob; //FIXME: bug #792908
 
@@ -107,14 +108,13 @@ child:
                        NetAddr             peerAddr,
                        int16_t             redirectCount,
                        uint32_t            cacheKey,
-                       nsCString           altDataType);
+                       nsCString           altDataType,
+                       int64_t             altDataLength);
 
   // Combines a single OnDataAvailable and its associated OnProgress &
   // OnStatus calls into one IPDL message
   async OnTransportAndData(nsresult  channelStatus,
                            nsresult  transportStatus,
-                           uint64_t  progress,
-                           uint64_t  progressMax,
                            uint64_t  offset,
                            uint32_t  count,
                            nsCString data);
@@ -136,7 +136,7 @@ child:
                        uint32_t           redirectFlags,
                        nsHttpResponseHead responseHead,
                        nsCString          securityInfoSerialization,
-                       nsCString          channelId);
+                       uint64_t           channelId);
 
   // Called if redirect successful so that child can complete setup.
   async Redirect3Complete();
@@ -170,6 +170,9 @@ child:
   // Tell the child to issue a deprecation warning.
   async IssueDeprecationWarning(uint32_t warning, bool asError);
 
+  // Tell the child information of matched URL againts SafeBrowsing list
+  async SetClassifierMatchedInfo(ClassifierInfo info);
+
 both:
   // After receiving this message, the parent also calls
   // SendFinishInterceptedRedirect, and makes sure not to send any more messages
@@ -177,7 +180,7 @@ both:
   // Send__delete__() and complete the steps required to finish the redirect.
   async FinishInterceptedRedirect();
 
-  async SetPriority(uint16_t priority);
+  async SetPriority(int16_t priority);
 };
 
 

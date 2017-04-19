@@ -9,7 +9,9 @@ include protocol PBrowser;
 include protocol PContent;
 include protocol PJavaScript;
 include protocol PFileDescriptorSet;
-include protocol PSendStream;
+include protocol PChildToParentStream;
+include protocol PMemoryStream;
+include protocol PParentToChildStream;
 
 include DOMTypes;
 include JavaScriptTypes;
@@ -34,13 +36,26 @@ namespace dom {
  */
 nested(upto inside_cpow) sync protocol PContentBridge
 {
-    bridges PContent, PContent;
-
     manages PBlob;
     manages PBrowser;
     manages PFileDescriptorSet;
     manages PJavaScript;
-    manages PSendStream;
+    manages PChildToParentStream;
+    manages PMemoryStream;
+    manages PParentToChildStream;
+
+child:
+    async PParentToChildStream();
+
+child:
+   /**
+     * Sending an activate message moves focus to the child.
+     */
+    async Activate(PBrowser aTab);
+
+    async Deactivate(PBrowser aTab);
+
+    async ParentActivated(PBrowser aTab, bool aActivated);
 
 parent:
     sync SyncMessage(nsString aMessage, ClonedMessageData aData,
@@ -49,12 +64,15 @@ parent:
 
     async PJavaScript();
 
-    async PSendStream();
+    async PChildToParentStream();
+
+    async PMemoryStream(uint64_t aSize);
 
 both:
     // Both the parent and the child can construct the PBrowser.
     // See the comment in PContent::PBrowser().
-    async PBrowser(TabId tabId, IPCTabContext context, uint32_t chromeFlags,
+    async PBrowser(TabId tabId, TabId sameTabGroupAs,
+                   IPCTabContext context, uint32_t chromeFlags,
                    ContentParentId cpId, bool isForBrowser);
 
     async PBlob(BlobConstructorParams params);

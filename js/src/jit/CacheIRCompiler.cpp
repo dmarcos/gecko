@@ -7,6 +7,9 @@
 #include "jit/CacheIRCompiler.h"
 
 #include "jit/IonIC.h"
+#include "jit/SharedICHelpers.h"
+
+#include "jscompartmentinlines.h"
 
 #include "jit/MacroAssembler-inl.h"
 
@@ -31,6 +34,14 @@ CacheRegisterAllocator::useValueRegister(MacroAssembler& masm, ValOperandId op)
         return reg;
       }
 
+      case OperandLocation::BaselineFrame: {
+        ValueOperand reg = allocateValueRegister(masm);
+        Address addr = addressOf(masm, loc.baselineFrameSlot());
+        masm.loadValue(addr, reg);
+        loc.setValueReg(reg);
+        return reg;
+      }
+
       case OperandLocation::Constant: {
         ValueOperand reg = allocateValueRegister(masm);
         masm.moveValue(loc.constant(), reg);
@@ -39,9 +50,12 @@ CacheRegisterAllocator::useValueRegister(MacroAssembler& masm, ValOperandId op)
       }
 
       case OperandLocation::PayloadReg: {
+        // Temporarily add the payload register to currentOpRegs_ so
+        // allocateValueRegister will stay away from it.
+        currentOpRegs_.add(loc.payloadReg());
         ValueOperand reg = allocateValueRegister(masm);
         masm.tagValue(loc.payloadType(), loc.payloadReg(), reg);
-        MOZ_ASSERT(!currentOpRegs_.has(loc.payloadReg()), "Payload register shouldn't be in use");
+        currentOpRegs_.take(loc.payloadReg());
         availableRegs_.add(loc.payloadReg());
         loc.setValueReg(reg);
         return reg;
@@ -54,6 +68,14 @@ CacheRegisterAllocator::useValueRegister(MacroAssembler& masm, ValOperandId op)
         loc.setValueReg(reg);
         return reg;
       }
+
+      case OperandLocation::DoubleReg: {
+        ValueOperand reg = allocateValueRegister(masm);
+        masm.boxDouble(loc.doubleReg(), reg);
+        loc.setValueReg(reg);
+        return reg;
+      }
+
       case OperandLocation::Uninitialized:
         break;
     }
@@ -77,6 +99,11 @@ CacheRegisterAllocator::useFixedValueRegister(MacroAssembler& masm, ValOperandId
       case OperandLocation::ValueStack:
         popValue(masm, &loc, reg);
         break;
+      case OperandLocation::BaselineFrame: {
+        Address addr = addressOf(masm, loc.baselineFrameSlot());
+        masm.loadValue(addr, reg);
+        break;
+      }
       case OperandLocation::Constant:
         masm.moveValue(loc.constant(), reg);
         break;
@@ -88,6 +115,9 @@ CacheRegisterAllocator::useFixedValueRegister(MacroAssembler& masm, ValOperandId
       case OperandLocation::PayloadStack:
         popPayload(masm, &loc, reg.scratchReg());
         masm.tagValue(loc.payloadType(), reg.scratchReg(), reg);
+        break;
+      case OperandLocation::DoubleReg:
+        masm.boxDouble(loc.doubleReg(), reg);
         break;
       case OperandLocation::Uninitialized:
         MOZ_CRASH();
@@ -143,6 +173,14 @@ CacheRegisterAllocator::useRegister(MacroAssembler& masm, TypedOperandId typedId
         return reg;
       }
 
+      case OperandLocation::BaselineFrame: {
+        Register reg = allocateRegister(masm);
+        Address addr = addressOf(masm, loc.baselineFrameSlot());
+        masm.unboxNonDouble(addr, reg);
+        loc.setPayloadReg(reg, typedId.type());
+        return reg;
+      };
+
       case OperandLocation::Constant: {
         Value v = loc.constant();
         Register reg = allocateRegister(masm);
@@ -155,6 +193,37 @@ CacheRegisterAllocator::useRegister(MacroAssembler& masm, TypedOperandId typedId
         loc.setPayloadReg(reg, v.extractNonDoubleType());
         return reg;
       }
+
+      case OperandLocation::DoubleReg:
+      case OperandLocation::Uninitialized:
+        break;
+    }
+
+    MOZ_CRASH();
+}
+
+ConstantOrRegister
+CacheRegisterAllocator::useConstantOrRegister(MacroAssembler& masm, ValOperandId val)
+{
+    OperandLocation& loc = operandLocations_[val.id()];
+    switch (loc.kind()) {
+      case OperandLocation::Constant:
+        return loc.constant();
+
+      case OperandLocation::PayloadReg:
+      case OperandLocation::PayloadStack: {
+        JSValueType payloadType = loc.payloadType();
+        Register reg = useRegister(masm, TypedOperandId(val, payloadType));
+        return TypedOrValueRegister(MIRTypeFromValueType(payloadType), AnyRegister(reg));
+      }
+
+      case OperandLocation::ValueReg:
+      case OperandLocation::ValueStack:
+      case OperandLocation::BaselineFrame:
+        return TypedOrValueRegister(useValueRegister(masm, val));
+
+      case OperandLocation::DoubleReg:
+        return TypedOrValueRegister(MIRType::Double, AnyRegister(loc.doubleReg()));
 
       case OperandLocation::Uninitialized:
         break;
@@ -186,7 +255,7 @@ CacheRegisterAllocator::defineValueRegister(MacroAssembler& masm, ValOperandId v
 }
 
 void
-CacheRegisterAllocator::freeDeadOperandRegisters()
+CacheRegisterAllocator::freeDeadOperandLocations(MacroAssembler& masm)
 {
     // See if any operands are dead so we can reuse their registers. Note that
     // we skip the input operands, as those are also used by failure paths, and
@@ -203,10 +272,16 @@ CacheRegisterAllocator::freeDeadOperandRegisters()
           case OperandLocation::ValueReg:
             availableRegs_.add(loc.valueReg());
             break;
-          case OperandLocation::Uninitialized:
           case OperandLocation::PayloadStack:
+            masm.propagateOOM(freePayloadSlots_.append(loc.payloadStack()));
+            break;
           case OperandLocation::ValueStack:
+            masm.propagateOOM(freeValueSlots_.append(loc.valueStack()));
+            break;
+          case OperandLocation::Uninitialized:
+          case OperandLocation::BaselineFrame:
           case OperandLocation::Constant:
+          case OperandLocation::DoubleReg:
             break;
         }
         loc.setUninitialized();
@@ -226,13 +301,15 @@ CacheRegisterAllocator::discardStack(MacroAssembler& masm)
         masm.addToStackPtr(Imm32(stackPushed_));
         stackPushed_ = 0;
     }
+    freePayloadSlots_.clear();
+    freeValueSlots_.clear();
 }
 
 Register
 CacheRegisterAllocator::allocateRegister(MacroAssembler& masm)
 {
     if (availableRegs_.empty())
-        freeDeadOperandRegisters();
+        freeDeadOperandLocations(masm);
 
     if (availableRegs_.empty()) {
         // Still no registers available, try to spill unused operands to
@@ -285,7 +362,7 @@ CacheRegisterAllocator::allocateFixedRegister(MacroAssembler& masm, Register reg
     // still available.
     MOZ_ASSERT(!currentOpRegs_.has(reg), "Register is in use");
 
-    freeDeadOperandRegisters();
+    freeDeadOperandLocations(masm);
 
     if (availableRegs_.has(reg)) {
         availableRegs_.take(reg);
@@ -365,6 +442,42 @@ CacheRegisterAllocator::initAvailableRegsAfterSpill()
                                       GeneralRegisterSet::Not(inputRegisterSet()));
 }
 
+void
+CacheRegisterAllocator::fixupAliasedInputs(MacroAssembler& masm)
+{
+    // If IC inputs alias each other, make sure they are stored in different
+    // locations so we don't have to deal with this complexity in the rest of
+    // the allocator.
+    //
+    // Note that this can happen in IonMonkey with something like |o.foo = o|
+    // or |o[i] = i|.
+
+    size_t numInputs = writer_.numInputOperands();
+    MOZ_ASSERT(origInputLocations_.length() == numInputs);
+
+    for (size_t i = 1; i < numInputs; i++) {
+        OperandLocation& loc1 = operandLocations_[i];
+        if (!loc1.isInRegister())
+            continue;
+
+        for (size_t j = 0; j < i; j++) {
+            OperandLocation& loc2 = operandLocations_[j];
+            if (!loc1.aliasesReg(loc2))
+                continue;
+
+            if (loc1.kind() == OperandLocation::ValueReg) {
+                MOZ_ASSERT_IF(loc2.kind() == OperandLocation::ValueReg,
+                              loc1 == loc2);
+                spillOperandToStack(masm, &loc1);
+                break;
+            }
+
+            MOZ_ASSERT(loc1.kind() == OperandLocation::PayloadReg);
+            spillOperandToStack(masm, &loc2);
+        }
+    }
+}
+
 GeneralRegisterSet
 CacheRegisterAllocator::inputRegisterSet() const
 {
@@ -377,14 +490,16 @@ CacheRegisterAllocator::inputRegisterSet() const
 
         switch (loc.kind()) {
           case OperandLocation::PayloadReg:
-            result.add(loc.payloadReg());
+            result.addUnchecked(loc.payloadReg());
             continue;
           case OperandLocation::ValueReg:
-            result.add(loc.valueReg());
+            result.addUnchecked(loc.valueReg());
             continue;
           case OperandLocation::PayloadStack:
           case OperandLocation::ValueStack:
+          case OperandLocation::BaselineFrame:
           case OperandLocation::Constant:
+          case OperandLocation::DoubleReg:
             continue;
           case OperandLocation::Uninitialized:
             break;
@@ -403,6 +518,7 @@ CacheRegisterAllocator::knownType(ValOperandId val) const
     switch (loc.kind()) {
       case OperandLocation::ValueReg:
       case OperandLocation::ValueStack:
+      case OperandLocation::BaselineFrame:
         return JSVAL_TYPE_UNKNOWN;
 
       case OperandLocation::PayloadStack:
@@ -413,6 +529,9 @@ CacheRegisterAllocator::knownType(ValOperandId val) const
         return loc.constant().isDouble()
                ? JSVAL_TYPE_DOUBLE
                : loc.constant().extractNonDoubleType();
+
+      case OperandLocation::DoubleReg:
+        return JSVAL_TYPE_DOUBLE;
 
       case OperandLocation::Uninitialized:
         break;
@@ -426,8 +545,10 @@ CacheRegisterAllocator::initInputLocation(size_t i, const TypedOrValueRegister& 
 {
     if (reg.hasValue()) {
         initInputLocation(i, reg.valueReg());
+    } else if (reg.typedReg().isFloat()) {
+        MOZ_ASSERT(reg.type() == MIRType::Double);
+        initInputLocation(i, reg.typedReg().fpu());
     } else {
-        MOZ_ASSERT(!reg.typedReg().isFloat());
         initInputLocation(i, reg.typedReg().gpr(), ValueTypeFromMIRType(reg.type()));
     }
 }
@@ -447,6 +568,14 @@ CacheRegisterAllocator::spillOperandToStack(MacroAssembler& masm, OperandLocatio
     MOZ_ASSERT(loc >= operandLocations_.begin() && loc < operandLocations_.end());
 
     if (loc->kind() == OperandLocation::ValueReg) {
+        if (!freeValueSlots_.empty()) {
+            uint32_t stackPos = freeValueSlots_.popCopy();
+            MOZ_ASSERT(stackPos <= stackPushed_);
+            masm.storeValue(loc->valueReg(), Address(masm.getStackPointer(),
+                                                     stackPushed_ - stackPos));
+            loc->setValueStack(stackPos);
+            return;
+        }
         stackPushed_ += sizeof(js::Value);
         masm.pushValue(loc->valueReg());
         loc->setValueStack(stackPushed_);
@@ -455,6 +584,14 @@ CacheRegisterAllocator::spillOperandToStack(MacroAssembler& masm, OperandLocatio
 
     MOZ_ASSERT(loc->kind() == OperandLocation::PayloadReg);
 
+    if (!freePayloadSlots_.empty()) {
+        uint32_t stackPos = freePayloadSlots_.popCopy();
+        MOZ_ASSERT(stackPos <= stackPushed_);
+        masm.storePtr(loc->payloadReg(), Address(masm.getStackPointer(),
+                                                 stackPushed_ - stackPos));
+        loc->setPayloadStack(stackPos, loc->payloadType());
+        return;
+    }
     stackPushed_ += sizeof(uintptr_t);
     masm.push(loc->payloadReg());
     loc->setPayloadStack(stackPushed_, loc->payloadType());
@@ -502,6 +639,7 @@ CacheRegisterAllocator::popPayload(MacroAssembler& masm, OperandLocation* loc, R
     } else {
         MOZ_ASSERT(loc->payloadStack() < stackPushed_);
         masm.loadPtr(Address(masm.getStackPointer(), stackPushed_ - loc->payloadStack()), dest);
+        masm.propagateOOM(freePayloadSlots_.append(loc->payloadStack()));
     }
 
     loc->setPayloadReg(dest, loc->payloadType());
@@ -521,6 +659,7 @@ CacheRegisterAllocator::popValue(MacroAssembler& masm, OperandLocation* loc, Val
     } else {
         MOZ_ASSERT(loc->valueStack() < stackPushed_);
         masm.loadValue(Address(masm.getStackPointer(), stackPushed_ - loc->valueStack()), dest);
+        masm.propagateOOM(freeValueSlots_.append(loc->valueStack()));
     }
 
     loc->setValueReg(dest);
@@ -538,7 +677,9 @@ OperandLocation::aliasesReg(const OperandLocation& other) const
         return aliasesReg(other.valueReg());
       case PayloadStack:
       case ValueStack:
+      case BaselineFrame:
       case Constant:
+      case DoubleReg:
         return false;
       case Uninitialized:
         break;
@@ -589,6 +730,8 @@ CacheRegisterAllocator::restoreInputState(MacroAssembler& masm, bool shouldDisca
                 popValue(masm, &cur, dest.valueReg());
                 continue;
               case OperandLocation::Constant:
+              case OperandLocation::BaselineFrame:
+              case OperandLocation::DoubleReg:
               case OperandLocation::Uninitialized:
                 break;
             }
@@ -616,10 +759,15 @@ CacheRegisterAllocator::restoreInputState(MacroAssembler& masm, bool shouldDisca
                                     dest.payloadReg());
                 continue;
               case OperandLocation::Constant:
+              case OperandLocation::BaselineFrame:
+              case OperandLocation::DoubleReg:
               case OperandLocation::Uninitialized:
                 break;
             }
-        } else if (dest.kind() == OperandLocation::Constant) {
+        } else if (dest.kind() == OperandLocation::Constant ||
+                   dest.kind() == OperandLocation::BaselineFrame ||
+                   dest.kind() == OperandLocation::DoubleReg)
+        {
             // Nothing to do.
             continue;
         }
@@ -837,10 +985,11 @@ template
 void jit::TraceCacheIRStub(JSTracer* trc, IonICStub* stub, const CacheIRStubInfo* stubInfo);
 
 bool
-CacheIRWriter::stubDataEqualsMaybeUpdate(uint8_t* stubData) const
+CacheIRWriter::stubDataEqualsMaybeUpdate(uint8_t* stubData, bool* updated) const
 {
     MOZ_ASSERT(!failed());
 
+    *updated = false;
     const uintptr_t* stubDataWords = reinterpret_cast<const uintptr_t*>(stubData);
 
     // If DOMExpandoGeneration fields are different but all other stub fields
@@ -866,8 +1015,10 @@ CacheIRWriter::stubDataEqualsMaybeUpdate(uint8_t* stubData) const
         stubDataWords += sizeof(uint64_t) / sizeof(uintptr_t);
     }
 
-    if (expandoGenerationIsDifferent)
+    if (expandoGenerationIsDifferent) {
         copyStubData(stubData);
+        *updated = true;
+    }
 
     return true;
 }
@@ -949,8 +1100,12 @@ OperandLocation::operator==(const OperandLocation& other) const
         return payloadStack() == other.payloadStack() && payloadType() == other.payloadType();
       case ValueStack:
         return valueStack() == other.valueStack();
+      case BaselineFrame:
+        return baselineFrameSlot() == other.baselineFrameSlot();
       case Constant:
         return constant() == other.constant();
+      case DoubleReg:
+        return doubleReg() == other.doubleReg();
     }
 
     MOZ_CRASH("Invalid OperandLocation kind");
@@ -1226,7 +1381,7 @@ CacheIRCompiler::emitGuardClass()
         clasp = &UnmappedArgumentsObject::class_;
         break;
       case GuardClassKind::WindowProxy:
-        clasp = cx_->maybeWindowProxyClass();
+        clasp = cx_->runtime()->maybeWindowProxyClass();
         break;
       case GuardClassKind::JSFunction:
         clasp = &JSFunction::class_;
@@ -1249,6 +1404,22 @@ CacheIRCompiler::emitGuardIsProxy()
         return false;
 
     masm.branchTestObjectIsProxy(false, obj, scratch, failure->label());
+    return true;
+}
+
+bool
+CacheIRCompiler::emitGuardIsCrossCompartmentWrapper()
+{
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    AutoScratchRegister scratch(allocator, masm);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    Address handlerAddr(obj, ProxyObject::offsetOfHandler());
+    masm.branchPtr(Assembler::NotEqual, handlerAddr, ImmPtr(&CrossCompartmentWrapper::singleton),
+                   failure->label());
     return true;
 }
 
@@ -1351,10 +1522,8 @@ CacheIRCompiler::emitGuardAndGetIndexFromString()
     if (!addFailurePath(&failure))
         return false;
 
-    AllocatableRegisterSet regs(RegisterSet::Volatile());
-    LiveRegisterSet save(regs.asLiveSet());
+    LiveRegisterSet save(GeneralRegisterSet::Volatile(), liveVolatileFloatRegs());
     masm.PushRegsInMask(save);
-    regs.takeUnchecked(str);
 
     masm.setupUnalignedABICall(output);
     masm.passABIArg(str);
@@ -1385,6 +1554,17 @@ CacheIRCompiler::emitLoadEnclosingEnvironment()
     Register obj = allocator.useRegister(masm, reader.objOperandId());
     Register reg = allocator.defineRegister(masm, reader.objOperandId());
     masm.extractObject(Address(obj, EnvironmentObject::offsetOfEnclosingEnvironment()), reg);
+    return true;
+}
+
+bool
+CacheIRCompiler::emitLoadWrapperTarget()
+{
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    Register reg = allocator.defineRegister(masm, reader.objOperandId());
+
+    masm.loadPtr(Address(obj, ProxyObject::offsetOfValues()), reg);
+    masm.unboxObject(Address(reg, detail::ProxyValueArray::offsetOfPrivateSlot()), reg);
     return true;
 }
 
@@ -1436,6 +1616,22 @@ CacheIRCompiler::emitLoadUndefinedResult()
         masm.moveValue(UndefinedValue(), output.valueReg());
     else
         masm.assumeUnreachable("Should have monitored undefined result");
+    return true;
+}
+
+bool
+CacheIRCompiler::emitLoadBooleanResult()
+{
+    AutoOutputRegister output(*this);
+    if (output.hasValue()) {
+        Value val = BooleanValue(reader.readBool());
+        masm.moveValue(val, output.valueReg());
+    } else {
+        MOZ_ASSERT(output.type() == JSVAL_TYPE_BOOLEAN);
+        bool b = reader.readBool();
+        masm.movePtr(ImmWord(b), output.typedReg().gpr());
+    }
+
     return true;
 }
 
@@ -1591,12 +1787,10 @@ CacheIRCompiler::emitLoadStringCharResult()
     if (!addFailurePath(&failure))
         return false;
 
-    masm.branchIfRope(str, failure->label());
-
     // Bounds check, load string char.
     masm.branch32(Assembler::BelowOrEqual, Address(str, JSString::offsetOfLength()),
                   index, failure->label());
-    masm.loadStringChar(str, index, scratch1);
+    masm.loadStringChar(str, index, scratch1, failure->label());
 
     // Load StaticString for this char.
     masm.branch32(Assembler::AboveOrEqual, scratch1, Imm32(StaticStrings::UNIT_STATIC_LIMIT),
@@ -1712,6 +1906,70 @@ CacheIRCompiler::emitLoadDenseElementHoleResult()
     // Load undefined for the hole.
     masm.bind(&hole);
     masm.moveValue(UndefinedValue(), output.valueReg());
+
+    masm.bind(&done);
+    return true;
+}
+
+bool
+CacheIRCompiler::emitLoadDenseElementExistsResult()
+{
+    AutoOutputRegister output(*this);
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    Register index = allocator.useRegister(masm, reader.int32OperandId());
+    AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    // Load obj->elements.
+    masm.loadPtr(Address(obj, NativeObject::offsetOfElements()), scratch);
+
+    // Bounds check. Unsigned compare sends negative indices to next IC.
+    Address initLength(scratch, ObjectElements::offsetOfInitializedLength());
+    masm.branch32(Assembler::BelowOrEqual, initLength, index, failure->label());
+
+    // Hole check.
+    BaseObjectElementIndex element(scratch, index);
+    masm.branchTestMagic(Assembler::Equal, element, failure->label());
+    masm.moveValue(BooleanValue(true), output.valueReg());
+    return true;
+}
+
+bool
+CacheIRCompiler::emitLoadDenseElementHoleExistsResult()
+{
+    AutoOutputRegister output(*this);
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    Register index = allocator.useRegister(masm, reader.int32OperandId());
+    AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    // Make sure the index is nonnegative.
+    masm.branch32(Assembler::LessThan, index, Imm32(0), failure->label());
+
+    // Load obj->elements.
+    masm.loadPtr(Address(obj, NativeObject::offsetOfElements()), scratch);
+
+    // Guard on the initialized length.
+    Label hole;
+    Address initLength(scratch, ObjectElements::offsetOfInitializedLength());
+    masm.branch32(Assembler::BelowOrEqual, initLength, index, &hole);
+
+    // Load value and replace with true.
+    Label done;
+    masm.loadValue(BaseObjectElementIndex(scratch, index), output.valueReg());
+    masm.branchTestMagic(Assembler::Equal, output.valueReg(), &hole);
+    masm.moveValue(BooleanValue(true), output.valueReg());
+    masm.jump(&done);
+
+    // Load false for the hole.
+    masm.bind(&hole);
+    masm.moveValue(BooleanValue(false), output.valueReg());
 
     masm.bind(&done);
     return true;
@@ -1849,4 +2107,239 @@ CacheIRCompiler::emitLoadTypedObjectResultShared(const Address& fieldAddr, Regis
             MOZ_CRASH("Invalid ReferenceTypeDescr");
         }
     }
+}
+
+bool
+CacheIRCompiler::emitLoadObjectResult()
+{
+    AutoOutputRegister output(*this);
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+
+    if (output.hasValue())
+        masm.tagValue(JSVAL_TYPE_OBJECT, obj, output.valueReg());
+    else
+        masm.mov(obj, output.typedReg().gpr());
+
+    return true;
+}
+
+void
+CacheIRCompiler::emitStoreTypedObjectReferenceProp(ValueOperand val, ReferenceTypeDescr::Type type,
+                                                   const Address& dest, Register scratch)
+{
+    switch (type) {
+      case ReferenceTypeDescr::TYPE_ANY:
+        EmitPreBarrier(masm, dest, MIRType::Value);
+        masm.storeValue(val, dest);
+        break;
+
+      case ReferenceTypeDescr::TYPE_OBJECT: {
+        EmitPreBarrier(masm, dest, MIRType::Object);
+        Label isNull, done;
+        masm.branchTestObject(Assembler::NotEqual, val, &isNull);
+        masm.unboxObject(val, scratch);
+        masm.storePtr(scratch, dest);
+        masm.jump(&done);
+        masm.bind(&isNull);
+        masm.storePtr(ImmWord(0), dest);
+        masm.bind(&done);
+        break;
+      }
+
+      case ReferenceTypeDescr::TYPE_STRING:
+        EmitPreBarrier(masm, dest, MIRType::String);
+        masm.unboxString(val, scratch);
+        masm.storePtr(scratch, dest);
+        break;
+    }
+}
+
+void
+CacheIRCompiler::emitPostBarrierShared(Register obj, const ConstantOrRegister& val,
+                                       Register scratch, Register maybeIndex)
+{
+    if (!cx_->nursery().exists())
+        return;
+
+    if (val.constant()) {
+        MOZ_ASSERT_IF(val.value().isObject(), !IsInsideNursery(&val.value().toObject()));
+        return;
+    }
+
+    TypedOrValueRegister reg = val.reg();
+    if (reg.hasTyped() && reg.type() != MIRType::Object)
+        return;
+
+    Label skipBarrier;
+    if (reg.hasValue()) {
+        masm.branchValueIsNurseryObject(Assembler::NotEqual, reg.valueReg(), scratch,
+                                        &skipBarrier);
+    } else {
+        masm.branchPtrInNurseryChunk(Assembler::NotEqual, reg.typedReg().gpr(), scratch,
+                                     &skipBarrier);
+    }
+    masm.branchPtrInNurseryChunk(Assembler::Equal, obj, scratch, &skipBarrier);
+
+    // Call one of these, depending on maybeIndex:
+    //
+    //   void PostWriteBarrier(JSRuntime* rt, JSObject* obj);
+    //   void PostWriteElementBarrier(JSRuntime* rt, JSObject* obj,
+    //                                int32_t index);
+    LiveRegisterSet save(GeneralRegisterSet::Volatile(), liveVolatileFloatRegs());
+    masm.PushRegsInMask(save);
+    masm.setupUnalignedABICall(scratch);
+    masm.movePtr(ImmPtr(cx_->runtime()), scratch);
+    masm.passABIArg(scratch);
+    masm.passABIArg(obj);
+    if (maybeIndex != InvalidReg) {
+        masm.passABIArg(maybeIndex);
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*,
+                                             (PostWriteElementBarrier<IndexInBounds::Yes>)));
+    } else {
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, PostWriteBarrier));
+    }
+    masm.PopRegsInMask(save);
+
+    masm.bind(&skipBarrier);
+}
+
+bool
+CacheIRCompiler::emitWrapResult()
+{
+    AutoOutputRegister output(*this);
+    AutoScratchRegister scratch(allocator, masm);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    Label done;
+    // We only have to wrap objects, because we are in the same zone.
+    masm.branchTestObject(Assembler::NotEqual, output.valueReg(), &done);
+
+    Register obj = output.valueReg().scratchReg();
+    masm.unboxObject(output.valueReg(), obj);
+
+    LiveRegisterSet save(GeneralRegisterSet::Volatile(), liveVolatileFloatRegs());
+    masm.PushRegsInMask(save);
+
+    masm.setupUnalignedABICall(scratch);
+    masm.loadJSContext(scratch);
+    masm.passABIArg(scratch);
+    masm.passABIArg(obj);
+    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, WrapObjectPure));
+    masm.mov(ReturnReg, obj);
+
+    LiveRegisterSet ignore;
+    ignore.add(obj);
+    masm.PopRegsInMaskIgnore(save, ignore);
+
+    // We could not get a wrapper for this object.
+    masm.branchTestPtr(Assembler::Zero, obj, obj, failure->label());
+
+    // We clobbered the output register, so we have to retag.
+    masm.tagValue(JSVAL_TYPE_OBJECT, obj, output.valueReg());
+
+    masm.bind(&done);
+    return true;
+}
+
+bool
+CacheIRCompiler::emitMegamorphicLoadSlotByValueResult()
+{
+    AutoOutputRegister output(*this);
+
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    ValueOperand idVal = allocator.useValueRegister(masm, reader.valOperandId());
+    bool handleMissing = reader.readBool();
+
+    AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    // idVal will be in vp[0], result will be stored in vp[1].
+    masm.reserveStack(sizeof(Value));
+    masm.Push(idVal);
+    masm.moveStackPtrTo(idVal.scratchReg());
+
+    LiveRegisterSet volatileRegs(GeneralRegisterSet::Volatile(), liveVolatileFloatRegs());
+    volatileRegs.takeUnchecked(scratch);
+    volatileRegs.takeUnchecked(idVal);
+    masm.PushRegsInMask(volatileRegs);
+
+    masm.setupUnalignedABICall(scratch);
+    masm.loadJSContext(scratch);
+    masm.passABIArg(scratch);
+    masm.passABIArg(obj);
+    masm.passABIArg(idVal.scratchReg());
+    if (handleMissing)
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, (GetNativeDataPropertyByValue<true>)));
+    else
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, (GetNativeDataPropertyByValue<false>)));
+    masm.mov(ReturnReg, scratch);
+    masm.PopRegsInMask(volatileRegs);
+
+    masm.Pop(idVal);
+
+    Label ok;
+    uint32_t framePushed = masm.framePushed();
+    masm.branchIfTrueBool(scratch, &ok);
+    masm.adjustStack(sizeof(Value));
+    masm.jump(failure->label());
+
+    masm.bind(&ok);
+    masm.setFramePushed(framePushed);
+    masm.loadTypedOrValue(Address(masm.getStackPointer(), 0), output);
+    masm.adjustStack(sizeof(Value));
+    return true;
+}
+
+bool
+CacheIRCompiler::emitMegamorphicHasOwnResult()
+{
+    AutoOutputRegister output(*this);
+
+    Register obj = allocator.useRegister(masm, reader.objOperandId());
+    ValueOperand idVal = allocator.useValueRegister(masm, reader.valOperandId());
+
+    AutoScratchRegisterMaybeOutput scratch(allocator, masm, output);
+
+    FailurePath* failure;
+    if (!addFailurePath(&failure))
+        return false;
+
+    // idVal will be in vp[0], result will be stored in vp[1].
+    masm.reserveStack(sizeof(Value));
+    masm.Push(idVal);
+    masm.moveStackPtrTo(idVal.scratchReg());
+
+    LiveRegisterSet volatileRegs(GeneralRegisterSet::Volatile(), liveVolatileFloatRegs());
+    volatileRegs.takeUnchecked(scratch);
+    volatileRegs.takeUnchecked(idVal);
+    masm.PushRegsInMask(volatileRegs);
+
+    masm.setupUnalignedABICall(scratch);
+    masm.loadJSContext(scratch);
+    masm.passABIArg(scratch);
+    masm.passABIArg(obj);
+    masm.passABIArg(idVal.scratchReg());
+    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, HasOwnNativeDataProperty));
+    masm.mov(ReturnReg, scratch);
+    masm.PopRegsInMask(volatileRegs);
+
+    masm.Pop(idVal);
+
+    Label ok;
+    uint32_t framePushed = masm.framePushed();
+    masm.branchIfTrueBool(scratch, &ok);
+    masm.adjustStack(sizeof(Value));
+    masm.jump(failure->label());
+
+    masm.bind(&ok);
+    masm.setFramePushed(framePushed);
+    masm.loadTypedOrValue(Address(masm.getStackPointer(), 0), output);
+    masm.adjustStack(sizeof(Value));
+    return true;
 }

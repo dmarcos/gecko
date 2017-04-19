@@ -54,8 +54,7 @@ class ContentHost : public CompositableHost
 public:
   virtual bool UpdateThebes(const ThebesBufferData& aData,
                             const nsIntRegion& aUpdated,
-                            const nsIntRegion& aOldValidRegionBack,
-                            nsIntRegion* aUpdatedRegionBack) = 0;
+                            const nsIntRegion& aOldValidRegionBack) = 0;
 
   virtual void SetPaintWillResample(bool aResample) { mPaintWillResample = aResample; }
   bool PaintWillResample() { return mPaintWillResample; }
@@ -118,7 +117,8 @@ public:
     , mReceivedNewHost(false)
   { }
 
-  virtual void Composite(LayerComposite* aLayer,
+  virtual void Composite(Compositor* aCompositor,
+                         LayerComposite* aLayer,
                          EffectChain& aEffectChain,
                          float aOpacity,
                          const gfx::Matrix4x4& aTransform,
@@ -127,7 +127,7 @@ public:
                          const nsIntRegion* aVisibleRegion = nullptr,
                          const Maybe<gfx::Polygon>& aGeometry = Nothing()) override;
 
-  virtual void SetCompositor(Compositor* aCompositor) override;
+  virtual void SetTextureSourceProvider(TextureSourceProvider* aProvider) override;
 
   virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override;
 
@@ -166,8 +166,6 @@ public:
     mLocked = false;
   }
 
-  LayerRenderState GetRenderState() override;
-
   virtual already_AddRefed<TexturedEffect> GenEffect(const gfx::SamplingFilter aSamplingFilter) override;
 
 protected:
@@ -197,8 +195,7 @@ public:
 
   virtual bool UpdateThebes(const ThebesBufferData& aData,
                             const nsIntRegion& aUpdated,
-                            const nsIntRegion& aOldValidRegionBack,
-                            nsIntRegion* aUpdatedRegionBack);
+                            const nsIntRegion& aOldValidRegionBack);
 
 protected:
   nsIntRegion mValidRegionForNextBackBuffer;
@@ -220,8 +217,7 @@ public:
 
   virtual bool UpdateThebes(const ThebesBufferData& aData,
                             const nsIntRegion& aUpdated,
-                            const nsIntRegion& aOldValidRegionBack,
-                            nsIntRegion* aUpdatedRegionBack);
+                            const nsIntRegion& aOldValidRegionBack);
 };
 
 } // namespace layers

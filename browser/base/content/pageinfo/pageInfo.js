@@ -5,6 +5,13 @@
 Components.utils.import("resource://gre/modules/LoadContextInfo.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 
+/* import-globals-from ../../../../toolkit/content/globalOverlay.js */
+/* import-globals-from ../../../../toolkit/content/contentAreaUtils.js */
+/* import-globals-from ../../../../toolkit/content/treeUtils.js */
+/* import-globals-from feeds.js */
+/* import-globals-from permissions.js */
+/* import-globals-from security.js */
+
 // define a js object to implement nsITreeView
 function pageInfoTreeView(treeid, copycol) {
   // copycol is the index number for the column that we want to add to
@@ -329,7 +336,7 @@ function onLoadPageInfo() {
   loadTab(args);
   Components.classes["@mozilla.org/observer-service;1"]
             .getService(Components.interfaces.nsIObserverService)
-            .notifyObservers(window, "page-info-dialog-loaded", null);
+            .notifyObservers(window, "page-info-dialog-loaded");
 }
 
 function loadPageInfo(frameOuterWindowID, imageElement, browser) {
@@ -418,7 +425,7 @@ function resetPageInfo(args) {
   /* Reset Feeds Tab */
   var feedListbox = document.getElementById("feedListbox");
   while (feedListbox.firstChild)
-    feedListbox.removeChild(feedListbox.firstChild);
+    feedListbox.firstChild.remove();
 
   /* Call registered overlay reset functions */
   onResetRegistry.forEach(function(func) { func(); });
@@ -592,7 +599,7 @@ function addImage(imageViewRow) {
       document.getElementById("mediaTab").hidden = false;
       Components.classes["@mozilla.org/observer-service;1"]
                 .getService(Components.interfaces.nsIObserverService)
-                .addObserver(imagePermissionObserver, "perm-changed", false);
+                .addObserver(imagePermissionObserver, "perm-changed");
     }
   } else {
     var i = gImageHash[url][type][alt];
@@ -1002,12 +1009,9 @@ function formatDate(datestr, unknown) {
   if (!date.valueOf())
     return unknown;
 
-  const locale = Components.classes["@mozilla.org/chrome/chrome-registry;1"]
-                 .getService(Components.interfaces.nsIXULChromeRegistry)
-                 .getSelectedLocale("global", true);
   const dtOptions = { year: "numeric", month: "long", day: "numeric",
                       hour: "numeric", minute: "numeric", second: "numeric" };
-  return date.toLocaleString(locale, dtOptions);
+  return date.toLocaleString(undefined, dtOptions);
 }
 
 function doCopy() {

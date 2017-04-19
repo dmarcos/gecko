@@ -17,6 +17,8 @@
 %define forwardTransitionLength 150ms
 %define conditionalForwardWithUrlbar window:not([chromehidden~="toolbar"]) #urlbar-wrapper
 
+%include ../shared/browser.inc.css
+
 :root {
   --backbutton-urlbar-overlap: 6px;
   /* icon width + border + horizontal padding (without the overlap from backbutton-urlbar-overlap) */
@@ -363,11 +365,7 @@ menuitem.bookmark-item {
 :-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1 > .toolbarbutton-menubutton-button,
 :-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1 {
   -moz-appearance: none;
-}
-
-:-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1[open="true"],
-:-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1:hover:active {
-  padding: 3px;
+  padding: 0 3px;
 }
 
 .findbar-button > .toolbarbutton-text,
@@ -434,12 +432,6 @@ menuitem.bookmark-item {
 :-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1[checked]:not(:active):hover > .toolbarbutton-icon {
   background-color: var(--toolbarbutton-checkedhover-backgroundcolor);
   transition: background-color 150ms;
-}
-
-:-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1 > .toolbarbutton-menubutton-button[open],
-:-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1 > .toolbarbutton-menubutton-button:hover:active,
-:-moz-any(#TabsToolbar, #nav-bar) .toolbarbutton-1:hover:active {
-  padding: 3px;
 }
 
 :-moz-any(#TabsToolbar, #nav-bar) .toolbaritem-combined-buttons {
@@ -544,11 +536,6 @@ menuitem.bookmark-item {
 @conditionalForwardWithUrlbar@:not(:hover) > #forward-button[disabled] {
   /* when not hovered anymore, trigger a new transition to hide the forward button immediately */
   margin-left: calc(-0.01px - var(--forwardbutton-width) - var(--backbutton-urlbar-overlap));
-}
-
-/* undo close tab menu item */
-#alltabs_undoCloseTab {
-  list-style-image: url(chrome://browser/skin/undoCloseTab.png);
 }
 
 .unified-nav-back[_moz-menuactive] {
@@ -722,34 +709,7 @@ menuitem.bookmark-item {
 
 #urlbar-zoom-button {
   -moz-appearance: none;
-  margin: 0 3px;
-  font-size: .8em;
-  padding: 0 8px;
-  border-radius: 1em;
-  background-color: hsla(0,0%,0%,.05);
   color: inherit;
-  border: 1px solid ThreeDLightShadow;
-}
-
-#urlbar-zoom-button[animate="true"] {
-  animation-name: urlbar-zoom-reset-pulse;
-  animation-duration: 250ms;
-}
-
-#urlbar-zoom-button:hover {
-  background-color: hsla(0,0%,0%,.1);
-}
-
-#urlbar-zoom-button:hover:active {
-  background-color: hsla(0,0%,0%,.15);
-}
-
-#urlbar-zoom-button > .toolbarbutton-text {
-  display: -moz-box;
-}
-
-#urlbar-zoom-button > .toolbarbutton-icon {
-  display: none;
 }
 
 #urlbar-search-footer {
@@ -833,11 +793,22 @@ menuitem.bookmark-item {
   font-weight: bold;
 }
 
-.addon-webext-perm-header {
-  font-size: 1.3em;
+html|*.addon-webext-perm-list {
+  margin-block-end: 0;
+  padding-inline-start: 10px;
+}
+
+.addon-webext-perm-text {
+  margin-inline-start: 0;
+}
+
+.popup-notification-description[popupid="addon-webext-permissions"] {
+  margin: 0;
+  padding: 0;
 }
 
 .addon-webext-name {
+  display: inline;
   font-weight: bold;
   margin: 0;
 }
@@ -960,7 +931,14 @@ notification[value="translation"] menulist > .menulist-dropmarker {
   border: 1px solid transparent;
 }
 
-.autocomplete-richlistitem[selected=true] {
+.autocomplete-richlistitem:hover,
+treechildren.searchbar-treebody::-moz-tree-row(hover) {
+  background-color: hsla(0, 0%, 0%, 0.06);
+  border-color: hsla(0, 0%, 0%, 0.1);
+}
+
+.autocomplete-richlistitem[selected],
+treechildren.searchbar-treebody::-moz-tree-row(selected) {
   background-color: Highlight;
 }
 
@@ -968,6 +946,9 @@ notification[value="translation"] menulist > .menulist-dropmarker {
   font-size: 1.05em;
 }
 
+.ac-separator,
+.ac-url,
+.ac-action,
 .ac-tags {
   font-size: 0.9em;
 }
@@ -980,18 +961,10 @@ html|span.ac-tag {
   padding: 0 1px;
 }
 
-.ac-separator,
-.ac-url,
-.ac-action {
-  font-size: 0.9em;
+.ac-separator:not([selected=true]),
+.ac-url:not([selected=true]),
+.ac-action:not([selected=true]) {
   color: -moz-nativehyperlinktext;
-}
-
-.ac-title[selected=true],
-.ac-separator[selected],
-.ac-url[selected=true],
-.ac-action[selected=true] {
-  color: inherit !important;
 }
 
 .ac-tags-text[selected] > html|span.ac-tag {
@@ -1424,7 +1397,7 @@ html|span.ac-emphasize-text-url {
   transition: 1s background-color ease-out;
 }
 
-.tabbrowser-arrowscrollbox > .scrollbutton-down[notifybgtab] {
+.tabbrowser-arrowscrollbox > .scrollbutton-down[highlight] {
   background-color: Highlight;
   transition: none;
 }
@@ -1556,15 +1529,6 @@ notification.pluginVulnerable > .notification-inner > .messageCloseButton:not(:h
   background-image: url("chrome://browser/skin/customizableui/customizeMode-gridTexture.png"),
                     linear-gradient(to bottom, #bcbcbc, #b5b5b5);
   background-attachment: fixed;
-}
-
-#main-window[customization-lwtheme] > #tab-view-deck:-moz-lwtheme {
-  background-repeat: no-repeat;
-  background-position: right top;
-  background-attachment: fixed;
-  /* The image will get set from CustomizeMode.jsm */
-  background-image: none;
-  background-color: transparent;
 }
 
 #main-window[customization-lwtheme]:-moz-lwtheme {

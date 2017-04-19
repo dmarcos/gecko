@@ -12,8 +12,8 @@
 
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
-#include "mozilla/dom/Dispatcher.h"
 #include "mozilla/dom/EventTarget.h"
+#include "mozilla/TaskCategory.h"
 #include "js/TypeDecls.h"
 #include "nsRefPtrHashtable.h"
 
@@ -29,6 +29,7 @@ class nsICSSDeclaration;
 class nsIDocShell;
 class nsIDocShellLoadInfo;
 class nsIDocument;
+class nsIEventTarget;
 class nsIIdleObserver;
 class nsIPrincipal;
 class nsIScriptTimeoutHandler;
@@ -312,7 +313,12 @@ public:
   virtual void SetOpenerWindow(nsPIDOMWindowOuter* aOpener,
                                bool aOriginalOpener) = 0;
 
-  virtual void EnsureSizeUpToDate() = 0;
+  /**
+   * Ensure the size and position of this window are up-to-date by doing
+   * a layout flush in the parent (which will in turn, do a layout flush
+   * in its parent, etc.).
+   */
+  virtual void EnsureSizeAndPositionUpToDate() = 0;
 
   /**
    * Callback for notifying a window about a modal dialog being
@@ -736,6 +742,10 @@ protected:
   bool mServiceWorkersTestingEnabled;
 
   mozilla::dom::LargeAllocStatus mLargeAllocStatus; // Outer window only
+
+  // When there is any created alive media component, we can consider to resume
+  // the media content in the window.
+  bool mShouldResumeOnFirstActiveMediaComponent;
 };
 
 #define NS_PIDOMWINDOWINNER_IID \
@@ -878,7 +888,7 @@ public:
   // window.
   void SyncStateFromParentWindow();
 
-  bool HasAudioContexts() const;
+  bool IsPlayingAudio();
 
   mozilla::dom::TimeoutManager& TimeoutManager();
 
@@ -898,6 +908,7 @@ protected:
   void RefreshMediaElementsVolume();
   void RefreshMediaElementsSuspend(SuspendTypes aSuspend);
   bool IsDisposableSuspend(SuspendTypes aSuspend) const;
+  void MaybeNotifyMediaResumedFromBlock(SuspendTypes aSuspend);
 
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_PIDOMWINDOWOUTER_IID)
@@ -963,12 +974,18 @@ public:
   float GetAudioVolume() const;
   nsresult SetAudioVolume(float aVolume);
 
+  void NotifyCreatedNewMediaComponent();
+  void MaybeActiveMediaComponents();
+
   void SetServiceWorkersTestingEnabled(bool aEnabled);
   bool GetServiceWorkersTestingEnabled();
 
   float GetDevicePixelRatio(mozilla::dom::CallerType aCallerType);
 
   void SetLargeAllocStatus(mozilla::dom::LargeAllocStatus aStatus);
+
+  bool IsTopLevelWindow();
+  bool HadOriginalOpener() const;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsPIDOMWindowOuter, NS_PIDOMWINDOWOUTER_IID)

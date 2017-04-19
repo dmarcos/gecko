@@ -12,6 +12,7 @@
 #include "base/message_loop.h"          // for MessageLoop
 #include "base/task.h"                  // for NewRunnableMethod, etc
 #include "gfxPrefs.h"
+#include "mozilla/dom/TabGroup.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 #include "mozilla/layers/APZChild.h"
 #include "mozilla/layers/IAPZCTreeManager.h"
@@ -20,6 +21,7 @@
 #include "mozilla/layers/PLayerTransactionChild.h"
 #include "mozilla/layers/TextureClient.h"// for TextureClient
 #include "mozilla/layers/TextureClientPool.h"// for TextureClientPool
+#include "mozilla/layers/WebRenderBridgeChild.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/Logging.h"
@@ -74,14 +76,16 @@ static StaticRefPtr<CompositorBridgeChild> sCompositorBridge;
 
 Atomic<int32_t> KnowsCompositor::sSerialCounter(0);
 
-CompositorBridgeChild::CompositorBridgeChild(LayerManager *aLayerManager)
+CompositorBridgeChild::CompositorBridgeChild(LayerManager *aLayerManager, uint32_t aNamespace)
   : mLayerManager(aLayerManager)
+  , mNamespace(aNamespace)
   , mCanSend(false)
   , mFwdTransactionId(0)
   , mDeviceResetSequenceNumber(0)
   , mMessageLoop(MessageLoop::current())
   , mSectionAllocator(nullptr)
 {
+  MOZ_ASSERT(mNamespace);
   MOZ_ASSERT(NS_IsMainThread());
 }
 
@@ -145,6 +149,14 @@ CompositorBridgeChild::Destroy()
     layers->Destroy();
   }
 
+  AutoTArray<PWebRenderBridgeChild*, 16> wRBridges;
+  ManagedPWebRenderBridgeChild(wRBridges);
+  for (int i = wRBridges.Length() - 1; i >= 0; --i) {
+    RefPtr<WebRenderBridgeChild> wRBridge =
+      static_cast<WebRenderBridgeChild*>(wRBridges[i]);
+    wRBridge->Destroy();
+  }
+
   const ManagedContainer<PTextureChild>& textures = ManagedPTextureChild();
   for (auto iter = textures.ConstIter(); !iter.Done(); iter.Next()) {
     RefPtr<TextureClient> texture = TextureClient::AsTextureClient(iter.Get()->GetKey());
@@ -198,12 +210,12 @@ CompositorBridgeChild::LookupCompositorFrameMetrics(const FrameMetrics::ViewID a
 }
 
 /* static */ bool
-CompositorBridgeChild::InitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint)
+CompositorBridgeChild::InitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint, uint32_t aNamespace)
 {
   // There's only one compositor per child process.
   MOZ_ASSERT(!sCompositorBridge);
 
-  RefPtr<CompositorBridgeChild> child(new CompositorBridgeChild(nullptr));
+  RefPtr<CompositorBridgeChild> child(new CompositorBridgeChild(nullptr, aNamespace));
   if (!aEndpoint.Bind(child)) {
     NS_RUNTIMEABORT("Couldn't Open() Compositor channel.");
     return false;
@@ -216,7 +228,7 @@ CompositorBridgeChild::InitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoi
 }
 
 /* static */ bool
-CompositorBridgeChild::ReinitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint)
+CompositorBridgeChild::ReinitForContent(Endpoint<PCompositorBridgeChild>&& aEndpoint, uint32_t aNamespace)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -228,7 +240,7 @@ CompositorBridgeChild::ReinitForContent(Endpoint<PCompositorBridgeChild>&& aEndp
     old->Destroy();
   }
 
-  return InitForContent(Move(aEndpoint));
+  return InitForContent(Move(aEndpoint), aNamespace);
 }
 
 CompositorBridgeParent*
@@ -258,9 +270,10 @@ CompositorBridgeChild::InitSameProcess(widget::CompositorWidget* aWidget,
 /* static */ RefPtr<CompositorBridgeChild>
 CompositorBridgeChild::CreateRemote(const uint64_t& aProcessToken,
                                     LayerManager* aLayerManager,
-                                    Endpoint<PCompositorBridgeChild>&& aEndpoint)
+                                    Endpoint<PCompositorBridgeChild>&& aEndpoint,
+                                    uint32_t aNamespace)
 {
-  RefPtr<CompositorBridgeChild> child = new CompositorBridgeChild(aLayerManager);
+  RefPtr<CompositorBridgeChild> child = new CompositorBridgeChild(aLayerManager, aNamespace);
   if (!aEndpoint.Bind(child)) {
     return nullptr;
   }
@@ -568,8 +581,10 @@ CompositorBridgeChild::RecvDidComposite(const uint64_t& aId, const uint64_t& aTr
 {
   if (mLayerManager) {
     MOZ_ASSERT(aId == 0);
-    RefPtr<ClientLayerManager> m = mLayerManager->AsClientLayerManager();
-    MOZ_ASSERT(m);
+    MOZ_ASSERT(mLayerManager->GetBackendType() == LayersBackend::LAYERS_CLIENT ||
+               mLayerManager->GetBackendType() == LayersBackend::LAYERS_WR);
+    // Hold a reference to keep LayerManager alive. See Bug 1242668.
+    RefPtr<LayerManager> m = mLayerManager;
     m->DidComposite(aTransactionId, aCompositeStart, aCompositeEnd);
   } else if (aId != 0) {
     RefPtr<dom::TabChild> child = dom::TabChild::GetFrom(aId);
@@ -639,7 +654,7 @@ CompositorBridgeChild::SharedFrameMetricsData::SharedFrameMetricsData(
   , mAPZCId(aAPZCId)
 {
   mBuffer = new ipc::SharedMemoryBasic;
-  mBuffer->SetHandle(metrics);
+  mBuffer->SetHandle(metrics, ipc::SharedMemory::RightsReadOnly);
   mBuffer->Map(sizeof(FrameMetrics));
   mMutex = new CrossProcessMutex(handle);
   MOZ_COUNT_CTOR(SharedFrameMetricsData);
@@ -657,7 +672,8 @@ CompositorBridgeChild::SharedFrameMetricsData::~SharedFrameMetricsData()
 void
 CompositorBridgeChild::SharedFrameMetricsData::CopyFrameMetrics(FrameMetrics* aFrame)
 {
-  FrameMetrics* frame = static_cast<FrameMetrics*>(mBuffer->memory());
+  const FrameMetrics* frame =
+    static_cast<const FrameMetrics*>(mBuffer->memory());
   MOZ_ASSERT(frame);
   mMutex->Lock();
   *aFrame = *frame;
@@ -667,7 +683,8 @@ CompositorBridgeChild::SharedFrameMetricsData::CopyFrameMetrics(FrameMetrics* aF
 FrameMetrics::ViewID
 CompositorBridgeChild::SharedFrameMetricsData::GetViewID()
 {
-  FrameMetrics* frame = static_cast<FrameMetrics*>(mBuffer->memory());
+  const FrameMetrics* frame =
+    static_cast<const FrameMetrics*>(mBuffer->memory());
   MOZ_ASSERT(frame);
   // Not locking to read of mScrollId since it should not change after being
   // initially set.
@@ -761,12 +778,13 @@ CompositorBridgeChild::SendResume()
 }
 
 bool
-CompositorBridgeChild::SendNotifyChildCreated(const uint64_t& id)
+CompositorBridgeChild::SendNotifyChildCreated(const uint64_t& id,
+                                              CompositorOptions* aOptions)
 {
   if (!mCanSend) {
     return false;
   }
-  return PCompositorBridgeChild::SendNotifyChildCreated(id);
+  return PCompositorBridgeChild::SendNotifyChildCreated(id, aOptions);
 }
 
 bool
@@ -914,6 +932,27 @@ CompositorBridgeChild::RecvObserveLayerUpdate(const uint64_t& aLayersId,
   return IPC_OK();
 }
 
+already_AddRefed<nsIEventTarget>
+CompositorBridgeChild::GetSpecificMessageEventTarget(const Message& aMsg)
+{
+  if (aMsg.type() != PCompositorBridge::Msg_DidComposite__ID) {
+    return nullptr;
+  }
+
+  uint64_t layersId;
+  PickleIterator iter(aMsg);
+  if (!IPC::ReadParam(&aMsg, &iter, &layersId)) {
+    return nullptr;
+  }
+
+  TabChild* tabChild = TabChild::GetFrom(layersId);
+  if (!tabChild) {
+    return nullptr;
+  }
+
+  return do_AddRef(tabChild->TabGroup()->EventTargetFor(TaskCategory::Other));
+}
+
 void
 CompositorBridgeChild::HoldUntilCompositableRefReleasedIfNecessary(TextureClient* aClient)
 {
@@ -1001,7 +1040,6 @@ CompositorBridgeChild::ClearTexturePool()
 FixedSizeSmallShmemSectionAllocator*
 CompositorBridgeChild::GetTileLockAllocator()
 {
-  MOZ_ASSERT(IPCOpen());
   if (!IPCOpen()) {
     return nullptr;
   }
@@ -1073,6 +1111,15 @@ CompositorBridgeChild::AllocPAPZCTreeManagerChild(const uint64_t& aLayersId)
 {
   APZCTreeManagerChild* child = new APZCTreeManagerChild();
   child->AddRef();
+  if (aLayersId != 0) {
+    TabChild* tabChild = TabChild::GetFrom(aLayersId);
+    if (tabChild) {
+      SetEventTargetForActor(
+        child, tabChild->TabGroup()->EventTargetFor(TaskCategory::Other));
+      MOZ_ASSERT(child->GetActorEventTarget());
+    }
+  }
+
   return child;
 }
 
@@ -1117,6 +1164,37 @@ void
 CompositorBridgeChild::HandleFatalError(const char* aName, const char* aMsg) const
 {
   dom::ContentChild::FatalErrorIfNotUsingGPUProcess(aName, aMsg, OtherPid());
+}
+
+PWebRenderBridgeChild*
+CompositorBridgeChild::AllocPWebRenderBridgeChild(const wr::PipelineId& aPipelineId,
+                                                  const LayoutDeviceIntSize&,
+                                                  TextureFactoryIdentifier*,
+                                                  uint32_t *aIdNamespace)
+{
+  WebRenderBridgeChild* child = new WebRenderBridgeChild(aPipelineId);
+  child->AddIPDLReference();
+  return child;
+}
+
+bool
+CompositorBridgeChild::DeallocPWebRenderBridgeChild(PWebRenderBridgeChild* aActor)
+{
+  WebRenderBridgeChild* child = static_cast<WebRenderBridgeChild*>(aActor);
+  child->ReleaseIPDLReference();
+  return true;
+}
+
+uint64_t
+CompositorBridgeChild::GetNextExternalImageId()
+{
+  static uint32_t sNextID = 1;
+  ++sNextID;
+  MOZ_RELEASE_ASSERT(sNextID != UINT32_MAX);
+
+  uint64_t imageId = mNamespace;
+  imageId = imageId << 32 | sNextID;
+  return imageId;
 }
 
 } // namespace layers

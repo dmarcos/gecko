@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsStyledElement.h"
+#include "mozAutoDocUpdate.h"
 #include "nsGkAtoms.h"
 #include "nsAttrValue.h"
 #include "nsAttrValueInlines.h"
@@ -68,8 +69,6 @@ nsStyledElement::SetInlineStyleDeclaration(DeclarationBlock* aDeclaration,
   // and thus will be the same.
   if (hasListeners) {
     // save the old attribute so we can set up the mutation event properly
-    // XXXbz if the old rule points to the same declaration as the new one,
-    // this is getting the new attr value, not the old one....
     nsAutoString oldValueStr;
     modification = GetAttr(kNameSpaceID_None, nsGkAtoms::style,
                            oldValueStr);
@@ -88,9 +87,12 @@ nsStyledElement::SetInlineStyleDeclaration(DeclarationBlock* aDeclaration,
     static_cast<uint8_t>(nsIDOMMutationEvent::MODIFICATION) :
     static_cast<uint8_t>(nsIDOMMutationEvent::ADDITION);
 
+  nsIDocument* document = GetComposedDoc();
+  mozAutoDocUpdate updateBatch(document, UPDATE_CONTENT_MODEL, aNotify);
   return SetAttrAndNotify(kNameSpaceID_None, nsGkAtoms::style, nullptr,
                           oldValue, attrValue, modType, hasListeners,
-                          aNotify, kDontCallAfterSetAttr);
+                          aNotify, kDontCallAfterSetAttr, document,
+                          updateBatch);
 }
 
 // ---------------------------------------------------------------
@@ -103,7 +105,7 @@ nsStyledElement::Style()
 
   if (!slots->mStyle) {
     // Just in case...
-    ReparseStyleAttribute(true);
+    ReparseStyleAttribute(true, false);
 
     slots->mStyle = new nsDOMCSSAttributeDeclaration(this, false);
     SetMayHaveStyle();
@@ -113,13 +115,13 @@ nsStyledElement::Style()
 }
 
 nsresult
-nsStyledElement::ReparseStyleAttribute(bool aForceInDataDoc)
+nsStyledElement::ReparseStyleAttribute(bool aForceInDataDoc, bool aForceIfAlreadyParsed)
 {
   if (!MayHaveStyle()) {
     return NS_OK;
   }
   const nsAttrValue* oldVal = mAttrsAndChildren.GetAttr(nsGkAtoms::style);
-  if (oldVal && oldVal->Type() != nsAttrValue::eCSSDeclaration) {
+  if (oldVal && (aForceIfAlreadyParsed || oldVal->Type() != nsAttrValue::eCSSDeclaration)) {
     nsAttrValue attrValue;
     nsAutoString stringValue;
     oldVal->ToString(stringValue);
@@ -131,6 +133,15 @@ nsStyledElement::ReparseStyleAttribute(bool aForceInDataDoc)
   }
   
   return NS_OK;
+}
+
+void
+nsStyledElement::NodeInfoChanged(nsIDocument* aOldDoc)
+{
+  nsStyledElementBase::NodeInfoChanged(aOldDoc);
+  if (OwnerDoc()->GetStyleBackendType() != aOldDoc->GetStyleBackendType()) {
+    ReparseStyleAttribute(false, /* aForceIfAlreadyParsed */ true);
+  }
 }
 
 nsICSSDeclaration*

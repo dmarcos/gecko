@@ -22,6 +22,10 @@ audio > xul|videocontrols {
   display: none;
 }
 
+.controlsSpacer[hideCursor] {
+  cursor: none;
+}
+
 .controlsContainer,
 .progressContainer {
   position: relative;
@@ -41,7 +45,7 @@ audio > xul|videocontrols {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  background-color: rgb(80,80,80);
+  background-color: rgb(80,80,80, .85);
 }
 
 .controlsOverlay {
@@ -340,19 +344,14 @@ audio > xul|videocontrols {
 }
 
 .positionDurationBox {
-  min-width: 9ch;
   text-align: center;
   padding-inline-start: 1px;
   padding-inline-end: 9px;
   white-space: nowrap;
   font: message-box;
   font-size: 13px;
-  font-size-adjust: 0.6;
+  font-size-adjust: 0.55;
   color: #ffffff;
-}
-
-.positionDurationBox[positionOnly] {
-  min-width: 4ch;
 }
 
 %ifdef XP_MACOSX
@@ -477,21 +476,3 @@ audio > xul|videocontrols {
 [error="errorGeneric"]         > [anonid="errorGeneric"] {
   display: inline;
 }
-
-/* For high contrast theme in Windows */
-%ifdef XP_WIN
-.controlsSpacer,
-.clickToPlay {
-  background-color: transparent;
-}
-
-@media (-moz-windows-default-theme) {
-  .controlsSpacer {
-    background-color: rgba(255,255,255,.4);
-  }
-
-  .clickToPlay {
-    background-color: #1a1a1a;
-  }
-}
-%endif

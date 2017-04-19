@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* eslint-env mozilla/frame-script */
+
 var AboutTabCrashed = {
   /**
    * This can be set to true once this page receives a message from the
@@ -103,7 +105,7 @@ var AboutTabCrashed = {
     document.getElementById("email").addEventListener("input", this);
 
     // Error pages are loaded as LOAD_BACKGROUND, so they don't get load events.
-    let event = new CustomEvent("AboutTabCrashedLoad", {bubbles:true});
+    let event = new CustomEvent("AboutTabCrashedLoad", {bubbles: true});
     document.dispatchEvent(event);
 
     sendAsyncMessage("Load");
@@ -200,7 +202,7 @@ var AboutTabCrashed = {
       document.getElementById("requestAutoSubmit").hidden = false;
     }
 
-    let event = new CustomEvent("AboutTabCrashedReady", {bubbles:true});
+    let event = new CustomEvent("AboutTabCrashedReady", {bubbles: true});
     document.dispatchEvent(event);
   },
 

@@ -66,18 +66,15 @@ using namespace mozilla::dom;
 // do we wait before checking again?
 #define SMOOTH_INTERVAL 100
 
-class nsListScrollSmoother final : public nsITimerCallback
+class nsListScrollSmoother final
 {
 private:
-  virtual ~nsListScrollSmoother();
+  ~nsListScrollSmoother();
 
 public:
-  NS_DECL_ISUPPORTS
+  NS_INLINE_DECL_REFCOUNTING(nsListScrollSmoother)
 
   explicit nsListScrollSmoother(nsListBoxBodyFrame* aOuter);
-
-  // nsITimerCallback
-  NS_DECL_NSITIMERCALLBACK
 
   void Start();
   void Stop();
@@ -86,7 +83,7 @@ public:
   nsCOMPtr<nsITimer> mRepeatTimer;
   int32_t mDelta;
   nsListBoxBodyFrame* mOuter;
-}; 
+};
 
 nsListScrollSmoother::nsListScrollSmoother(nsListBoxBodyFrame* aOuter)
 {
@@ -99,19 +96,6 @@ nsListScrollSmoother::~nsListScrollSmoother()
   Stop();
 }
 
-NS_IMETHODIMP
-nsListScrollSmoother::Notify(nsITimer *timer)
-{
-  Stop();
-
-  NS_ASSERTION(mOuter, "mOuter is null, see bug #68365");
-  if (!mOuter) return NS_OK;
-
-  // actually do some work.
-  mOuter->InternalPositionChangedCallback();
-  return NS_OK;
-}
-
 bool
 nsListScrollSmoother::IsRunning()
 {
@@ -121,9 +105,37 @@ nsListScrollSmoother::IsRunning()
 void
 nsListScrollSmoother::Start()
 {
+  nsTimerCallbackFunc scrollSmootherCallback = [](nsITimer* aTimer,
+                                                  void* aClosure) {
+    // The passed-in nsListScrollSmoother is always alive here. Because if
+    // nsListScrollSmoother died, mRepeatTimer->Stop() would be called during
+    // the destruction and this callback would never be invoked.
+    auto self = static_cast<nsListScrollSmoother*>(aClosure);
+
+    self->Stop();
+
+    NS_ASSERTION(self->mOuter, "mOuter is null, see bug #68365");
+    if (self->mOuter) {
+      // actually do some work.
+      self->mOuter->InternalPositionChangedCallback();
+    }
+  };
+
   Stop();
   mRepeatTimer = do_CreateInstance("@mozilla.org/timer;1");
-  mRepeatTimer->InitWithCallback(this, SMOOTH_INTERVAL, nsITimer::TYPE_ONE_SHOT);
+  nsIContent* content = nullptr;
+  if (mOuter) {
+    content = mOuter->GetContent();
+  }
+  if (content) {
+    mRepeatTimer->SetTarget(
+        content->OwnerDoc()->EventTargetFor(TaskCategory::Other));
+  }
+  mRepeatTimer->InitWithNamedFuncCallback(scrollSmootherCallback,
+                                          this,
+                                          SMOOTH_INTERVAL,
+                                          nsITimer::TYPE_ONE_SHOT,
+                                          "scrollSmootherCallback");
 }
 
 void
@@ -134,8 +146,6 @@ nsListScrollSmoother::Stop()
     mRepeatTimer = nullptr;
   }
 }
-
-NS_IMPL_ISUPPORTS(nsListScrollSmoother, nsITimerCallback)
 
 /////////////// nsListBoxBodyFrame //////////////////
 
@@ -332,7 +342,7 @@ nsListBoxBodyFrame::ScrollByPage(nsScrollbarFrame* aScrollbar, int32_t aDirectio
   // CSS Scroll Snapping is not enabled for XUL, aSnap is ignored
   MOZ_ASSERT(aScrollbar != nullptr);
   aScrollbar->SetIncrementToPage(aDirection);
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   int32_t newPos = aScrollbar->MoveToNewPosition();
   if (!weakFrame.IsAlive()) {
     return;
@@ -347,7 +357,7 @@ nsListBoxBodyFrame::ScrollByWhole(nsScrollbarFrame* aScrollbar, int32_t aDirecti
   // CSS Scroll Snapping is not enabled for XUL, aSnap is ignored
   MOZ_ASSERT(aScrollbar != nullptr);
   aScrollbar->SetIncrementToWhole(aDirection);
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   int32_t newPos = aScrollbar->MoveToNewPosition();
   if (!weakFrame.IsAlive()) {
     return;
@@ -362,7 +372,7 @@ nsListBoxBodyFrame::ScrollByLine(nsScrollbarFrame* aScrollbar, int32_t aDirectio
   // CSS Scroll Snapping is not enabled for XUL, aSnap is ignored
   MOZ_ASSERT(aScrollbar != nullptr);
   aScrollbar->SetIncrementToLine(aDirection);
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   int32_t newPos = aScrollbar->MoveToNewPosition();
   if (!weakFrame.IsAlive()) {
     return;
@@ -373,7 +383,7 @@ nsListBoxBodyFrame::ScrollByLine(nsScrollbarFrame* aScrollbar, int32_t aDirectio
 void
 nsListBoxBodyFrame::RepeatButtonScroll(nsScrollbarFrame* aScrollbar)
 {
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   int32_t newPos = aScrollbar->MoveToNewPosition();
   if (!weakFrame.IsAlive()) {
     return;
@@ -790,7 +800,7 @@ nsListBoxBodyFrame::ScrollToIndex(int32_t aRowIndex)
 
   mCurrentIndex = newIndex;
 
-  nsWeakFrame weak(this);
+  AutoWeakFrame weak(this);
 
   // Since we're going to flush anyway, we need to not do this off an event
   DoInternalPositionChangedSync(up, delta);
@@ -828,13 +838,15 @@ nsListBoxBodyFrame::InternalPositionChangedCallback()
 nsresult
 nsListBoxBodyFrame::InternalPositionChanged(bool aUp, int32_t aDelta)
 {
-  RefPtr<nsPositionChangedEvent> ev =
+  RefPtr<nsPositionChangedEvent> event =
     new nsPositionChangedEvent(this, aUp, aDelta);
-  nsresult rv = NS_DispatchToCurrentThread(ev);
+  nsresult rv = mContent->OwnerDoc()->Dispatch("nsPositionChangedEvent",
+                                               TaskCategory::Other,
+                                               do_AddRef(event));
   if (NS_SUCCEEDED(rv)) {
-    if (!mPendingPositionChangeEvents.AppendElement(ev)) {
+    if (!mPendingPositionChangeEvents.AppendElement(event)) {
       rv = NS_ERROR_OUT_OF_MEMORY;
-      ev->Revoke();
+      event->Revoke();
     }
   }
   return rv;
@@ -843,7 +855,7 @@ nsListBoxBodyFrame::InternalPositionChanged(bool aUp, int32_t aDelta)
 nsresult
 nsListBoxBodyFrame::DoInternalPositionChangedSync(bool aUp, int32_t aDelta)
 {
-  nsWeakFrame weak(this);
+  AutoWeakFrame weak(this);
   
   // Process all the pending position changes first
   nsTArray< RefPtr<nsPositionChangedEvent> > temp;
@@ -874,7 +886,7 @@ nsListBoxBodyFrame::DoInternalPositionChanged(bool aUp, int32_t aDelta)
   // begin timing how long it takes to scroll a row
   PRTime start = PR_Now();
 
-  nsWeakFrame weakThis(this);
+  AutoWeakFrame weakThis(this);
   mContent->GetComposedDoc()->FlushPendingNotifications(FlushType::Layout);
   if (!weakThis.IsAlive()) {
     return NS_OK;
@@ -970,7 +982,7 @@ nsListBoxBodyFrame::VerticalScroll(int32_t aPosition)
 
   nsPoint scrollPosition = scrollFrame->GetScrollPosition();
  
-  nsWeakFrame weakFrame(this);
+  AutoWeakFrame weakFrame(this);
   scrollFrame->ScrollTo(nsPoint(scrollPosition.x, aPosition),
                         nsIScrollableFrame::INSTANT);
   if (!weakFrame.IsAlive()) {
@@ -1130,7 +1142,7 @@ nsListBoxBodyFrame::GetFirstItemBox(int32_t aOffset, bool* aCreated)
   mBottomFrame = mTopFrame;
 
   if (mTopFrame) {
-    return mTopFrame->IsXULBoxFrame() ? mTopFrame : nullptr;
+    return mTopFrame->IsXULBoxFrame() ? mTopFrame.GetFrame() : nullptr;
   }
 
   // top frame was cleared out
@@ -1138,7 +1150,7 @@ nsListBoxBodyFrame::GetFirstItemBox(int32_t aOffset, bool* aCreated)
   mBottomFrame = mTopFrame;
 
   if (mTopFrame && mRowsToPrepend <= 0) {
-    return mTopFrame->IsXULBoxFrame() ? mTopFrame : nullptr;
+    return mTopFrame->IsXULBoxFrame() ? mTopFrame.GetFrame() : nullptr;
   }
 
   // At this point, we either have no frames at all, 
@@ -1187,7 +1199,7 @@ nsListBoxBodyFrame::GetFirstItemBox(int32_t aOffset, bool* aCreated)
 
       mBottomFrame = mTopFrame;
 
-      return mTopFrame->IsXULBoxFrame() ? mTopFrame : nullptr;
+      return mTopFrame->IsXULBoxFrame() ? mTopFrame.GetFrame() : nullptr;
     } else
       return GetFirstItemBox(++aOffset, 0);
   }
@@ -1407,7 +1419,7 @@ nsListBoxBodyFrame::OnContentRemoved(nsPresContext* aPresContext,
         NS_PRECONDITION(mCurrentIndex > 0, "mCurrentIndex > 0");
         --mCurrentIndex;
         mYPosition = mCurrentIndex*mRowHeight;
-        nsWeakFrame weakChildFrame(aChildFrame);
+        AutoWeakFrame weakChildFrame(aChildFrame);
         VerticalScroll(mYPosition);
         if (!weakChildFrame.IsAlive()) {
           return;
@@ -1435,7 +1447,7 @@ nsListBoxBodyFrame::OnContentRemoved(nsPresContext* aPresContext,
           mRowsToPrepend = 1;
           --mCurrentIndex;
           mYPosition = mCurrentIndex*mRowHeight;
-          nsWeakFrame weakChildFrame(aChildFrame);
+          AutoWeakFrame weakChildFrame(aChildFrame);
           VerticalScroll(mYPosition);
           if (!weakChildFrame.IsAlive()) {
             return;

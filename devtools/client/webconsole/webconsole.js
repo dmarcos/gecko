@@ -224,10 +224,13 @@ function WebConsoleFrame(webConsoleOwner) {
   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   this._outputTimerInitialized = false;
 
-  let require = BrowserLoaderModule.BrowserLoader({
+  let toolbox = gDevTools.getToolbox(this.owner.target);
+  let {require} = BrowserLoaderModule.BrowserLoader({
     window: this.window,
-    useOnlyShared: true
-  }).require;
+    useOnlyShared: true,
+    // The toolbox isn't available for the browser console.
+    commonLibRequire: toolbox ? toolbox.browserRequire : null,
+  });
 
   this.React = require("devtools/client/shared/vendor/react");
   this.ReactDOM = require("devtools/client/shared/vendor/react-dom");
@@ -485,7 +488,7 @@ WebConsoleFrame.prototype = {
     // to the toolbox before the web-console-created event is receieved.
     let notifyObservers = () => {
       let id = WebConsoleUtils.supportsString(this.hudId);
-      Services.obs.notifyObservers(id, "web-console-created", null);
+      Services.obs.notifyObservers(id, "web-console-created");
     };
     allReady.then(notifyObservers, notifyObservers);
 
@@ -1530,7 +1533,7 @@ WebConsoleFrame.prototype = {
 
     // Collect telemetry data regarding JavaScript errors
     this._telemetry.logKeyed("DEVTOOLS_JAVASCRIPT_ERROR_DISPLAYED",
-                             scriptError.errorMessageName,
+                             scriptError.errorMessageName || "Unknown",
                              true);
 
     if (objectActors.size > 0) {
@@ -1934,7 +1937,9 @@ WebConsoleFrame.prototype = {
       return;
     }
     return toolbox.selectTool("netmonitor").then(panel => {
-      return panel.panelWin.NetMonitorController.inspectRequest(requestId);
+      let { NetMonitorController } = panel.panelWin
+        .windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
+      return NetMonitorController.inspectRequest(requestId);
     });
   },
 
@@ -2621,7 +2626,7 @@ WebConsoleFrame.prototype = {
       frame: { source, line, column },
       showEmptyPathAsHost: true,
       onClick,
-      sourceMapService: toolbox ? toolbox._sourceMapService : null,
+      sourceMapService: toolbox ? toolbox._deprecatedServerSourceMapService : null,
     }), locationNode);
 
     return locationNode;

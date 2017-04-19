@@ -26,22 +26,23 @@ interface Range {
   [Throws]
   readonly attribute Node commonAncestorContainer;
 
-  [Throws]
+  [Throws, BinaryName="setStartJS"]
   void setStart(Node refNode, unsigned long offset);
-  [Throws]
+  [Throws, BinaryName="setEndJS"]
   void setEnd(Node refNode, unsigned long offset);
-  [Throws]
+  [Throws, BinaryName="setStartBeforeJS"]
   void setStartBefore(Node refNode);
-  [Throws]
+  [Throws, BinaryName="setStartAfterJS"]
   void setStartAfter(Node refNode);
-  [Throws]
+  [Throws, BinaryName="setEndBeforeJS"]
   void setEndBefore(Node refNode);
-  [Throws]
+  [Throws, BinaryName="setEndAfterJS"]
   void setEndAfter(Node refNode);
+  [BinaryName="collapseJS"]
   void collapse(optional boolean toStart = false);
-  [Throws]
+  [Throws, BinaryName="selectNodeJS"]
   void selectNode(Node refNode);
-  [Throws]
+  [Throws, BinaryName="selectNodeContentsJS"]
   void selectNodeContents(Node refNode);
 
   const unsigned short START_TO_START = 0;
@@ -89,7 +90,7 @@ partial interface Range {
 
 dictionary ClientRectsAndTexts {
   required DOMRectList rectList;
-  required DOMStringList textList;
+  required sequence<DOMString> textList;
 };
 
 partial interface Range {

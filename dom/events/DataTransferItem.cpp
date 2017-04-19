@@ -230,6 +230,37 @@ DataTransferItem::FillInExternalData()
   }
 }
 
+void
+DataTransferItem::GetType(nsAString& aType)
+{
+  // If we don't have a File, we can just put whatever our recorded internal
+  // type is.
+  if (Kind() != KIND_FILE) {
+    aType = mType;
+    return;
+  }
+
+  // If we do have a File, then we need to look at our File object to discover
+  // what its mime type is. We can use the System Principal here, as this
+  // information should be avaliable even if the data is currently inaccessible
+  // (for example during a dragover).
+  //
+  // XXX: This seems inefficient, as it seems like we should be able to get this
+  // data without getting the entire File object, which may require talking to
+  // the OS.
+  ErrorResult rv;
+  RefPtr<File> file = GetAsFile(*nsContentUtils::GetSystemPrincipal(), rv);
+  MOZ_ASSERT(!rv.Failed(), "Failed to get file data with system principal");
+
+  // If we don't actually have a file, fall back to returning the internal type.
+  if (NS_WARN_IF(!file)) {
+    aType = mType;
+    return;
+  }
+
+  file->GetType(aType);
+}
+
 already_AddRefed<File>
 DataTransferItem::GetAsFile(nsIPrincipal& aSubjectPrincipal,
                             ErrorResult& aRv)
@@ -433,9 +464,25 @@ DataTransferItem::GetAsString(FunctionStringCallback* aCallback,
   };
 
   RefPtr<GASRunnable> runnable = new GASRunnable(aCallback, stringData);
-  rv = NS_DispatchToMainThread(runnable);
+
+  // DataTransfer.mParent might be EventTarget, nsIGlobalObject, ClipboardEvent
+  // nsPIDOMWindowOuter, null
+  nsISupports* parent = mDataTransfer->GetParentObject();
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(parent);
+  if (parent && !global) {
+    if (nsCOMPtr<dom::EventTarget> target = do_QueryInterface(parent)) {
+      global = target->GetOwnerGlobal();
+    } else if (nsCOMPtr<nsIDOMEvent> event = do_QueryInterface(parent)) {
+      global = event->InternalDOMEvent()->GetParentObject();
+    }
+  }
+  if (global) {
+    rv = global->Dispatch("GASRunnable", TaskCategory::Other, runnable.forget());
+  } else {
+    rv = NS_DispatchToMainThread(runnable);
+  }
   if (NS_FAILED(rv)) {
-    NS_WARNING("NS_DispatchToMainThread Failed in "
+    NS_WARNING("Dispatch to main thread Failed in "
                "DataTransferItem::GetAsString!");
   }
 }

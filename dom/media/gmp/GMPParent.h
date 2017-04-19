@@ -26,16 +26,12 @@ class nsIThread;
 
 #ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
-
-namespace mozilla {
-namespace dom {
-class PCrashReporterParent;
-class CrashReporterParent;
-}
-}
 #endif
 
 namespace mozilla {
+namespace ipc {
+class CrashReporterHost;
+} // namespace ipc
 namespace gmp {
 
 class GMPCapability
@@ -77,7 +73,7 @@ class GMPParent final : public PGMPParent
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GMPParent)
 
-  GMPParent();
+  explicit GMPParent(AbstractThread* aMainThread);
 
   RefPtr<GenericPromise> Init(GeckoMediaPluginServiceParent* aService, nsIFile* aPluginDir);
   nsresult CloneFrom(const GMPParent* aOther);
@@ -104,7 +100,7 @@ public:
   void DeleteProcess();
 
   GMPState State() const;
-  nsIThread* GMPThread();
+  nsCOMPtr<nsIThread> GMPThread();
 
   // A GMP can either be a single instance shared across all NodeIds (like
   // in the OpenH264 case), or we can require a new plugin instance for every
@@ -165,13 +161,12 @@ private:
   RefPtr<GenericPromise> ParseChromiumManifest(const nsAString& aJSON); // Main thread.
   RefPtr<GenericPromise> ReadChromiumManifestFile(nsIFile* aFile); // GMP thread.
 #ifdef MOZ_CRASHREPORTER
-  void WriteExtraDataForMinidump(CrashReporter::AnnotationTable& notes);
-  void GetCrashID(nsString& aResult);
+  void WriteExtraDataForMinidump();
+  bool GetCrashID(nsString& aResult);
 #endif
   void ActorDestroy(ActorDestroyReason aWhy) override;
 
-  PCrashReporterParent* AllocPCrashReporterParent(const NativeThreadId& aThread) override;
-  bool DeallocPCrashReporterParent(PCrashReporterParent* aCrashReporter) override;
+  mozilla::ipc::IPCResult RecvInitCrashReporter(Shmem&& shmem, const NativeThreadId& aThreadId) override;
 
   mozilla::ipc::IPCResult RecvPGMPStorageConstructor(PGMPStorageParent* actor) override;
   PGMPStorageParent* AllocPGMPStorageParent() override;
@@ -212,7 +207,6 @@ private:
 
   nsTArray<RefPtr<GMPTimerParent>> mTimers;
   nsTArray<RefPtr<GMPStorageParent>> mStorage;
-  nsCOMPtr<nsIThread> mGMPThread;
   // NodeId the plugin is assigned to, or empty if the the plugin is not
   // assigned to a NodeId.
   nsCString mNodeId;
@@ -229,6 +223,12 @@ private:
   // its reference to us, we stay alive long enough for the child process
   // to terminate gracefully.
   bool mHoldingSelfRef;
+
+#ifdef MOZ_CRASHREPORTER
+  UniquePtr<ipc::CrashReporterHost> mCrashReporter;
+#endif
+
+  const RefPtr<AbstractThread> mMainThread;
 };
 
 } // namespace gmp

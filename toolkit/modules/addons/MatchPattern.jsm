@@ -21,6 +21,12 @@ this.EXPORTED_SYMBOLS = ["MatchPattern", "MatchGlobs", "MatchURLFilters"];
 const PERMITTED_SCHEMES = ["http", "https", "file", "ftp", "data"];
 const PERMITTED_SCHEMES_REGEXP = PERMITTED_SCHEMES.join("|");
 
+// The basic RE for matching patterns
+const PATTERN_REGEXP = new RegExp(`^(${PERMITTED_SCHEMES_REGEXP}|\\*)://(\\*|\\*\\.[^*/]+|[^*/]+|)(/.*)$`);
+
+// The schemes/protocols implied by a pattern that starts with *://
+const WILDCARD_SCHEMES = ["http", "https"];
+
 // This function converts a glob pattern (containing * and possibly ?
 // as wildcards) to a regular expression.
 function globToRegexp(pat, allowQuestion) {
@@ -39,6 +45,7 @@ function globToRegexp(pat, allowQuestion) {
 // These patterns follow the syntax in
 // https://developer.chrome.com/extensions/match_patterns
 function SingleMatchPattern(pat) {
+  this.pat = pat;
   if (pat == "<all_urls>") {
     this.schemes = PERMITTED_SCHEMES;
     this.hostMatch = () => true;
@@ -46,8 +53,7 @@ function SingleMatchPattern(pat) {
   } else if (!pat) {
     this.schemes = [];
   } else {
-    let re = new RegExp(`^(${PERMITTED_SCHEMES_REGEXP}|\\*)://(\\*|\\*\\.[^*/]+|[^*/]+|)(/.*)$`);
-    let match = re.exec(pat);
+    let match = PATTERN_REGEXP.exec(pat);
     if (!match) {
       Cu.reportError(`Invalid match pattern: '${pat}'`);
       this.schemes = [];
@@ -55,7 +61,7 @@ function SingleMatchPattern(pat) {
     }
 
     if (match[1] == "*") {
-      this.schemes = ["http", "https"];
+      this.schemes = WILDCARD_SCHEMES;
     } else {
       this.schemes = [match[1]];
     }
@@ -99,6 +105,12 @@ SingleMatchPattern.prototype = {
       ))
     );
   },
+
+  // Tests if this can possibly overlap with the |other| SingleMatchPattern.
+  overlapsIgnoringPath(other) {
+    return this.schemes.some(scheme => other.schemes.includes(scheme)) &&
+           (this.hostMatch(other) || other.hostMatch(this));
+  },
 };
 
 this.MatchPattern = function(pat) {
@@ -110,6 +122,12 @@ this.MatchPattern = function(pat) {
   } else {
     this.matchers = pat.map(p => new SingleMatchPattern(p));
   }
+
+  XPCOMUtils.defineLazyGetter(this, "explicitMatchers", () => {
+    return this.matchers.filter(matcher => matcher.pat != "<all_urls>" &&
+                                           matcher.host &&
+                                           !matcher.host.startsWith("*"));
+  });
 };
 
 MatchPattern.prototype = {
@@ -118,7 +136,10 @@ MatchPattern.prototype = {
     return this.matchers.some(matcher => matcher.matches(uri));
   },
 
-  matchesIgnoringPath(uri) {
+  matchesIgnoringPath(uri, explicit = false) {
+    if (explicit) {
+      return this.explicitMatchers.some(matcher => matcher.matches(uri, true));
+    }
     return this.matchers.some(matcher => matcher.matches(uri, true));
   },
 
@@ -164,8 +185,48 @@ MatchPattern.prototype = {
     return false;
   },
 
+  // Checks if every part of this filter overlaps with
+  // some of the |hosts| or |optional| permissions MatchPatterns.
+  overlapsPermissions(hosts, optional) {
+    const perms = hosts.matchers.concat(optional.matchers);
+    return this.matchers.length &&
+           this.matchers.every(m => perms.some(p => p.overlapsIgnoringPath(m)));
+  },
+
+  // Test if this MatchPattern subsumes the given pattern (i.e., whether
+  // this pattern matches everything the given pattern does).
+  // Note, this method considers only to protocols and hosts/domains,
+  // paths are ignored.
+  subsumes(pattern) {
+    let match = PATTERN_REGEXP.exec(pattern);
+    if (!match) {
+      throw new Error("Invalid match pattern");
+    }
+
+    if (match[1] == "*") {
+      return WILDCARD_SCHEMES.every(scheme => this.matchesIgnoringPath({scheme, host: match[2]}));
+    }
+
+    return this.matchesIgnoringPath({scheme: match[1], host: match[2]});
+  },
+
   serialize() {
     return this.pat;
+  },
+
+  removeOne(pattern) {
+    if (!Array.isArray(this.pat)) {
+      return;
+    }
+
+    let index = this.pat.indexOf(pattern);
+    if (index >= 0) {
+      if (this.matchers[index].pat != pattern) {
+        throw new Error("pat/matcher mismatch in removeOne()");
+      }
+      this.pat.splice(index, 1);
+      this.matchers.splice(index, 1);
+    }
   },
 };
 

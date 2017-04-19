@@ -227,7 +227,44 @@ NoteWeakMapsTracer::trace(JSObject* aMap, JS::GCCellPtr aKey,
   }
 }
 
-// This is based on the logic in FixWeakMappingGrayBitsTracer::trace.
+// Report whether the key or value of a weak mapping entry are gray but need to
+// be marked black.
+static void
+ShouldWeakMappingEntryBeBlack(JSObject* aMap, JS::GCCellPtr aKey, JS::GCCellPtr aValue,
+                              bool* aKeyShouldBeBlack, bool* aValueShouldBeBlack)
+{
+  *aKeyShouldBeBlack = false;
+  *aValueShouldBeBlack = false;
+
+  // If nothing that could be held alive by this entry is marked gray, return.
+  bool keyMightNeedMarking = aKey && JS::GCThingIsMarkedGray(aKey);
+  bool valueMightNeedMarking = aValue && JS::GCThingIsMarkedGray(aValue) &&
+    aValue.kind() != JS::TraceKind::String;
+  if (!keyMightNeedMarking && !valueMightNeedMarking) {
+    return;
+  }
+
+  if (!AddToCCKind(aKey.kind())) {
+    aKey = nullptr;
+  }
+
+  if (keyMightNeedMarking && aKey.is<JSObject>()) {
+    JSObject* kdelegate = js::GetWeakmapKeyDelegate(&aKey.as<JSObject>());
+    if (kdelegate && !JS::ObjectIsMarkedGray(kdelegate) &&
+        (!aMap || !JS::ObjectIsMarkedGray(aMap)))
+    {
+      *aKeyShouldBeBlack = true;
+    }
+  }
+
+  if (aValue && JS::GCThingIsMarkedGray(aValue) &&
+      (!aKey || !JS::GCThingIsMarkedGray(aKey)) &&
+      (!aMap || !JS::ObjectIsMarkedGray(aMap)) &&
+      aValue.kind() != JS::TraceKind::Shape) {
+    *aValueShouldBeBlack = true;
+  }
+}
+
 struct FixWeakMappingGrayBitsTracer : public js::WeakMapTracer
 {
   explicit FixWeakMappingGrayBitsTracer(JSContext* aCx)
@@ -246,39 +283,62 @@ struct FixWeakMappingGrayBitsTracer : public js::WeakMapTracer
 
   void trace(JSObject* aMap, JS::GCCellPtr aKey, JS::GCCellPtr aValue) override
   {
-    // If nothing that could be held alive by this entry is marked gray, return.
-    bool delegateMightNeedMarking = aKey && JS::GCThingIsMarkedGray(aKey);
-    bool valueMightNeedMarking = aValue && JS::GCThingIsMarkedGray(aValue) &&
-                                 aValue.kind() != JS::TraceKind::String;
-    if (!delegateMightNeedMarking && !valueMightNeedMarking) {
-      return;
+    bool keyShouldBeBlack;
+    bool valueShouldBeBlack;
+    ShouldWeakMappingEntryBeBlack(aMap, aKey, aValue,
+                                  &keyShouldBeBlack, &valueShouldBeBlack);
+    if (keyShouldBeBlack && JS::UnmarkGrayGCThingRecursively(aKey)) {
+      mAnyMarked = true;
     }
 
-    if (!AddToCCKind(aKey.kind())) {
-      aKey = nullptr;
-    }
-
-    if (delegateMightNeedMarking && aKey.is<JSObject>()) {
-      JSObject* kdelegate = js::GetWeakmapKeyDelegate(&aKey.as<JSObject>());
-      if (kdelegate && !JS::ObjectIsMarkedGray(kdelegate)) {
-        if (JS::UnmarkGrayGCThingRecursively(aKey)) {
-          mAnyMarked = true;
-        }
-      }
-    }
-
-    if (aValue && JS::GCThingIsMarkedGray(aValue) &&
-        (!aKey || !JS::GCThingIsMarkedGray(aKey)) &&
-        (!aMap || !JS::ObjectIsMarkedGray(aMap)) &&
-        aValue.kind() != JS::TraceKind::Shape) {
-      if (JS::UnmarkGrayGCThingRecursively(aValue)) {
-        mAnyMarked = true;
-      }
+    if (valueShouldBeBlack && JS::UnmarkGrayGCThingRecursively(aValue)) {
+      mAnyMarked = true;
     }
   }
 
   MOZ_INIT_OUTSIDE_CTOR bool mAnyMarked;
 };
+
+#ifdef DEBUG
+// Check whether weak maps are marked correctly according to the logic above.
+struct CheckWeakMappingGrayBitsTracer : public js::WeakMapTracer
+{
+  explicit CheckWeakMappingGrayBitsTracer(JSContext* aCx)
+    : js::WeakMapTracer(aCx), mFailed(false)
+  {
+  }
+
+  static bool
+  Check(JSContext* aCx)
+  {
+    CheckWeakMappingGrayBitsTracer tracer(aCx);
+    js::TraceWeakMaps(&tracer);
+    return !tracer.mFailed;
+  }
+
+  void trace(JSObject* aMap, JS::GCCellPtr aKey, JS::GCCellPtr aValue) override
+  {
+    bool keyShouldBeBlack;
+    bool valueShouldBeBlack;
+    ShouldWeakMappingEntryBeBlack(aMap, aKey, aValue,
+                                  &keyShouldBeBlack, &valueShouldBeBlack);
+
+    if (keyShouldBeBlack) {
+      fprintf(stderr, "Weak mapping key %p of map %p should be black\n",
+              aKey.asCell(), aMap);
+      mFailed = true;
+    }
+
+    if (valueShouldBeBlack) {
+      fprintf(stderr, "Weak mapping value %p of map %p should be black\n",
+              aValue.asCell(), aMap);
+      mFailed = true;
+    }
+  }
+
+  bool mFailed;
+};
+#endif // DEBUG
 
 static void
 CheckParticipatesInCycleCollection(JS::GCCellPtr aThing, const char* aName,
@@ -493,7 +553,7 @@ MozCrashWarningReporter(JSContext*, JSErrorReport*)
 }
 
 nsresult
-CycleCollectedJSContext::Initialize(JSContext* aParentContext,
+CycleCollectedJSContext::Initialize(JSRuntime* aParentRuntime,
                                     uint32_t aMaxBytes,
                                     uint32_t aMaxNurseryBytes)
 {
@@ -504,7 +564,7 @@ CycleCollectedJSContext::Initialize(JSContext* aParentContext,
   mBaseRecursionDepth = RecursionDepth();
 
   mozilla::dom::InitScriptSettings();
-  mJSContext = JS_NewContext(aMaxBytes, aMaxNurseryBytes, aParentContext);
+  mJSContext = JS_NewContext(aMaxBytes, aMaxNurseryBytes, aParentRuntime);
   if (!mJSContext) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -532,11 +592,7 @@ CycleCollectedJSContext::Initialize(JSContext* aParentContext,
 
   JS_SetObjectsTenuredCallback(mJSContext, JSObjectsTenuredCb, this);
   JS::SetOutOfMemoryCallback(mJSContext, OutOfMemoryCallback, this);
-  JS::SetLargeAllocationFailureCallback(mJSContext,
-                                        LargeAllocationFailureCallback, this);
   JS_SetExternalStringSizeofCallback(mJSContext, SizeofExternalStringCallback);
-  JS_SetDestroyZoneCallback(mJSContext, XPCStringConvert::FreeZoneCache);
-  JS_SetSweepZoneCallback(mJSContext, XPCStringConvert::ClearZoneCache);
   JS::SetBuildIdOp(mJSContext, GetBuildId);
   JS::SetWarningReporter(mJSContext, MozCrashWarningReporter);
 #ifdef MOZ_CRASHREPORTER
@@ -913,14 +969,6 @@ CycleCollectedJSContext::OutOfMemoryCallback(JSContext* aContext,
   self->OnOutOfMemory();
 }
 
-/* static */ void
-CycleCollectedJSContext::LargeAllocationFailureCallback(void* aData)
-{
-  CycleCollectedJSContext* self = static_cast<CycleCollectedJSContext*>(aData);
-
-  self->OnLargeAllocationFailure();
-}
-
 /* static */ size_t
 CycleCollectedJSContext::SizeofExternalStringCallback(JSString* aStr,
                                                       MallocSizeOf aMallocSizeOf)
@@ -1253,6 +1301,23 @@ CycleCollectedJSContext::FixWeakMappingGrayBits() const
   fixer.FixAll();
 }
 
+void
+CycleCollectedJSContext::CheckGrayBits() const
+{
+  MOZ_ASSERT(mJSContext);
+  MOZ_ASSERT(!JS::IsIncrementalGCInProgress(mJSContext),
+             "Don't call CheckGrayBits during a GC.");
+
+#ifndef ANDROID
+  // Bug 1346874 - The gray state check is expensive. Android tests are already
+  // slow enough that this check can easily push them over the threshold to a
+  // timeout.
+
+  MOZ_ASSERT(js::CheckGrayMarkingState(mJSContext));
+  MOZ_ASSERT(CheckWeakMappingGrayBitsTracer::Check(mJSContext));
+#endif
+}
+
 bool
 CycleCollectedJSContext::AreGCGrayBitsValid() const
 {
@@ -1280,7 +1345,7 @@ CycleCollectedJSContext::JSObjectsTenured()
   for (auto iter = mNurseryObjects.Iter(); !iter.Done(); iter.Next()) {
     nsWrapperCache* cache = iter.Get();
     JSObject* wrapper = cache->GetWrapperPreserveColor();
-    MOZ_ASSERT(wrapper);
+    MOZ_DIAGNOSTIC_ASSERT(wrapper);
     if (!JS::ObjectIsTenured(wrapper)) {
       MOZ_ASSERT(!cache->PreservingWrapper());
       const JSClass* jsClass = js::GetObjectJSClass(wrapper);
@@ -1479,7 +1544,8 @@ CycleCollectedJSContext::RunInMetastableState(already_AddRefed<nsIRunnable>&& aR
 
 IncrementalFinalizeRunnable::IncrementalFinalizeRunnable(CycleCollectedJSContext* aCx,
                                                          DeferredFinalizerTable& aFinalizers)
-  : mContext(aCx)
+  : Runnable("IncrementalFinalizeRunnable")
+  , mContext(aCx)
   , mFinalizeFunctionToRun(0)
   , mReleasing(false)
 {
@@ -1679,13 +1745,11 @@ CycleCollectedJSContext::OnOutOfMemory()
 }
 
 void
-CycleCollectedJSContext::OnLargeAllocationFailure()
+CycleCollectedJSContext::SetLargeAllocationFailure(OOMState aNewState)
 {
   MOZ_ASSERT(mJSContext);
 
-  AnnotateAndSetOutOfMemory(&mLargeAllocationFailureState, OOMState::Reporting);
-  CustomLargeAllocationFailureCallback();
-  AnnotateAndSetOutOfMemory(&mLargeAllocationFailureState, OOMState::Reported);
+  AnnotateAndSetOutOfMemory(&mLargeAllocationFailureState, aNewState);
 }
 
 void

@@ -4,8 +4,8 @@
 
 #include "ActiveLayerTracker.h"
 
+#include "mozilla/AnimationUtils.h"
 #include "mozilla/ArrayUtils.h"
-#include "mozilla/dom/KeyframeEffectReadOnly.h"
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/EffectSet.h"
 #include "mozilla/PodOperations.h"
@@ -105,7 +105,7 @@ public:
 
   // The scroll frame during for which we most recently received a call to
   // NotifyAnimatedFromScrollHandler.
-  nsWeakFrame mAnimatingScrollHandlerFrame;
+  WeakFrame mAnimatingScrollHandlerFrame;
   // The set of activities that were triggered during
   // mAnimatingScrollHandlerFrame's scroll event handler.
   EnumSet<ActivityIndex> mScrollHandlerInducedActivity;
@@ -119,9 +119,10 @@ class LayerActivityTracker final : public nsExpirationTracker<LayerActivity,4> {
 public:
   // 75-100ms is a good timeout period. We use 4 generations of 25ms each.
   enum { GENERATION_MS = 100 };
-  LayerActivityTracker()
+  explicit LayerActivityTracker(nsIEventTarget* aEventTarget)
     : nsExpirationTracker<LayerActivity,4>(GENERATION_MS,
-                                           "LayerActivityTracker")
+                                           "LayerActivityTracker",
+                                           aEventTarget)
     , mDestroying(false)
   {}
   ~LayerActivityTracker() {
@@ -132,7 +133,7 @@ public:
   virtual void NotifyExpired(LayerActivity* aObject);
 
 public:
-  nsWeakFrame mCurrentScrollHandlerFrame;
+  WeakFrame mCurrentScrollHandlerFrame;
 
 private:
   bool mDestroying;
@@ -203,7 +204,8 @@ GetLayerActivityForUpdate(nsIFrame* aFrame)
     gLayerActivityTracker->MarkUsed(layerActivity);
   } else {
     if (!gLayerActivityTracker) {
-      gLayerActivityTracker = new LayerActivityTracker();
+      gLayerActivityTracker = new LayerActivityTracker(
+        SystemGroup::EventTargetFor(TaskCategory::Other));
     }
     layerActivity = new LayerActivity(aFrame);
     gLayerActivityTracker->AddObject(layerActivity);
@@ -473,36 +475,6 @@ ActiveLayerTracker::IsOffsetOrMarginStyleAnimated(nsIFrame* aFrame)
   return false;
 }
 
-// A helper function for IsScaleSubjectToAnimation which returns true if the
-// given EffectSet contains a current effect that animates scale.
-static bool
-ContainsAnimatedScale(EffectSet& aEffects, nsIFrame* aFrame)
-{
-  for (dom::KeyframeEffectReadOnly* effect : aEffects) {
-    if (!effect->IsCurrent()) {
-      continue;
-    }
-
-    for (const AnimationProperty& prop : effect->Properties()) {
-      if (prop.mProperty != eCSSProperty_transform) {
-        continue;
-      }
-      for (AnimationPropertySegment segment : prop.mSegments) {
-        gfxSize from = segment.mFromValue.GetScaleValue(aFrame);
-        if (from != gfxSize(1.0f, 1.0f)) {
-          return true;
-        }
-        gfxSize to = segment.mToValue.GetScaleValue(aFrame);
-        if (to != gfxSize(1.0f, 1.0f)) {
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
 /* static */ bool
 ActiveLayerTracker::IsScaleSubjectToAnimation(nsIFrame* aFrame)
 {
@@ -515,7 +487,8 @@ ActiveLayerTracker::IsScaleSubjectToAnimation(nsIFrame* aFrame)
   // Check if any animations, transitions, etc. associated with this frame may
   // animate its scale.
   EffectSet* effects = EffectSet::GetEffectSet(aFrame);
-  if (effects && ContainsAnimatedScale(*effects, aFrame)) {
+  if (effects &&
+      AnimationUtils::EffectSetContainsAnimatedScale(*effects, aFrame)) {
     return true;
   }
 
@@ -540,7 +513,8 @@ ActiveLayerTracker::IsContentActive(nsIFrame* aFrame)
 ActiveLayerTracker::SetCurrentScrollHandlerFrame(nsIFrame* aFrame)
 {
   if (!gLayerActivityTracker) {
-    gLayerActivityTracker = new LayerActivityTracker();
+    gLayerActivityTracker = new LayerActivityTracker(
+      SystemGroup::EventTargetFor(TaskCategory::Other));
   }
   gLayerActivityTracker->mCurrentScrollHandlerFrame = aFrame;
 }

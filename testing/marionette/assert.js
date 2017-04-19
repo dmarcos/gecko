@@ -22,6 +22,26 @@ const isFirefox = () => Services.appinfo.name == "Firefox";
 this.assert = {};
 
 /**
+ * Asserts that Marionette has a session.
+ *
+ * @param {GeckoDriver} driver
+ *     Marionette driver instance.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @return {string}
+ *     Session ID.
+ *
+ * @throws {InvalidSessionIDError}
+ *     If |driver| does not have a session ID.
+ */
+assert.session = function (driver, msg = "") {
+  assert.that(sessionID => sessionID,
+      msg, InvalidSessionIDError)(driver.sessionId);
+  return driver.sessionId;
+};
+
+/**
  * Asserts that the current browser is Firefox Desktop.
  *
  * @param {string=} msg
@@ -80,7 +100,7 @@ assert.b2g = function (msg = "") {
 assert.content = function (context, msg = "") {
   msg = msg || "Only supported in content context";
   assert.that(c => c.toString() == "content", msg, UnsupportedOperationError)(context);
-}
+};
 
 /**
  * Asserts that the current browser is a mobile browser, that is either
@@ -96,6 +116,33 @@ assert.mobile = function (msg = "") {
   msg = msg || "Only supported in Fennec or B2G";
   assert.that(() => isFennec() || isB2G(), msg, UnsupportedOperationError)();
 };
+
+/**
+ * Asserts that |win| is open.
+ *
+ * @param {ChromeWindow} win
+ *     Chrome window to test.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @return {ChromeWindow}
+ *     |win| is returned unaltered.
+ *
+ * @throws {NoSuchWindowError}
+ *     If |win| has been closed.
+ */
+assert.window = function (win, msg = "") {
+  msg = msg || "Unable to locate window";
+  return assert.that(w => {
+    try {
+      return w && w.document.defaultView;
+
+    // If the window is no longer available a TypeError is thrown.
+    } catch (e if e.name === "TypeError") {
+      return null;
+    }
+  }, msg, NoSuchWindowError)(win);
+}
 
 /**
  * Asserts that |obj| is defined.
@@ -114,6 +161,44 @@ assert.mobile = function (msg = "") {
 assert.defined = function (obj, msg = "") {
   msg = msg || error.pprint`Expected ${obj} to be defined`;
   return assert.that(o => typeof o != "undefined", msg)(obj);
+};
+
+/**
+ * Asserts that |obj| is a finite number.
+ *
+ * @param {?} obj
+ *     Value to test.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @return {number}
+ *     |obj| is returned unaltered.
+ *
+ * @throws {InvalidArgumentError}
+ *     If |obj| is not a number.
+ */
+assert.number = function (obj, msg = "") {
+  msg = msg || error.pprint`Expected ${obj} to be finite number`;
+  return assert.that(Number.isFinite, msg)(obj);
+};
+
+/**
+ * Asserts that |obj| is callable.
+ *
+ * @param {?} obj
+ *     Value to test.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @return {Function}
+ *     |obj| is returned unaltered.
+ *
+ * @throws {InvalidArgumentError}
+ *     If |obj| is not callable.
+ */
+assert.callable = function (obj, msg = "") {
+  msg = msg || error.pprint`${obj} is not callable`;
+  return assert.that(o => typeof o == "function", msg)(obj);
 };
 
 /**
@@ -209,8 +294,12 @@ assert.string = function (obj, msg = "") {
  */
 assert.object = function (obj, msg = "") {
   msg = msg || error.pprint`Expected ${obj} to be an object`;
-  return assert.that(o =>
-      Object.prototype.toString.call(o) == "[object Object]", msg)(obj);
+  return assert.that(o => {
+    // unable to use instanceof because LHS and RHS may come from
+    // different globals
+    let s = Object.prototype.toString.call(o);
+    return s == "[object Object]" || s == "[object nsJSIID]";
+  })(obj);
 };
 
 /**

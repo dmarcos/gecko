@@ -20,20 +20,27 @@ function checkStateRead(aSubject, aTopic, aData) {
 
   equal(aData, SSS_STATE_FILE_NAME);
 
-  ok(gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
-                             "example0.example.com", 0));
-  ok(gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
-                             "example423.example.com", 0));
-  ok(gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
-                             "example1023.example.com", 0));
-  ok(!gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
-                              "example1024.example.com", 0));
-  ok(!gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
-                              "example1025.example.com", 0));
-  ok(!gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
-                              "example9000.example.com", 0));
-  ok(!gSSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
-                              "example99999.example.com", 0));
+  ok(gSSService.isSecureURI(Ci.nsISiteSecurityService.HEADER_HSTS,
+                            Services.io.newURI("https://example0.example.com"),
+                            0));
+  ok(gSSService.isSecureURI(
+       Ci.nsISiteSecurityService.HEADER_HSTS,
+       Services.io.newURI("https://example423.example.com"), 0));
+  ok(gSSService.isSecureURI(
+       Ci.nsISiteSecurityService.HEADER_HSTS,
+       Services.io.newURI("https://example1023.example.com"), 0));
+  ok(!gSSService.isSecureURI(
+       Ci.nsISiteSecurityService.HEADER_HSTS,
+       Services.io.newURI("https://example1024.example.com"), 0));
+  ok(!gSSService.isSecureURI(
+       Ci.nsISiteSecurityService.HEADER_HSTS,
+       Services.io.newURI("https://example1025.example.com"), 0));
+  ok(!gSSService.isSecureURI(
+       Ci.nsISiteSecurityService.HEADER_HSTS,
+       Services.io.newURI("https://example9000.example.com"), 0));
+  ok(!gSSService.isSecureURI(
+       Ci.nsISiteSecurityService.HEADER_HSTS,
+       Services.io.newURI("https://example99999.example.com"), 0));
   do_test_finished();
 }
 
@@ -52,7 +59,7 @@ function run_test() {
     writeLine("example" + i + ".example.com:HSTS\t0000000000000000000000000000000000000000000000000\t00000000000000000000000000000000000000\t" + (now + 100000) + ",1,0000000000000000000000000000000000000000000000000000000000000000000000000\n", outputStream);
   }
   outputStream.close();
-  Services.obs.addObserver(checkStateRead, "data-storage-ready", false);
+  Services.obs.addObserver(checkStateRead, "data-storage-ready");
   do_test_pending();
   gSSService = Cc["@mozilla.org/ssservice;1"]
                  .getService(Ci.nsISiteSecurityService);

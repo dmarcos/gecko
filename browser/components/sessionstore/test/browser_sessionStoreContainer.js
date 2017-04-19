@@ -87,12 +87,11 @@ function* openTabInUserContext(userContextId) {
 function waitForNewCookie() {
   return new Promise(resolve => {
     Services.obs.addObserver(function observer(subj, topic, data) {
-      let cookie = subj.QueryInterface(Ci.nsICookie2);
       if (data == "added") {
         Services.obs.removeObserver(observer, topic);
         resolve();
       }
-    }, "cookie-changed", false);
+    }, "cookie-changed");
   });
 }
 
@@ -111,7 +110,8 @@ add_task(function* test() {
     "set": [ [ "privacy.userContext.enabled", true ] ]
   });
 
-  let lastSessionRestore;
+  Services.cookies.removeAll();
+
   for (let userContextId of Object.keys(USER_CONTEXTS)) {
     // Load the page in 3 different contexts and set a cookie
     // which should only be visible in that context.
@@ -122,20 +122,18 @@ add_task(function* test() {
 
     yield Promise.all([
       waitForNewCookie(),
-      ContentTask.spawn(browser, cookie, cookie => content.document.cookie = cookie)
+      ContentTask.spawn(browser, cookie,
+        passedCookie => content.document.cookie = passedCookie)
     ]);
 
     // Ensure the tab's session history is up-to-date.
     yield TabStateFlusher.flush(browser);
 
-    lastSessionRestore = ss.getWindowState(window);
-
     // Remove the tab.
     gBrowser.removeTab(tab);
   }
 
-  let state = JSON.parse(lastSessionRestore);
-  is(state.windows[0].cookies.length, USER_CONTEXTS.length,
+  let state = JSON.parse(ss.getBrowserState());
+  is(state.cookies.length, USER_CONTEXTS.length,
     "session restore should have each container's cookie");
 });
-

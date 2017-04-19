@@ -3,6 +3,8 @@
 
 #include <jni.h>
 
+#include "nsThreadUtils.h"
+
 #include "mozilla/IndexSequence.h"
 #include "mozilla/Move.h"
 #include "mozilla/RefPtr.h"
@@ -426,6 +428,13 @@ class ProxyNativeCall : public AbstractCall
         mozilla::Unused << dummy;
     }
 
+    static Impl* GetNativeObject(Class::Param thisArg) { return nullptr; }
+
+    static Impl* GetNativeObject(typename Owner::Param thisArg)
+    {
+        return NativePtr<Impl>::Get(GetEnvForThread(), thisArg.Get());
+    }
+
 public:
     // The class that implements the call target.
     typedef Impl TargetClass;
@@ -447,6 +456,10 @@ public:
 
     // Get class ref for static calls or object ref for instance calls.
     typename ThisArgClass::Param GetThisArg() const { return mThisArg; }
+
+    // Get the native object targeted by this call.
+    // Returns nullptr for static calls.
+    Impl* GetNativeObject() const { return GetNativeObject(mThisArg); }
 
     // Return if target is the given function pointer / pointer-to-member.
     // Because we can only compare pointers of the same type, we use a
@@ -493,22 +506,40 @@ struct Dispatcher
     template<class Traits, bool IsStatic = Traits::isStatic,
              typename ThisArg, typename... ProxyArgs>
     static typename EnableIf<
+            Traits::dispatchTarget == DispatchTarget::GECKO_PRIORITY, void>::Type
+    Run(ThisArg thisArg, ProxyArgs&&... args)
+    {
+        // For a static method, do not forward the "this arg" (i.e. the class
+        // local ref) if the implementation does not request it. This saves us
+        // a pair of calls to add/delete global ref.
+        DispatchToGeckoPriorityQueue(MakeUnique<ProxyNativeCall<
+                Impl, typename Traits::Owner, IsStatic, HasThisArg,
+                Args...>>(HasThisArg || !IsStatic ? thisArg : nullptr,
+                          Forward<ProxyArgs>(args)...));
+    }
+
+    template<class Traits, bool IsStatic = Traits::isStatic,
+             typename ThisArg, typename... ProxyArgs>
+    static typename EnableIf<
             Traits::dispatchTarget == DispatchTarget::GECKO, void>::Type
     Run(ThisArg thisArg, ProxyArgs&&... args)
     {
         // For a static method, do not forward the "this arg" (i.e. the class
         // local ref) if the implementation does not request it. This saves us
         // a pair of calls to add/delete global ref.
-        DispatchToGeckoThread(MakeUnique<ProxyNativeCall<
+        NS_DispatchToMainThread(NS_NewRunnableFunction(ProxyNativeCall<
                 Impl, typename Traits::Owner, IsStatic, HasThisArg,
-                Args...>>(HasThisArg || !IsStatic ? thisArg : nullptr,
-                          Forward<ProxyArgs>(args)...));
+                Args...>(HasThisArg || !IsStatic ? thisArg : nullptr,
+                          Forward<ProxyArgs>(args)...)));
     }
 
     template<class Traits, bool IsStatic = false, typename... ProxyArgs>
     static typename EnableIf<
             Traits::dispatchTarget == DispatchTarget::CURRENT, void>::Type
-    Run(ProxyArgs&&... args) {}
+    Run(ProxyArgs&&... args)
+    {
+        MOZ_CRASH("Unreachable code");
+    }
 };
 
 } // namespace detail

@@ -22,6 +22,7 @@
 
 class nsCSSPropertyIDSet;
 class nsCSSValue;
+class nsFontMetrics;
 class nsIStyleRule;
 class nsStyleContext;
 class nsStyleCoord;
@@ -797,6 +798,18 @@ public:
                                  bool aConvertListItem = false);
   static void EnsureInlineDisplay(mozilla::StyleDisplay& display);
 
+  static already_AddRefed<nsFontMetrics> GetMetricsFor(nsPresContext* aPresContext,
+                                                       bool aIsVertical,
+                                                       const nsStyleFont* aStyleFont,
+                                                       nscoord aFontSize,
+                                                       bool aUseUserFontSet);
+
+  static already_AddRefed<nsFontMetrics> GetMetricsFor(nsPresContext* aPresContext,
+                                                       nsStyleContext* aStyleContext,
+                                                       const nsStyleFont* aStyleFont,
+                                                       nscoord aFontSize,
+                                                       bool aUseUserFontSet);
+
   // Transition never returns null; on out of memory it'll just return |this|.
   nsRuleNode* Transition(nsIStyleRule* aRule, mozilla::SheetType aLevel,
                          bool aIsImportantRule);
@@ -1040,6 +1053,8 @@ public:
                                         nsPresContext* aPresContext,
                                         nsFontSizeType aFontSizeType = eFontSize_HTML);
 
+  static uint32_t ParseFontLanguageOverride(const nsAString& aLangTag);
+
   /**
    * @param aValue The color value, returned from nsCSSParser::ParseColorString
    * @param aPresContext Presentation context whose preferences are used
@@ -1083,6 +1098,32 @@ private:
   static void StoreStyleOnContext(nsStyleContext* aContext,
                                   nsStyleStructID aSID,
                                   void* aStruct);
+};
+
+/**
+ * We allocate arrays of CSS values with alloca.  (These arrays are a
+ * fixed size per style struct, but we don't want to waste the
+ * allocation and construction/destruction costs of the big structs when
+ * we're handling much smaller ones.)  Since the lifetime of an alloca
+ * allocation is the life of the calling function, the caller must call
+ * alloca.  However, to ensure that constructors and destructors are
+ * balanced, we do the constructor and destructor calling from this RAII
+ * class, AutoCSSValueArray.
+ */
+struct AutoCSSValueArray
+{
+  /**
+   * aStorage must be the result of alloca(aCount * sizeof(nsCSSValue))
+   */
+  AutoCSSValueArray(void* aStorage, size_t aCount);
+
+  ~AutoCSSValueArray();
+
+  nsCSSValue* get() { return mArray; }
+
+private:
+  nsCSSValue *mArray;
+  size_t mCount;
 };
 
 #endif

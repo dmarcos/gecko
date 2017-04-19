@@ -690,8 +690,7 @@ PK11_FindCertsFromEmailAddress(const char *email, void *wincx)
     }
 
     /* empty list? */
-    if (CERT_LIST_HEAD(cbparam.certList) == NULL ||
-        CERT_LIST_END(CERT_LIST_HEAD(cbparam.certList), cbparam.certList)) {
+    if (CERT_LIST_EMPTY(cbparam.certList)) {
         CERT_DestroyCertList(cbparam.certList);
         cbparam.certList = NULL;
     }
@@ -823,10 +822,6 @@ PK11_FindCertsFromNickname(const char *nickname, void *wincx)
             } else {
                 nssCertificate_Destroy(c);
             }
-        }
-        if (certList && CERT_LIST_HEAD(certList) == NULL) {
-            CERT_DestroyCertList(certList);
-            certList = NULL;
         }
         /* all the certs have been adopted or freed, free the  raw array */
         nss_ZFreeIf(foundCerts);
@@ -979,8 +974,10 @@ PK11_ImportCert(PK11SlotInfo *slot, CERTCertificate *cert,
         nssCertificateStore_RemoveCertLOCKED(cc->certStore, c);
         nssCertificateStore_Unlock(cc->certStore, &lockTrace, &unlockTrace);
         c->object.cryptoContext = NULL;
+        CERT_LockCertTempPerm(cert);
         cert->istemp = PR_FALSE;
         cert->isperm = PR_TRUE;
+        CERT_UnlockCertTempPerm(cert);
     }
 
     /* add the new instance to the cert, force an update of the

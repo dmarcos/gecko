@@ -292,7 +292,6 @@ VRDisplayOSVR::GetSensorState()
 
   VRHMDSensorState result;
   OSVR_TimeValue timestamp;
-  result.Clear();
 
   OSVR_OrientationState orientation;
 
@@ -319,12 +318,6 @@ VRDisplayOSVR::GetSensorState()
   }
 
   return result;
-}
-
-VRHMDSensorState
-VRDisplayOSVR::GetImmediateSensorState()
-{
-  return GetSensorState();
 }
 
 #if defined(XP_WIN)
@@ -500,6 +493,12 @@ VRSystemManagerOSVR::Init()
 void
 VRSystemManagerOSVR::Destroy()
 {
+  Shutdown();
+}
+
+void
+VRSystemManagerOSVR::Shutdown()
+{
   if (mOSVRInitialized) {
     MOZ_ASSERT(NS_GetCurrentThread() == mOSVRThread);
     mOSVRThread = nullptr;
@@ -521,7 +520,7 @@ VRSystemManagerOSVR::GetHMDs(nsTArray<RefPtr<VRDisplayHost>>& aHMDResult)
   // make sure context, interface and display are initialized
   CheckOSVRStatus();
 
-  if (!mOSVRInitialized) {
+  if (!Init()) {
     return;
   }
 
@@ -532,27 +531,33 @@ VRSystemManagerOSVR::GetHMDs(nsTArray<RefPtr<VRDisplayHost>>& aHMDResult)
   }
 }
 
+bool
+VRSystemManagerOSVR::GetIsPresenting()
+{
+  if (mHMDInfo) {
+    VRDisplayInfo displayInfo(mHMDInfo->GetDisplayInfo());
+    return displayInfo.GetIsPresenting();
+  }
+
+  return false;
+}
+
 void
 VRSystemManagerOSVR::HandleInput()
 {
 }
 
 void
-VRSystemManagerOSVR::HandleButtonPress(uint32_t aControllerIdx,
-                                       uint64_t aButtonPressed)
+VRSystemManagerOSVR::VibrateHaptic(uint32_t aControllerIdx,
+                                   uint32_t aHapticIndex,
+                                   double aIntensity,
+                                   double aDuration,
+                                   uint32_t aPromiseID)
 {
 }
 
 void
-VRSystemManagerOSVR::HandleAxisMove(uint32_t aControllerIdx, uint32_t aAxis,
-                                    float aValue)
-{
-}
-
-void
-VRSystemManagerOSVR::HandlePoseTracking(uint32_t aControllerIdx,
-                                        const GamepadPoseState& aPose,
-                                        VRControllerHost* aController)
+VRSystemManagerOSVR::StopVibrateHaptic(uint32_t aControllerIdx)
 {
 }
 

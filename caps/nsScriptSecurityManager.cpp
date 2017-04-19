@@ -20,9 +20,8 @@
 #include "nspr.h"
 #include "nsJSPrincipals.h"
 #include "mozilla/BasePrincipal.h"
-#include "nsSystemPrincipal.h"
-#include "nsPrincipal.h"
-#include "nsNullPrincipal.h"
+#include "SystemPrincipal.h"
+#include "NullPrincipal.h"
 #include "DomainPolicy.h"
 #include "nsXPIDLString.h"
 #include "nsCRT.h"
@@ -64,7 +63,6 @@
 #include "nsContentUtils.h"
 #include "nsJSUtils.h"
 #include "nsILoadInfo.h"
-#include "nsXPCOMStrings.h"
 
 // This should be probably defined on some other place... but I couldn't find it
 #define WEBAPPS_PERM_NAME "webapps-manage"
@@ -270,10 +268,78 @@ nsScriptSecurityManager::GetChannelResultPrincipal(nsIChannel* aChannel,
                                                    nsIPrincipal** aPrincipal,
                                                    bool aIgnoreSandboxing)
 {
-    NS_PRECONDITION(aChannel, "Must have channel!");
-    // Check whether we have an nsILoadInfo that says what we should do.
-    nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
-    if (loadInfo && loadInfo->GetForceInheritPrincipalOverruleOwner()) {
+  NS_PRECONDITION(aChannel, "Must have channel!");
+  // Check whether we have an nsILoadInfo that says what we should do.
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
+  if (loadInfo && loadInfo->GetForceInheritPrincipalOverruleOwner()) {
+    nsCOMPtr<nsIPrincipal> principalToInherit = loadInfo->PrincipalToInherit();
+    if (!principalToInherit) {
+      principalToInherit = loadInfo->TriggeringPrincipal();
+    }
+    principalToInherit.forget(aPrincipal);
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsISupports> owner;
+  aChannel->GetOwner(getter_AddRefs(owner));
+  if (owner) {
+    CallQueryInterface(owner, aPrincipal);
+    if (*aPrincipal) {
+      return NS_OK;
+    }
+  }
+
+  if (loadInfo) {
+        if (!aIgnoreSandboxing && loadInfo->GetLoadingSandboxed()) {
+          MOZ_ALWAYS_TRUE(NS_SUCCEEDED(loadInfo->GetSandboxedLoadingPrincipal(aPrincipal)));
+          MOZ_ASSERT(*aPrincipal);
+            // if the new NullPrincipal (above) loads an iframe[srcdoc], we
+            // need to inherit an existing CSP to avoid bypasses (bug 1073952).
+            // We continue inheriting for nested frames with e.g., data: URLs.
+            if (loadInfo->GetExternalContentPolicyType() == nsIContentPolicy::TYPE_SUBDOCUMENT) {
+              nsCOMPtr<nsIURI> uri;
+              aChannel->GetURI(getter_AddRefs(uri));
+              nsAutoCString URISpec;
+              uri->GetSpec(URISpec);
+              bool isData = (NS_SUCCEEDED(uri->SchemeIs("data", &isData)) && isData);
+              if (URISpec.EqualsLiteral("about:srcdoc") || isData) {
+                nsCOMPtr<nsIPrincipal> principalToInherit = loadInfo->PrincipalToInherit();
+                if (!principalToInherit) {
+                  principalToInherit = loadInfo->TriggeringPrincipal();
+                }
+                nsCOMPtr<nsIContentSecurityPolicy> originalCSP;
+                principalToInherit->GetCsp(getter_AddRefs(originalCSP));
+                if (originalCSP) {
+                  // if the principalToInherit had a CSP,
+                  // add it to the newly created NullPrincipal
+                  // (unless it already has one)
+                  nsCOMPtr<nsIContentSecurityPolicy> nullPrincipalCSP;
+                  (*aPrincipal)->GetCsp(getter_AddRefs(nullPrincipalCSP));
+                  if (nullPrincipalCSP) {
+                    MOZ_ASSERT(nullPrincipalCSP == originalCSP,
+                              "There should be no other CSP here.");
+                    // CSPs are equal, no need to set it again.
+                    return NS_OK;
+                  } else {
+                    nsresult rv = (*aPrincipal)->SetCsp(originalCSP);
+                    NS_ENSURE_SUCCESS(rv, rv);
+                  }
+                }
+              }
+            }
+          return NS_OK;
+        }
+
+    bool forceInherit = loadInfo->GetForceInheritPrincipal();
+    if (aIgnoreSandboxing && !forceInherit) {
+      // Check if SEC_FORCE_INHERIT_PRINCIPAL was dropped because of
+      // sandboxing:
+      if (loadInfo->GetLoadingSandboxed() &&
+        loadInfo->GetForceInheritPrincipalDropped()) {
+        forceInherit = true;
+      }
+    }
+    if (forceInherit) {
       nsCOMPtr<nsIPrincipal> principalToInherit = loadInfo->PrincipalToInherit();
       if (!principalToInherit) {
         principalToInherit = loadInfo->TriggeringPrincipal();
@@ -282,90 +348,33 @@ nsScriptSecurityManager::GetChannelResultPrincipal(nsIChannel* aChannel,
       return NS_OK;
     }
 
-    nsCOMPtr<nsISupports> owner;
-    aChannel->GetOwner(getter_AddRefs(owner));
-    if (owner) {
-        CallQueryInterface(owner, aPrincipal);
-        if (*aPrincipal) {
-            return NS_OK;
-        }
+    auto securityMode = loadInfo->GetSecurityMode();
+    // The data: inheritance flags should only apply to the initial load,
+    // not to loads that it might have redirected to.
+    if (loadInfo->RedirectChain().IsEmpty() &&
+        (securityMode == nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS ||
+         securityMode == nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS ||
+         securityMode == nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS)) {
+
+      nsCOMPtr<nsIURI> uri;
+      nsresult rv = NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
+      NS_ENSURE_SUCCESS(rv, rv);
+      nsCOMPtr<nsIPrincipal> principalToInherit = loadInfo->PrincipalToInherit();
+      if (!principalToInherit) {
+        principalToInherit = loadInfo->TriggeringPrincipal();
+      }
+      bool inheritForAboutBlank = loadInfo->GetAboutBlankInherits();
+
+      if (nsContentUtils::ChannelShouldInheritPrincipal(principalToInherit,
+                                                        uri,
+                                                        inheritForAboutBlank,
+                                                        false)) {
+        principalToInherit.forget(aPrincipal);
+        return NS_OK;
+      }
     }
-
-    if (loadInfo) {
-        if (!aIgnoreSandboxing && loadInfo->GetLoadingSandboxed()) {
-            RefPtr<nsNullPrincipal> prin;
-            if (loadInfo->LoadingPrincipal()) {
-              prin =
-                nsNullPrincipal::CreateWithInheritedAttributes(loadInfo->LoadingPrincipal());
-            } else {
-              OriginAttributes attrs;
-              loadInfo->GetOriginAttributes(&attrs);
-              attrs.StripAttributes(OriginAttributes::STRIP_ADDON_ID);
-              prin = nsNullPrincipal::Create(attrs);
-            }
-            prin.forget(aPrincipal);
-            return NS_OK;
-        }
-
-        bool forceInherit = loadInfo->GetForceInheritPrincipal();
-        if (aIgnoreSandboxing && !forceInherit) {
-          // Check if SEC_FORCE_INHERIT_PRINCIPAL was dropped because of
-          // sandboxing:
-          if (loadInfo->GetLoadingSandboxed() &&
-              loadInfo->GetForceInheritPrincipalDropped()) {
-            forceInherit = true;
-          }
-        }
-        if (forceInherit) {
-            nsCOMPtr<nsIPrincipal> principalToInherit = loadInfo->PrincipalToInherit();
-            if (!principalToInherit) {
-              principalToInherit = loadInfo->TriggeringPrincipal();
-            }
-            principalToInherit.forget(aPrincipal);
-            return NS_OK;
-        }
-
-        nsSecurityFlags securityFlags = loadInfo->GetSecurityMode();
-        // The data: inheritance flags should only apply to the initial load,
-        // not to loads that it might have redirected to.
-        if (loadInfo->RedirectChain().IsEmpty() &&
-            (securityFlags == nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS ||
-             securityFlags == nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS ||
-             securityFlags == nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS)) {
-
-            nsCOMPtr<nsIURI> uri;
-            nsresult rv = NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
-            NS_ENSURE_SUCCESS(rv, rv); 
-            nsCOMPtr<nsIPrincipal> principalToInherit = loadInfo->PrincipalToInherit();
-            if (!principalToInherit) {
-              principalToInherit = loadInfo->TriggeringPrincipal();
-            }
-            bool inheritForAboutBlank = loadInfo->GetAboutBlankInherits();
-
-            if (nsContentUtils::ChannelShouldInheritPrincipal(principalToInherit,
-                                                              uri,
-                                                              inheritForAboutBlank,
-                                                              false)) {
-                principalToInherit.forget(aPrincipal);
-                return NS_OK;
-            }
-        }
-    }
-    return GetChannelURIPrincipal(aChannel, aPrincipal);
-}
-
-nsresult
-nsScriptSecurityManager::MaybeSetAddonIdFromURI(OriginAttributes& aAttrs, nsIURI* aURI)
-{
-  nsAutoCString scheme;
-  nsresult rv = aURI->GetScheme(scheme);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (scheme.EqualsLiteral("moz-extension") && GetAddonPolicyService()) {
-    rv = GetAddonPolicyService()->ExtensionURIToAddonId(aURI, aAttrs.mAddonId);
-    NS_ENSURE_SUCCESS(rv, rv);
   }
-
-  return NS_OK;
+  return GetChannelURIPrincipal(aChannel, aPrincipal);
 }
 
 /* The principal of the URI that this channel is loading. This is never
@@ -403,11 +412,11 @@ nsScriptSecurityManager::GetChannelURIPrincipal(nsIChannel* aChannel,
 
     // For addons loadInfo might be null.
     if (loadInfo) {
-      attrs.Inherit(loadInfo->GetOriginAttributes());
+      attrs = loadInfo->GetOriginAttributes();
     }
-    rv = MaybeSetAddonIdFromURI(attrs, uri);
-    NS_ENSURE_SUCCESS(rv, rv);
-    nsCOMPtr<nsIPrincipal> prin = BasePrincipal::CreateCodebasePrincipal(uri, attrs);
+
+    nsCOMPtr<nsIPrincipal> prin =
+      BasePrincipal::CreateCodebasePrincipal(uri, attrs);
     prin.forget(aPrincipal);
     return *aPrincipal ? NS_OK : NS_ERROR_FAILURE;
 }
@@ -529,19 +538,6 @@ nsScriptSecurityManager::CheckLoadURIFromScript(JSContext *cx, nsIURI *aURI)
     if (NS_SUCCEEDED(rv)) {
         // OK to load
         return NS_OK;
-    }
-
-    // See if we're attempting to load a file: URI. If so, let a
-    // UniversalXPConnect capability trump the above check.
-    bool isFile = false;
-    bool isRes = false;
-    if (NS_FAILED(aURI->SchemeIs("file", &isFile)) ||
-        NS_FAILED(aURI->SchemeIs("resource", &isRes)))
-        return NS_ERROR_FAILURE;
-    if (isFile || isRes)
-    {
-        if (nsContentUtils::IsCallerChrome())
-            return NS_OK;
     }
 
     // Report error.
@@ -754,14 +750,48 @@ nsScriptSecurityManager::CheckLoadURIWithPrincipal(nsIPrincipal* aPrincipal,
         currentOtherURI->GetScheme(otherScheme);
 
         bool schemesMatch = scheme.Equals(otherScheme, stringComparator);
-        bool isSamePage;
+        bool isSamePage = false;
         // about: URIs are special snowflakes.
-        if (scheme.EqualsLiteral("about")) {
-            nsAutoCString module, otherModule;
-            isSamePage = schemesMatch &&
-                NS_SUCCEEDED(NS_GetAboutModuleName(currentURI, module)) &&
-                NS_SUCCEEDED(NS_GetAboutModuleName(currentOtherURI, otherModule)) &&
-                module.Equals(otherModule);
+        if (scheme.EqualsLiteral("about") && schemesMatch) {
+            nsAutoCString moduleName, otherModuleName;
+            // about: pages can always link to themselves:
+            isSamePage =
+              NS_SUCCEEDED(NS_GetAboutModuleName(currentURI, moduleName)) &&
+              NS_SUCCEEDED(NS_GetAboutModuleName(currentOtherURI, otherModuleName)) &&
+              moduleName.Equals(otherModuleName);
+            if (!isSamePage) {
+                // We will have allowed the load earlier if the source page has
+                // system principal. So we know the source has a content
+                // principal, and it's trying to link to something else.
+                // Linkable about: pages are always reachable, even if we hit
+                // the CheckLoadURIFlags call below.
+                // We punch only 1 other hole: iff the source is unlinkable,
+                // we let them link to other pages explicitly marked SAFE
+                // for content. This avoids world-linkable about: pages linking
+                // to non-world-linkable about: pages.
+                nsCOMPtr<nsIAboutModule> module, otherModule;
+                bool knowBothModules =
+                    NS_SUCCEEDED(NS_GetAboutModule(currentURI, getter_AddRefs(module))) &&
+                    NS_SUCCEEDED(NS_GetAboutModule(currentOtherURI, getter_AddRefs(otherModule)));
+                uint32_t aboutModuleFlags = 0;
+                uint32_t otherAboutModuleFlags = 0;
+                knowBothModules = knowBothModules &&
+                    NS_SUCCEEDED(module->GetURIFlags(currentURI, &aboutModuleFlags)) &&
+                    NS_SUCCEEDED(otherModule->GetURIFlags(currentOtherURI, &otherAboutModuleFlags));
+                if (knowBothModules) {
+                    isSamePage =
+                        !(aboutModuleFlags & nsIAboutModule::MAKE_LINKABLE) &&
+                        (otherAboutModuleFlags & nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT);
+                    if (isSamePage && otherAboutModuleFlags & nsIAboutModule::MAKE_LINKABLE) {
+                        //XXXgijs: this is a hack. The target will be nested
+                        // (with innerURI of moz-safe-about:whatever), and
+                        // the source isn't, so we won't pass if we finish
+                        // the loop. We *should* pass, though, so return here.
+                        // This hack can go away when bug 1228118 is fixed.
+                        return NS_OK;
+                    }
+                }
+            }
         } else {
             bool equalExceptRef = false;
             rv = currentURI->EqualsExceptRef(currentOtherURI, &equalExceptRef);
@@ -878,12 +908,21 @@ nsScriptSecurityManager::CheckLoadURIFlags(nsIURI *aSourceURI,
             }
         }
 
-        // Special-case the hidden window: it's allowed to load
-        // URI_IS_UI_RESOURCE no matter what.  Bug 1145470 tracks removing this.
-        nsAutoCString sourceSpec;
-        if (NS_SUCCEEDED(aSourceBaseURI->GetSpec(sourceSpec)) &&
-            sourceSpec.EqualsLiteral("resource://gre-resources/hiddenWindow.html")) {
-            return NS_OK;
+        static bool sCanLoadChromeInContent = false;
+        static bool sCachedCanLoadChromeInContentPref = false;
+        if (!sCachedCanLoadChromeInContentPref) {
+            sCachedCanLoadChromeInContentPref = true;
+            mozilla::Preferences::AddBoolVarCache(&sCanLoadChromeInContent,
+                "security.allow_chrome_frames_inside_content");
+        }
+        if (sCanLoadChromeInContent) {
+            // Special-case the hidden window: it's allowed to load
+            // URI_IS_UI_RESOURCE no matter what.  Bug 1145470 tracks removing this.
+            nsAutoCString sourceSpec;
+            if (NS_SUCCEEDED(aSourceBaseURI->GetSpec(sourceSpec)) &&
+                sourceSpec.EqualsLiteral("resource://gre-resources/hiddenWindow.html")) {
+                return NS_OK;
+            }
         }
 
         if (reportErrors) {
@@ -1120,7 +1159,7 @@ nsScriptSecurityManager::CreateNullPrincipal(JS::Handle<JS::Value> aOriginAttrib
   if (!aOriginAttributes.isObject() || !attrs.Init(aCx, aOriginAttributes)) {
       return NS_ERROR_INVALID_ARG;
   }
-  nsCOMPtr<nsIPrincipal> prin = nsNullPrincipal::Create(attrs);
+  nsCOMPtr<nsIPrincipal> prin = NullPrincipal::Create(attrs);
   prin.forget(aPrincipal);
   return NS_OK;
 }
@@ -1148,15 +1187,10 @@ nsScriptSecurityManager::
 {
   NS_ENSURE_STATE(aLoadContext);
   OriginAttributes docShellAttrs;
-  bool result = aLoadContext->GetOriginAttributes(docShellAttrs);;
-  NS_ENSURE_TRUE(result, NS_ERROR_FAILURE);
+  aLoadContext->GetOriginAttributes(docShellAttrs);
 
-  OriginAttributes attrs;
-  attrs.Inherit(docShellAttrs);
-
-  nsresult rv = MaybeSetAddonIdFromURI(attrs, aURI);
-  NS_ENSURE_SUCCESS(rv, rv);
-  nsCOMPtr<nsIPrincipal> prin = BasePrincipal::CreateCodebasePrincipal(aURI, attrs);
+  nsCOMPtr<nsIPrincipal> prin =
+    BasePrincipal::CreateCodebasePrincipal(aURI, docShellAttrs);
   prin.forget(aPrincipal);
   return *aPrincipal ? NS_OK : NS_ERROR_FAILURE;
 }
@@ -1166,12 +1200,8 @@ nsScriptSecurityManager::GetDocShellCodebasePrincipal(nsIURI* aURI,
                                                       nsIDocShell* aDocShell,
                                                       nsIPrincipal** aPrincipal)
 {
-  OriginAttributes attrs;
-  attrs.Inherit(nsDocShell::Cast(aDocShell)->GetOriginAttributes());
-
-  nsresult rv = MaybeSetAddonIdFromURI(attrs, aURI);
-  NS_ENSURE_SUCCESS(rv, rv);
-  nsCOMPtr<nsIPrincipal> prin = BasePrincipal::CreateCodebasePrincipal(aURI, attrs);
+  nsCOMPtr<nsIPrincipal> prin =
+    BasePrincipal::CreateCodebasePrincipal(aURI, nsDocShell::Cast(aDocShell)->GetOriginAttributes());
   prin.forget(aPrincipal);
   return *aPrincipal ? NS_OK : NS_ERROR_FAILURE;
 }
@@ -1322,7 +1352,7 @@ nsresult nsScriptSecurityManager::Init()
     NS_ENSURE_SUCCESS(rv, rv);
 
     // Create our system principal singleton
-    RefPtr<nsSystemPrincipal> system = new nsSystemPrincipal();
+    RefPtr<SystemPrincipal> system = SystemPrincipal::Create();
 
     mSystemPrincipal = system;
 
@@ -1394,13 +1424,13 @@ nsScriptSecurityManager::InitStatics()
 // Currently this nsGenericFactory constructor is used only from FastLoad
 // (XPCOM object deserialization) code, when "creating" the system principal
 // singleton.
-nsSystemPrincipal *
+SystemPrincipal *
 nsScriptSecurityManager::SystemPrincipalSingletonConstructor()
 {
     nsIPrincipal *sysprin = nullptr;
     if (gScriptSecMan)
         NS_ADDREF(sysprin = gScriptSecMan->mSystemPrincipal);
-    return static_cast<nsSystemPrincipal*>(sysprin);
+    return static_cast<SystemPrincipal*>(sysprin);
 }
 
 struct IsWhitespace {
@@ -1487,6 +1517,8 @@ nsScriptSecurityManager::InitPrefs()
 
     // set observer callbacks in case the value of the prefs change
     Preferences::AddStrongObservers(this, kObservedPrefs);
+
+    OriginAttributes::InitPrefs();
 
     return NS_OK;
 }

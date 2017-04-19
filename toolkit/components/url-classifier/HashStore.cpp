@@ -37,6 +37,8 @@
 #include "nsCheckSummedOutputStream.h"
 #include "prio.h"
 #include "mozilla/Logging.h"
+#include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "zlib.h"
 #include "Classifier.h"
 #include "nsUrlClassifierDBService.h"
@@ -98,22 +100,6 @@
 extern mozilla::LazyLogModule gUrlClassifierDbServiceLog;
 #define LOG(args) MOZ_LOG(gUrlClassifierDbServiceLog, mozilla::LogLevel::Debug, args)
 #define LOG_ENABLED() MOZ_LOG_TEST(gUrlClassifierDbServiceLog, mozilla::LogLevel::Debug)
-
-// Either the return was successful or we call the Reset function (unless we
-// hit an OOM).  Used while reading in the store.
-#define SUCCESS_OR_RESET(res)                                             \
-  do {                                                                    \
-    nsresult __rv = res; /* Don't evaluate |res| more than once */        \
-    if (__rv == NS_ERROR_OUT_OF_MEMORY) {                                 \
-      NS_WARNING("SafeBrowsing OOM.");                                    \
-      return __rv;                                                        \
-    }                                                                     \
-    if (NS_FAILED(__rv)) {                                                \
-      NS_WARNING("SafeBrowsing store corrupted or out of date.");         \
-      Reset();                                                            \
-      return __rv;                                                        \
-    }                                                                     \
-  } while(0)
 
 namespace mozilla {
 namespace safebrowsing {
@@ -186,7 +172,7 @@ TableUpdateV4::NewPrefixes(int32_t aSize, std::string& aPrefixes)
       LOG(("%.2X%.2X%.2X%.2X", c[0], c[1], c[2], c[3]));
     }
 
-    LOG(("---- %d fixed-length prefixes in total.", aPrefixes.size() / aSize));
+    LOG(("---- %" PRIuSIZE " fixed-length prefixes in total.", aPrefixes.size() / aSize));
   }
 
   PrefixStdString* prefix = new PrefixStdString(aPrefixes);
@@ -205,6 +191,19 @@ void
 TableUpdateV4::NewChecksum(const std::string& aChecksum)
 {
   mChecksum.Assign(aChecksum.data(), aChecksum.size());
+}
+
+nsresult
+TableUpdateV4::NewFullHashResponse(const Prefix& aPrefix,
+                                   CachedFullHashResponse& aResponse)
+{
+  CachedFullHashResponse* response =
+    mFullHashResponseMap.LookupOrAdd(aPrefix.ToUint32());
+  if (!response) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+  *response = aResponse;
+  return NS_OK;
 }
 
 HashStore::HashStore(const nsACString& aTableName,
@@ -303,9 +302,8 @@ HashStore::Open()
   if (rv == NS_ERROR_FILE_NOT_FOUND) {
     UpdateHeader();
     return NS_OK;
-  } else {
-    SUCCESS_OR_RESET(rv);
   }
+  NS_ENSURE_SUCCESS(rv, rv);
 
   int64_t fileSize;
   rv = storeFile->GetFileSize(&fileSize);
@@ -319,10 +317,10 @@ HashStore::Open()
   mInputStream = NS_BufferInputStream(origStream, mFileSize);
 
   rv = ReadHeader();
-  SUCCESS_OR_RESET(rv);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   rv = SanityCheck();
-  SUCCESS_OR_RESET(rv);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
 }
@@ -511,13 +509,13 @@ nsresult
 HashStore::PrepareForUpdate()
 {
   nsresult rv = CheckChecksum(mFileSize);
-  SUCCESS_OR_RESET(rv);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   rv = ReadChunkNumbers();
-  SUCCESS_OR_RESET(rv);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   rv = ReadHashes();
-  SUCCESS_OR_RESET(rv);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
 }
@@ -702,7 +700,7 @@ nsresult DeflateWriteTArray(nsIOutputStream* aStream, nsTArray<T>& aIn)
   if (zerr != Z_OK) {
     return NS_ERROR_FAILURE;
   }
-  LOG(("DeflateWriteTArray: %d in %d out", insize, outsize));
+  LOG(("DeflateWriteTArray: %lu in %lu out", insize, outsize));
 
   outBuff.TruncateLength(outsize);
 
@@ -754,7 +752,7 @@ nsresult InflateReadTArray(nsIInputStream* aStream, FallibleTArray<T>* aOut,
   if (zerr != Z_OK) {
     return NS_ERROR_FAILURE;
   }
-  LOG(("InflateReadTArray: %d in %d out", insize, outsize));
+  LOG(("InflateReadTArray: %lu in %lu out", insize, outsize));
 
   NS_ASSERTION(outsize == aExpectedSize * sizeof(T), "Decompression size mismatch");
 
@@ -1110,7 +1108,8 @@ RemoveDeadSubPrefixes(SubPrefixArray& aSubs, ChunkSet& aAddChunks)
     }
   }
 
-  LOG(("Removed %u dead SubPrefix entries.", aSubs.end() - subIter));
+  LOG(("Removed %" PRId64 " dead SubPrefix entries.",
+       static_cast<int64_t>(aSubs.end() - subIter)));
   aSubs.TruncateLength(subIter - aSubs.begin());
 }
 
@@ -1174,7 +1173,7 @@ HashStore::AugmentAdds(const nsTArray<uint32_t>& aPrefixes)
 {
   uint32_t cnt = aPrefixes.Length();
   if (cnt != mAddPrefixes.Length()) {
-    LOG(("Amount of prefixes in cache not consistent with store (%d vs %d)",
+    LOG(("Amount of prefixes in cache not consistent with store (%" PRIuSIZE " vs %" PRIuSIZE ")",
          aPrefixes.Length(), mAddPrefixes.Length()));
     return NS_ERROR_FAILURE;
   }

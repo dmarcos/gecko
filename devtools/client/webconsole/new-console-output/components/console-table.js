@@ -12,7 +12,7 @@ const {
 const { ObjectClient } = require("devtools/shared/client/main");
 const actions = require("devtools/client/webconsole/new-console-output/actions/messages");
 const { l10n } = require("devtools/client/webconsole/new-console-output/utils/messages");
-const { MODE } = require("devtools/client/shared/components/reps/load-reps");
+const { MODE } = require("devtools/client/shared/components/reps/reps");
 const GripMessageBody = createFactory(require("devtools/client/webconsole/new-console-output/components/grip-message-body"));
 
 const TABLE_ROW_MAX_ITEMS = 1000;
@@ -62,6 +62,7 @@ const ConsoleTable = createClass({
             GripMessageBody({
               grip: item[key],
               mode: MODE.SHORT,
+              useQuotes: false,
             })
           )
         );

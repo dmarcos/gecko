@@ -24,6 +24,7 @@ namespace dom {
 class Element;
 } // namespace dom
 } // namespace mozilla
+struct nsFontFaceRuleContainer;
 class nsIAtom;
 class nsIContent;
 class nsIDocument;
@@ -126,15 +127,20 @@ public:
     ResolveStyleForText(nsIContent* aTextNode,
                         nsStyleContext* aParentContext);
     inline already_AddRefed<nsStyleContext>
-    ResolveStyleForOtherNonElement(nsStyleContext* aParentContext);
+    ResolveStyleForFirstLetterContinuation(nsStyleContext* aParentContext);
+    inline already_AddRefed<nsStyleContext>
+    ResolveStyleForPlaceholder();
     inline already_AddRefed<nsStyleContext>
     ResolvePseudoElementStyle(dom::Element* aParentElement,
                               mozilla::CSSPseudoElementType aType,
                               nsStyleContext* aParentContext,
                               dom::Element* aPseudoElement);
     inline already_AddRefed<nsStyleContext>
-    ResolveAnonymousBoxStyle(nsIAtom* aPseudoTag, nsStyleContext* aParentContext,
-                             uint32_t aFlags = 0);
+    ResolveInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag,
+                                       nsStyleContext* aParentContext,
+                                       uint32_t aFlags = 0);
+    inline already_AddRefed<nsStyleContext>
+    ResolveNonInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag);
     inline nsresult AppendStyleSheet(SheetType aType, StyleSheet* aSheet);
     inline nsresult PrependStyleSheet(SheetType aType, StyleSheet* aSheet);
     inline nsresult RemoveStyleSheet(SheetType aType, StyleSheet* aSheet);
@@ -167,6 +173,8 @@ public:
 
     inline void RootStyleContextAdded();
     inline void RootStyleContextRemoved();
+
+    inline bool AppendFontFaceRules(nsTArray<nsFontFaceRuleContainer>& aArray);
 
   private:
     // Stores a pointer to an nsStyleSet or a ServoStyleSet.  The least

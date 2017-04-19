@@ -22,6 +22,7 @@ using namespace mozilla::gfx;
 using layers::ImageContainer;
 using layers::PlanarYCbCrImage;
 using layers::PlanarYCbCrData;
+using media::TimeUnit;
 
 const char* AudioData::sTypeName = "audio";
 const char* VideoData::sTypeName = "video";
@@ -89,10 +90,10 @@ AudioData::TransferAndUpdateTimestampAndDuration(AudioData* aOther,
 static bool
 ValidatePlane(const VideoData::YCbCrBuffer::Plane& aPlane)
 {
-  return aPlane.mWidth <= PlanarYCbCrImage::MAX_DIMENSION &&
-         aPlane.mHeight <= PlanarYCbCrImage::MAX_DIMENSION &&
-         aPlane.mWidth * aPlane.mHeight < MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT &&
-         aPlane.mStride > 0;
+  return aPlane.mWidth <= PlanarYCbCrImage::MAX_DIMENSION
+         && aPlane.mHeight <= PlanarYCbCrImage::MAX_DIMENSION
+         && aPlane.mWidth * aPlane.mHeight < MAX_VIDEO_WIDTH * MAX_VIDEO_HEIGHT
+         && aPlane.mStride > 0;
 }
 
 static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
@@ -100,8 +101,8 @@ static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
 {
   // The following situation should never happen unless there is a bug
   // in the decoder
-  if (aBuffer.mPlanes[1].mWidth != aBuffer.mPlanes[2].mWidth ||
-      aBuffer.mPlanes[1].mHeight != aBuffer.mPlanes[2].mHeight) {
+  if (aBuffer.mPlanes[1].mWidth != aBuffer.mPlanes[2].mWidth
+      || aBuffer.mPlanes[1].mHeight != aBuffer.mPlanes[2].mHeight) {
     NS_ERROR("C planes with different sizes");
     return false;
   }
@@ -112,9 +113,9 @@ static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
     MOZ_ASSERT(false, "Empty picture rect");
     return false;
   }
-  if (!ValidatePlane(aBuffer.mPlanes[0]) ||
-      !ValidatePlane(aBuffer.mPlanes[1]) ||
-      !ValidatePlane(aBuffer.mPlanes[2])) {
+  if (!ValidatePlane(aBuffer.mPlanes[0])
+      || !ValidatePlane(aBuffer.mPlanes[1])
+      || !ValidatePlane(aBuffer.mPlanes[2])) {
     NS_WARNING("Invalid plane size");
     return false;
   }
@@ -123,8 +124,10 @@ static bool ValidateBufferAndPicture(const VideoData::YCbCrBuffer& aBuffer,
   // the frame we've been supplied without indexing out of bounds.
   CheckedUint32 xLimit = aPicture.x + CheckedUint32(aPicture.width);
   CheckedUint32 yLimit = aPicture.y + CheckedUint32(aPicture.height);
-  if (!xLimit.isValid() || xLimit.value() > aBuffer.mPlanes[0].mStride ||
-      !yLimit.isValid() || yLimit.value() > aBuffer.mPlanes[0].mHeight)
+  if (!xLimit.isValid()
+      || xLimit.value() > aBuffer.mPlanes[0].mStride
+      || !yLimit.isValid()
+      || yLimit.value() > aBuffer.mPlanes[0].mHeight)
   {
     // The specified picture dimensions can't be contained inside the video
     // frame, we'll stomp memory if we try to copy it. Fail.
@@ -141,12 +144,12 @@ IsYV12Format(const VideoData::YCbCrBuffer::Plane& aYPlane,
              const VideoData::YCbCrBuffer::Plane& aCrPlane)
 {
   return
-    aYPlane.mWidth % 2 == 0 &&
-    aYPlane.mHeight % 2 == 0 &&
-    aYPlane.mWidth / 2 == aCbPlane.mWidth &&
-    aYPlane.mHeight / 2 == aCbPlane.mHeight &&
-    aCbPlane.mWidth == aCrPlane.mWidth &&
-    aCbPlane.mHeight == aCrPlane.mHeight;
+    aYPlane.mWidth % 2 == 0
+    && aYPlane.mHeight % 2 == 0
+    && aYPlane.mWidth / 2 == aCbPlane.mWidth
+    && aYPlane.mHeight / 2 == aCbPlane.mHeight
+    && aCbPlane.mWidth == aCrPlane.mWidth
+    && aCbPlane.mHeight == aCrPlane.mHeight;
 }
 
 static bool
@@ -171,7 +174,7 @@ VideoData::VideoData(int64_t aOffset,
   , mFrameID(aFrameID)
   , mSentToCompositor(false)
 {
-  NS_ASSERTION(mDuration >= 0, "Frame must have non-negative duration.");
+  MOZ_ASSERT(!mDuration.IsNegative(), "Frame must have non-negative duration.");
   mKeyframe = aKeyframe;
   mTimecode = aTimecode;
 }
@@ -183,7 +186,8 @@ VideoData::~VideoData()
 void
 VideoData::SetListener(UniquePtr<Listener> aListener)
 {
-  MOZ_ASSERT(!mSentToCompositor, "Listener should be registered before sending data");
+  MOZ_ASSERT(!mSentToCompositor,
+             "Listener should be registered before sending data");
 
   mListener = Move(aListener);
 }
@@ -219,22 +223,21 @@ VideoData::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 }
 
 void
-VideoData::UpdateDuration(int64_t aDuration)
+VideoData::UpdateDuration(const TimeUnit& aDuration)
 {
-  MOZ_ASSERT(aDuration >= 0);
-
+  MOZ_ASSERT(!aDuration.IsNegative());
   mDuration = aDuration;
 }
 
 void
-VideoData::UpdateTimestamp(int64_t aTimestamp)
+VideoData::UpdateTimestamp(const TimeUnit& aTimestamp)
 {
-  MOZ_ASSERT(aTimestamp >= 0);
+  MOZ_ASSERT(!aTimestamp.IsNegative());
 
-  int64_t updatedDuration = GetEndTime() - aTimestamp;
-  MOZ_ASSERT(updatedDuration >= 0);
+  auto updatedDuration = GetEndTime() - aTimestamp;
+  MOZ_ASSERT(!updatedDuration.IsNegative());
 
-  mTime = aTimestamp;
+  mTime = aTimestamp.ToMicroseconds();
   mDuration = updatedDuration;
 }
 
@@ -283,7 +286,7 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
                              ImageContainer* aContainer,
                              int64_t aOffset,
                              int64_t aTime,
-                             int64_t aDuration,
+                             const TimeUnit& aDuration,
                              const YCbCrBuffer& aBuffer,
                              bool aKeyframe,
                              int64_t aTimecode,
@@ -294,7 +297,7 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
     // send to media streams if necessary.
     RefPtr<VideoData> v(new VideoData(aOffset,
                                       aTime,
-                                      aDuration,
+                                      aDuration.ToMicroseconds(),
                                       aKeyframe,
                                       aTimecode,
                                       aInfo.mDisplay,
@@ -308,7 +311,7 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
 
   RefPtr<VideoData> v(new VideoData(aOffset,
                                     aTime,
-                                    aDuration,
+                                    aDuration.ToMicroseconds(),
                                     aKeyframe,
                                     aTimecode,
                                     aInfo.mDisplay,
@@ -367,7 +370,7 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
                              ImageContainer* aContainer,
                              int64_t aOffset,
                              int64_t aTime,
-                             int64_t aDuration,
+                             const TimeUnit& aDuration,
                              const YCbCrBuffer& aBuffer,
                              const YCbCrBuffer::Plane &aAlphaPlane,
                              bool aKeyframe,
@@ -379,7 +382,7 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
     // send to media streams if necessary.
     RefPtr<VideoData> v(new VideoData(aOffset,
                                       aTime,
-                                      aDuration,
+                                      aDuration.ToMicroseconds(),
                                       aKeyframe,
                                       aTimecode,
                                       aInfo.mDisplay,
@@ -393,7 +396,7 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
 
   RefPtr<VideoData> v(new VideoData(aOffset,
                                     aTime,
-                                    aDuration,
+                                    aDuration.ToMicroseconds(),
                                     aKeyframe,
                                     aTimecode,
                                     aInfo.mDisplay,
@@ -430,21 +433,20 @@ VideoData::CreateAndCopyData(const VideoInfo& aInfo,
 
 /* static */
 already_AddRefed<VideoData>
-VideoData::CreateFromImage(const VideoInfo& aInfo,
+VideoData::CreateFromImage(const IntSize& aDisplay,
                            int64_t aOffset,
                            int64_t aTime,
-                           int64_t aDuration,
+                           const TimeUnit& aDuration,
                            const RefPtr<Image>& aImage,
                            bool aKeyframe,
-                           int64_t aTimecode,
-                           const IntRect& aPicture)
+                           int64_t aTimecode)
 {
   RefPtr<VideoData> v(new VideoData(aOffset,
                                     aTime,
-                                    aDuration,
+                                    aDuration.ToMicroseconds(),
                                     aKeyframe,
                                     aTimecode,
-                                    aInfo.mDisplay,
+                                    aDisplay,
                                     0));
   v->mImage = aImage;
   return v.forget();

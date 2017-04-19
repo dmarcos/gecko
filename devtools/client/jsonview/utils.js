@@ -8,7 +8,6 @@
 
 const { Cu, Cc, Ci } = require("chrome");
 const Services = require("Services");
-const { getMostRecentBrowserWindow } = require("sdk/window/utils");
 
 const OPEN_FLAGS = {
   RDONLY: parseInt("0x01", 16),
@@ -19,25 +18,39 @@ const OPEN_FLAGS = {
   EXCL: parseInt("0x80", 16)
 };
 
+let filePickerShown = false;
+
 /**
  * Open File Save As dialog and let the user to pick proper file location.
  */
 exports.getTargetFile = function () {
-  let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
+  return new Promise((resolve, reject) => {
+    if (filePickerShown) {
+      reject(null);
+      return;
+    }
 
-  let win = getMostRecentBrowserWindow();
-  fp.init(win, null, Ci.nsIFilePicker.modeSave);
-  fp.appendFilter("JSON Files", "*.json; *.jsonp;");
-  fp.appendFilters(Ci.nsIFilePicker.filterText);
-  fp.appendFilters(Ci.nsIFilePicker.filterAll);
-  fp.filterIndex = 0;
+    filePickerShown = true;
 
-  let rv = fp.show();
-  if (rv == Ci.nsIFilePicker.returnOK || rv == Ci.nsIFilePicker.returnReplace) {
-    return fp.file;
-  }
+    let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
 
-  return null;
+    let win = Services.wm.getMostRecentWindow("navigator:browser");
+    fp.init(win, null, Ci.nsIFilePicker.modeSave);
+    fp.appendFilter("JSON Files", "*.json; *.jsonp;");
+    fp.appendFilters(Ci.nsIFilePicker.filterText);
+    fp.appendFilters(Ci.nsIFilePicker.filterAll);
+    fp.filterIndex = 0;
+
+    fp.open(rv => {
+      filePickerShown = false;
+
+      if (rv == Ci.nsIFilePicker.returnOK || rv == Ci.nsIFilePicker.returnReplace) {
+        resolve(fp.file);
+      } else {
+        reject(null);
+      }
+    });
+  });
 };
 
 /**

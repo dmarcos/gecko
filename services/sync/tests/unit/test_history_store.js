@@ -2,6 +2,7 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
 Cu.import("resource://gre/modules/PlacesUtils.jsm");
+Cu.import("resource://testing-common/PlacesTestUtils.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://services-common/async.js");
 Cu.import("resource://services-sync/engines/history.js");
@@ -33,16 +34,17 @@ function queryHistoryVisits(uri) {
   return queryPlaces(uri, options);
 }
 
-function onNextTitleChanged(callback) {
+function onNextVisit(callback) {
   PlacesUtils.history.addObserver({
     onBeginUpdateBatch: function onBeginUpdateBatch() {},
     onEndUpdateBatch: function onEndUpdateBatch() {},
     onPageChanged: function onPageChanged() {},
     onTitleChanged: function onTitleChanged() {
+    },
+    onVisit: function onVisit() {
       PlacesUtils.history.removeObserver(this);
       Utils.nextTick(callback);
     },
-    onVisit: function onVisit() {},
     onDeleteVisits: function onDeleteVisits() {},
     onPageExpired: function onPageExpired() {},
     onDeleteURI: function onDeleteURI() {},
@@ -87,23 +89,9 @@ add_test(function test_store() {
   _("Let's create an entry in the database.");
   fxuri = Utils.makeURI("http://getfirefox.com/");
 
-  let place = {
-    uri: fxuri,
-    title: "Get Firefox!",
-    visits: [{
-      visitDate: TIMESTAMP1,
-      transitionType: Ci.nsINavHistoryService.TRANSITION_LINK
-    }]
-  };
-  PlacesUtils.asyncHistory.updatePlaces(place, {
-    handleError: function handleError() {
-      do_throw("Unexpected error in adding visit.");
-    },
-    handleResult: function handleResult() {},
-    handleCompletion: onVisitAdded
-  });
-
-  function onVisitAdded() {
+  PlacesTestUtils.addVisits({ uri: fxuri, title: "Get Firefox!",
+                              visitDate: TIMESTAMP1 })
+                 .then(() => {
     _("Verify that the entry exists.");
     let ids = Object.keys(store.getAllIDs());
     do_check_eq(ids.length, 1);
@@ -125,7 +113,7 @@ add_test(function test_store() {
     _("Let's modify the record and have the store update the database.");
     let secondvisit = {date: TIMESTAMP2,
                        type: Ci.nsINavHistoryService.TRANSITION_TYPED};
-    onNextTitleChanged(ensureThrows(function() {
+    onNextVisit(ensureThrows(function() {
       let queryres = queryHistoryVisits(fxuri);
       do_check_eq(queryres.length, 2);
       do_check_eq(queryres[0].time, TIMESTAMP1);
@@ -140,14 +128,14 @@ add_test(function test_store() {
        title: "Hol Dir Firefox!",
        visits: [record.visits[0], secondvisit]}
     ]);
-  }
+  });
 });
 
 add_test(function test_store_create() {
   _("Create a brand new record through the store.");
   tbguid = Utils.makeGUID();
   tburi = Utils.makeURI("http://getthunderbird.com");
-  onNextTitleChanged(ensureThrows(function() {
+  onNextVisit(ensureThrows(function() {
     do_check_attribute_count(store.getAllIDs(), 2);
     let queryres = queryHistoryVisits(tburi);
     do_check_eq(queryres.length, 1);

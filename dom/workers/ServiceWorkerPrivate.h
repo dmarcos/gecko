@@ -82,7 +82,7 @@ public:
 
   nsresult
   SendMessageEvent(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                   const Optional<Sequence<JS::Value>>& aTransferable,
+                   const Sequence<JSObject*>& aTransferable,
                    UniquePtr<ServiceWorkerClientInfo>&& aClientInfo);
 
   // This is used to validate the worker script and continue the installation
@@ -173,11 +173,11 @@ private:
   };
 
   // Timer callbacks
-  static void
-  NoteIdleWorkerCallback(nsITimer* aTimer, void* aPrivate);
+  void
+  NoteIdleWorkerCallback(nsITimer* aTimer);
 
-  static void
-  TerminateWorkerCallback(nsITimer* aTimer, void *aPrivate);
+  void
+  TerminateWorkerCallback(nsITimer* aTimer);
 
   void
   RenewKeepAliveToken(WakeUpReason aWhy);
@@ -196,6 +196,7 @@ private:
   nsresult
   SpawnWorkerIfNeeded(WakeUpReason aWhy,
                       nsIRunnable* aLoadFailedRunnable,
+                      bool* aNewWorkerCreated = nullptr,
                       nsILoadGroup* aLoadGroup = nullptr);
 
   ~ServiceWorkerPrivate();

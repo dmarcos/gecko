@@ -630,7 +630,6 @@ BasicLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
       FlashWidgetUpdateArea(mTarget);
     }
     RecordFrame();
-    PostPresent();
 
     if (!mTransactionIncomplete) {
       // Clear out target if we have a complete transaction.
@@ -659,6 +658,8 @@ BasicLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
 
   NS_ASSERTION(!aCallback || !mTransactionIncomplete,
                "If callback is not null, transaction must be complete");
+
+  ClearDisplayItemLayers();
 
   // XXX - We should probably assert here that for an incomplete transaction
   // out target is the default target.
@@ -734,7 +735,7 @@ BasicLayerManager::PaintSelfOrChildren(PaintLayerContext& aPaintContext,
       }
 
       PaintLayer(aGroupTarget, layer, aPaintContext.mCallback,
-          aPaintContext.mCallbackData);
+                aPaintContext.mCallbackData);
       if (mTransactionIncomplete)
         break;
     }
@@ -816,7 +817,8 @@ BasicLayerManager::PaintLayer(gfxContext* aTarget,
   PROFILER_LABEL("BasicLayerManager", "PaintLayer",
     js::ProfileEntry::Category::GRAPHICS);
 
-  PaintLayerContext paintLayerContext(aTarget, aLayer, aCallback, aCallbackData);
+  PaintLayerContext paintLayerContext(aTarget, aLayer,
+                                      aCallback, aCallbackData);
 
   // Don't attempt to paint layers with a singular transform, cairo will
   // just throw an error.

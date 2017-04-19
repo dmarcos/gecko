@@ -130,6 +130,8 @@ class VideoSendStream : public SendStream {
 
       // RTCP CNAME, see RFC 3550.
       std::string c_name;
+
+      std::vector<std::string> rids;
     } rtp;
 
     // Transport for outgoing packets.
@@ -185,6 +187,8 @@ class VideoSendStream : public SendStream {
   virtual bool ReconfigureVideoEncoder(const VideoEncoderConfig& config) = 0;
 
   virtual Stats GetStats() = 0;
+
+  virtual int64_t GetRtt() const = 0;
 };
 
 }  // namespace webrtc

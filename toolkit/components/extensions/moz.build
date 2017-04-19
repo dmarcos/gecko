@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files('**'):
+    BUG_COMPONENT = ('Toolkit', 'WebExtensions: General')
+
 EXTRA_JS_MODULES += [
     'Extension.jsm',
     'ExtensionAPI.jsm',
@@ -11,17 +14,23 @@ EXTRA_JS_MODULES += [
     'ExtensionCommon.jsm',
     'ExtensionContent.jsm',
     'ExtensionManagement.jsm',
+    'ExtensionPageChild.jsm',
     'ExtensionParent.jsm',
+    'ExtensionPermissions.jsm',
+    'ExtensionPreferencesManager.jsm',
+    'ExtensionSettingsStore.jsm',
     'ExtensionStorage.jsm',
     'ExtensionStorageSync.jsm',
+    'ExtensionTabs.jsm',
     'ExtensionUtils.jsm',
     'LegacyExtensionsUtils.jsm',
     'MessageChannel.jsm',
     'NativeMessaging.jsm',
+    'ProxyScriptContext.jsm',
     'Schemas.jsm',
 ]
 
-EXTRA_PP_COMPONENTS += [
+EXTRA_COMPONENTS += [
     'extensions-toolkit.manifest',
 ]
 
@@ -30,9 +39,16 @@ TESTING_JS_MODULES += [
     'ExtensionXPCShellUtils.jsm',
 ]
 
-DIRS += ['schemas']
+DIRS += [
+    'schemas',
+    'webrequest',
+]
 
 JAR_MANIFESTS += ['jar.mn']
+
+BROWSER_CHROME_MANIFESTS += [
+    'test/browser/browser.ini',
+]
 
 MOCHITEST_MANIFESTS += [
     'test/mochitest/mochitest-remote.ini',
@@ -41,5 +57,6 @@ MOCHITEST_MANIFESTS += [
 MOCHITEST_CHROME_MANIFESTS += ['test/mochitest/chrome.ini']
 XPCSHELL_TESTS_MANIFESTS += [
     'test/xpcshell/native_messaging.ini',
+    'test/xpcshell/xpcshell-remote.ini',
     'test/xpcshell/xpcshell.ini',
 ]

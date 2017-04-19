@@ -6,10 +6,45 @@ import httplib
 import json
 import urlparse
 
-import error
 
+class Response(object):
+    """Describes an HTTP response received from a remote en"Describes an HTTP
+    response received from a remote end whose body has been read and parsed as
+    appropriate."""
+    def __init__(self, status, body):
+        self.status = status
+        self.body = body
 
-HTTP_TIMEOUT = 5
+    def __repr__(self):
+        return "wdclient.Response(status=%d, body=%s)" % (self.status, self.body)
+
+    @classmethod
+    def from_http_response(cls, http_response):
+        status = http_response.status
+        body = http_response.read()
+
+        # SpecID: dfn-send-a-response
+        #
+        # > 3. Set the response's header with name and value with the following
+        # >    values:
+        # >
+        # >    "Content-Type"
+        # >       "application/json; charset=utf-8"
+        # >    "cache-control"
+        # >       "no-cache"
+        assert http_response.getheader("Content-Type") == "application/json; charset=utf-8"
+        assert http_response.getheader("Cache-Control") == "no-cache"
+
+        if body:
+            body = json.loads(body)
+
+            # SpecID: dfn-send-a-response
+            #
+            # > 4. If data is not null, let response's body be a JSON Object
+            #      with a key `value` set to the JSON Serialization of data.
+            assert "value" in body
+
+        return cls(status, body)
 
 
 class HTTPWireProtocol(object):
@@ -17,7 +52,7 @@ class HTTPWireProtocol(object):
     wire protocol.
     """
 
-    def __init__(self, host, port, url_prefix="/", timeout=HTTP_TIMEOUT):
+    def __init__(self, host, port, url_prefix="/", timeout=None):
         """Construct interface for communicating with the remote server.
 
         :param url: URL of remote WebDriver server.
@@ -33,15 +68,16 @@ class HTTPWireProtocol(object):
     def url(self, suffix):
         return urlparse.urljoin(self.path_prefix, suffix)
 
-    def send(self, method, url, body=None, headers=None, key=None):
+    def send(self, method, url, body=None, headers=None):
         """Send a command to the remote.
 
         :param method: "POST" or "GET".
+        :param url: "command part" of the requests URL path
         :param body: Body of the request.  Defaults to an empty dictionary
             if ``method`` is "POST".
         :param headers: Additional headers to include in the request.
-        :param key: Extract this key from the dictionary returned from
-            the remote.
+        :return: an instance of wdclient.Response describing the HTTP response
+            received from the remote end.
         """
 
         if body is None and method == "POST":
@@ -58,26 +94,17 @@ class HTTPWireProtocol(object):
 
         url = self.url_prefix + url
 
+        kwargs = {}
+        if self._timeout is not None:
+            kwargs["timeout"] = self._timeout
+
         conn = httplib.HTTPConnection(
-            self.host, self.port, strict=True, timeout=self._timeout)
+            self.host, self.port, strict=True, **kwargs)
         conn.request(method, url, body, headers)
 
-        resp = conn.getresponse()
-        resp_body = resp.read()
-        conn.close()
-
         try:
-            data = json.loads(resp_body)
-        except:
-            raise IOError("Could not parse response body as JSON: '%s'" % resp_body)
+            response = Response.from_http_response(conn.getresponse())
+        finally:
+            conn.close()
 
-        if resp.status != 200:
-            cls = error.get(data.get("error"))
-            raise cls(data.get("message"))
-
-        if key is not None:
-            data = data[key]
-        if not data:
-            data = None
-
-        return data
+        return response

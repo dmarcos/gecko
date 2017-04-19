@@ -79,6 +79,8 @@ nsICODecoder::FinishInternal()
 nsresult
 nsICODecoder::FinishWithErrorInternal()
 {
+  // No need to assert !mInFrame here because this condition is enforced by
+  // mContainedDecoder.
   return GetFinalStateFromContainedDecoder();
 }
 
@@ -239,6 +241,8 @@ nsICODecoder::ReadDirEntry(const char* aData)
       mDirEntry = e;
     }
   }
+
+  mImageMetadata.AddNativeSize(entrySize);
 
   if (desiredSize) {
     // Calculate the delta between this resource's size and the desired size, so
@@ -589,6 +593,13 @@ nsICODecoder::FinishResource()
   if (mContainedDecoder->HasSize() &&
       mContainedDecoder->Size() != GetRealSize()) {
     return Transition::TerminateFailure();
+  }
+
+  // Finalize the frame which we deferred to ensure we could modify the final
+  // result (e.g. to apply the BMP mask).
+  MOZ_ASSERT(!mContainedDecoder->GetFinalizeFrames());
+  if (mCurrentFrame) {
+    mCurrentFrame->FinalizeSurface();
   }
 
   return Transition::TerminateSuccess();

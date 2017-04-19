@@ -55,6 +55,7 @@ add_task(function* test_experiments_api() {
           return {
             meh: {
               hello(text) {
+                console.log('meh.hello API called', text);
                 Services.obs.notifyObservers(null, "webext-api-hello", text);
               }
             }
@@ -115,7 +116,7 @@ add_task(function* test_experiments_api() {
 
   do_register_cleanup(() => {
     for (let file of [apiAddonFile, addonFile, boringAddonFile]) {
-      Services.obs.notifyObservers(file, "flush-cache-entry", null);
+      Services.obs.notifyObservers(file, "flush-cache-entry");
       file.remove(false);
     }
   });
@@ -130,8 +131,8 @@ add_task(function* test_experiments_api() {
     }
   };
 
-  Services.obs.addObserver(observer, "webext-api-loaded", false);
-  Services.obs.addObserver(observer, "webext-api-hello", false);
+  Services.obs.addObserver(observer, "webext-api-loaded");
+  Services.obs.addObserver(observer, "webext-api-hello");
   do_register_cleanup(() => {
     Services.obs.removeObserver(observer, "webext-api-loaded");
     Services.obs.removeObserver(observer, "webext-api-hello");

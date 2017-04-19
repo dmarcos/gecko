@@ -459,13 +459,13 @@ function internalSave(aURL, aDocument, aDefaultFileName, aContentDisposition,
 
     var persistArgs = {
       sourceURI,
-      sourceReferrer    : aReferrer,
-      sourceDocument    : useSaveDocument ? aDocument : null,
-      targetContentType : (saveAsType == kSaveAsType_Text) ? "text/plain" : null,
-      targetFile        : file,
-      sourceCacheKey    : aCacheKey,
-      sourcePostData    : nonCPOWDocument ? getPostData(aDocument) : null,
-      bypassCache       : aShouldBypassCache,
+      sourceReferrer: aReferrer,
+      sourceDocument: useSaveDocument ? aDocument : null,
+      targetContentType: (saveAsType == kSaveAsType_Text) ? "text/plain" : null,
+      targetFile: file,
+      sourceCacheKey: aCacheKey,
+      sourcePostData: nonCPOWDocument ? getPostData(aDocument) : null,
+      bypassCache: aShouldBypassCache,
       isPrivate,
     };
 
@@ -690,9 +690,9 @@ function promiseTargetFile(aFpP, /* optional */ aSkipPrompt, /* optional */ aRel
     let deferred = Promise.defer();
     if (useDownloadDir) {
       // Keep async behavior in both branches
-      Services.tm.mainThread.dispatch(function() {
+      Services.tm.dispatchToMainThread(function() {
         deferred.resolve(null);
-      }, Components.interfaces.nsIThread.DISPATCH_NORMAL);
+      });
     } else {
       downloadLastDir.getFileAsync(aRelatedURI, function getFileAsyncCB(aFile) {
         deferred.resolve(aFile);
@@ -724,6 +724,7 @@ function promiseTargetFile(aFpP, /* optional */ aSkipPrompt, /* optional */ aRel
     // The index of the selected filter is only preserved and restored if there's
     // more than one filter in addition to "All Files".
     if (aFpP.saveMode != SAVEMODE_FILEONLY) {
+      // eslint-disable-next-line mozilla/use-default-preference-values
       try {
         fp.filterIndex = prefBranch.getIntPref("save_converter_index");
       } catch (e) {

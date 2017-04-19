@@ -41,6 +41,7 @@ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 
 var {
   BaseContext,
+  CanOfAPIs,
   SchemaAPIManager,
 } = ExtensionCommon;
 
@@ -48,7 +49,6 @@ var {
   MessageManagerProxy,
   SpreadArgs,
   defineLazyGetter,
-  findPathInObject,
   promiseDocumentLoaded,
   promiseEvent,
   promiseObserved,
@@ -77,6 +77,17 @@ let apiManager = new class extends SchemaAPIManager {
   constructor() {
     super("main");
     this.initialized = null;
+
+    this.on("startup", (event, extension) => { // eslint-disable-line mozilla/balanced-listeners
+      let promises = [];
+      for (let apiName of this.eventModules.get("startup")) {
+        promises.push(this.asyncGetAPI(apiName, extension).then(api => {
+          api.onStartup(extension.startupReason);
+        }));
+      }
+
+      return Promise.all(promises);
+    });
   }
 
   // Loads all the ext-*.js scripts currently registered.
@@ -85,31 +96,51 @@ let apiManager = new class extends SchemaAPIManager {
       return this.initialized;
     }
 
-    // Load order matters here. The base manifest defines types which are
-    // extended by other schemas, so needs to be loaded first.
-    let promise = Schemas.load(BASE_SCHEMA).then(() => {
-      let promises = [];
-      for (let [/* name */, url] of XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCHEMAS)) {
-        promises.push(Schemas.load(url));
+    let scripts = [];
+    for (let [/* name */, value] of XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCRIPTS)) {
+      scripts.push(value);
+    }
+
+    let promise = Promise.all(scripts.map(url => ChromeUtils.compileScript(url))).then(scripts => {
+      for (let script of scripts) {
+        script.executeInGlobal(this.global);
       }
-      for (let url of schemaURLs) {
-        promises.push(Schemas.load(url));
-      }
-      return Promise.all(promises);
+
+      // Load order matters here. The base manifest defines types which are
+      // extended by other schemas, so needs to be loaded first.
+      return Schemas.load(BASE_SCHEMA).then(() => {
+        let promises = [];
+        for (let [/* name */, url] of XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCHEMAS)) {
+          promises.push(Schemas.load(url));
+        }
+        for (let url of this.schemaURLs) {
+          promises.push(Schemas.load(url));
+        }
+        for (let url of schemaURLs) {
+          promises.push(Schemas.load(url));
+        }
+        return Promise.all(promises);
+      });
     });
 
-    for (let [/* name */, value] of XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCRIPTS)) {
-      this.loadScript(value);
-    }
+    /* eslint-disable mozilla/balanced-listeners */
+    Services.mm.addMessageListener("Extension:GetTabAndWindowId", this);
+    /* eslint-enable mozilla/balanced-listeners */
 
     this.initialized = promise;
     return this.initialized;
   }
 
-  registerSchemaAPI(namespace, envType, getAPI) {
-    if (envType == "addon_parent" || envType == "content_parent" ||
-        envType == "devtools_parent") {
-      super.registerSchemaAPI(namespace, envType, getAPI);
+  receiveMessage({name, target, sync}) {
+    if (name === "Extension:GetTabAndWindowId") {
+      let result = this.global.tabTracker.getBrowserData(target);
+
+      if (result.tabId) {
+        if (sync) {
+          return result;
+        }
+        target.messageManager.sendAsyncMessage("Extension:SetTabAndWindowId", result);
+      }
     }
   }
 }();
@@ -191,9 +222,9 @@ ProxyMessenger = {
     // tabs.sendMessage / tabs.connect
     if (tabId) {
       // `tabId` being set implies that the tabs API is supported, so we don't
-      // need to check whether `TabManager` exists.
-      let tab = apiManager.global.TabManager.getTab(tabId, null, null);
-      return tab && tab.linkedBrowser.messageManager;
+      // need to check whether `tabTracker` exists.
+      let tab = apiManager.global.tabTracker.getTab(tabId, null);
+      return tab && (tab.linkedBrowser || tab.browser).messageManager;
     }
 
     // runtime.sendMessage / runtime.connect
@@ -234,21 +265,17 @@ GlobalManager = {
 
   _onExtensionBrowser(type, browser, additionalData = {}) {
     browser.messageManager.loadFrameScript(`data:,
-      Components.utils.import("resource://gre/modules/ExtensionContent.jsm");
-      ExtensionContent.init(this);
-      addEventListener("unload", function() {
-        ExtensionContent.uninit(this);
-      });
+      Components.utils.import("resource://gre/modules/Services.jsm");
+
+      Services.obs.notifyObservers(this, "tab-content-frameloader-created", "");
     `, false);
 
     let viewType = browser.getAttribute("webextension-view-type");
     if (viewType) {
       let data = {viewType};
 
-      let {getBrowserInfo} = apiManager.global;
-      if (getBrowserInfo) {
-        Object.assign(data, getBrowserInfo(browser), additionalData);
-      }
+      let {tabTracker} = apiManager.global;
+      Object.assign(data, tabTracker.getBrowserData(browser), additionalData);
 
       browser.messageManager.sendAsyncMessage("Extension:InitExtensionView",
                                               data);
@@ -260,7 +287,6 @@ GlobalManager = {
   },
 
   injectInObject(context, isChromeCompat, dest) {
-    apiManager.generateAPIs(context, dest);
     SchemaAPIManager.generateAPIs(context, context.extension.apis, dest);
   },
 };
@@ -276,6 +302,8 @@ class ProxyContextParent extends BaseContext {
     this.uri = NetUtil.newURI(params.url);
 
     this.incognito = params.incognito;
+
+    this.listenerPromises = new Set();
 
     // This message manager is used by ParentAPIManager to send messages and to
     // close the ProxyContext if the underlying message manager closes. This
@@ -318,10 +346,15 @@ class ProxyContextParent extends BaseContext {
   }
 }
 
-defineLazyGetter(ProxyContextParent.prototype, "apiObj", function() {
+defineLazyGetter(ProxyContextParent.prototype, "apiCan", function() {
   let obj = {};
+  let can = new CanOfAPIs(this, apiManager, obj);
   GlobalManager.injectInObject(this, false, obj);
-  return obj;
+  return can;
+});
+
+defineLazyGetter(ProxyContextParent.prototype, "apiObj", function() {
+  return this.apiCan.root;
 });
 
 defineLazyGetter(ProxyContextParent.prototype, "sandbox", function() {
@@ -351,25 +384,33 @@ class ExtensionPageContextParent extends ProxyContextParent {
 
   // The window that contains this context. This may change due to moving tabs.
   get xulWindow() {
-    return this.xulBrowser.ownerGlobal;
+    let win = this.xulBrowser.ownerGlobal;
+    return win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDocShell)
+              .QueryInterface(Ci.nsIDocShellTreeItem).rootTreeItem
+              .QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);
+  }
+
+  get currentWindow() {
+    if (this.viewType !== "background") {
+      return this.xulWindow;
+    }
   }
 
   get windowId() {
-    if (!apiManager.global.WindowManager || this.viewType == "background") {
-      return;
+    let {currentWindow} = this;
+    let {windowTracker} = apiManager.global;
+
+    if (currentWindow && windowTracker) {
+      return windowTracker.getId(currentWindow);
     }
-    // viewType popup or tab:
-    return apiManager.global.WindowManager.getId(this.xulWindow);
   }
 
   get tabId() {
-    let {getBrowserInfo} = apiManager.global;
-
-    if (getBrowserInfo) {
-      // This is currently only available on desktop Firefox.
-      return getBrowserInfo(this.xulBrowser).tabId;
+    let {tabTracker} = apiManager.global;
+    let data = tabTracker.getBrowserData(this.xulBrowser);
+    if (data.tabId >= 0) {
+      return data.tabId;
     }
-    return undefined;
   }
 
   onBrowserChange(browser) {
@@ -417,13 +458,14 @@ class DevToolsExtensionPageContextParent extends ExtensionPageContextParent {
   }
 
   shutdown() {
-    if (!this._devToolsTarget) {
-      throw new Error("no DevTools target is set during DevTools Context shutdown");
+    if (this._devToolsTarget) {
+      this._devToolsTarget.destroy();
+      this._devToolsTarget = null;
     }
 
-    this._devToolsTarget.destroy();
-    this._devToolsTarget = null;
     this._devToolsToolbox = null;
+
+    super.shutdown();
   }
 }
 
@@ -431,7 +473,7 @@ ParentAPIManager = {
   proxyContexts: new Map(),
 
   init() {
-    Services.obs.addObserver(this, "message-manager-close", false);
+    Services.obs.addObserver(this, "message-manager-close");
 
     Services.mm.addMessageListener("API:CreateProxyContext", this);
     Services.mm.addMessageListener("API:CloseProxyContext", this, true);
@@ -543,7 +585,7 @@ ParentAPIManager = {
     }
   },
 
-  call(data, target) {
+  async call(data, target) {
     let context = this.getContextById(data.childId);
     if (context.parentMessageManager !== target.messageManager) {
       throw new Error("Got message on unexpected message manager");
@@ -551,7 +593,8 @@ ParentAPIManager = {
 
     let reply = result => {
       if (!context.parentMessageManager) {
-        Cu.reportError("Cannot send function call result: other side closed connection");
+        Services.console.logStringMessage("Cannot send function call result: other side closed connection " +
+                                          `(call data: ${uneval({path: data.path, args: data.args})})`);
         return;
       }
 
@@ -565,7 +608,8 @@ ParentAPIManager = {
 
     try {
       let args = Cu.cloneInto(data.args, context.sandbox);
-      let result = findPathInObject(context.apiObj, data.path)(...args);
+      let fun = await context.apiCan.asyncFindAPIPath(data.path);
+      let result = fun(...args);
 
       if (data.callId) {
         result = result || Promise.resolve();
@@ -576,7 +620,7 @@ ParentAPIManager = {
           reply({result});
         }, error => {
           error = context.normalizeError(error);
-          reply({error: {message: error.message}});
+          reply({error: {message: error.message, fileName: error.fileName}});
         });
       }
     } catch (e) {
@@ -589,7 +633,7 @@ ParentAPIManager = {
     }
   },
 
-  addListener(data, target) {
+  async addListener(data, target) {
     let context = this.getContextById(data.childId);
     if (context.parentMessageManager !== target.messageManager) {
       throw new Error("Got message on unexpected message manager");
@@ -615,13 +659,27 @@ ParentAPIManager = {
     context.listenerProxies.set(data.listenerId, listener);
 
     let args = Cu.cloneInto(data.args, context.sandbox);
-    findPathInObject(context.apiObj, data.path).addListener(listener, ...args);
+    let promise = context.apiCan.asyncFindAPIPath(data.path);
+
+    // Store pending listener additions so we can be sure they're all
+    // fully initialize before we consider extension startup complete.
+    if (context.viewType === "background" && context.listenerPromises) {
+      const {listenerPromises} = context;
+      listenerPromises.add(promise);
+      let remove = () => { listenerPromises.delete(promise); };
+      promise.then(remove, remove);
+    }
+
+    let handler = await promise;
+    handler.addListener(listener, ...args);
   },
 
-  removeListener(data) {
+  async removeListener(data) {
     let context = this.getContextById(data.childId);
     let listener = context.listenerProxies.get(data.listenerId);
-    findPathInObject(context.apiObj, data.path).removeListener(listener);
+
+    let handler = await context.apiCan.asyncFindAPIPath(data.path);
+    handler.removeListener(listener);
   },
 
   getContextById(childId) {
@@ -702,35 +760,30 @@ class HiddenExtensionPage {
    * @returns {Promise<XULElement>}
    *   a Promise which resolves to the newly created browser XUL element.
    */
-  createBrowserElement() {
+  async createBrowserElement() {
     if (this.browser) {
       throw new Error("createBrowserElement called twice");
     }
 
-    let waitForParentDocument;
+    let chromeDoc = await this.createWindowlessBrowser();
+
+    const browser = this.browser = chromeDoc.createElement("browser");
+    browser.setAttribute("type", "content");
+    browser.setAttribute("disableglobalhistory", "true");
+    browser.setAttribute("webextension-view-type", this.viewType);
+
+    let awaitFrameLoader = Promise.resolve();
+
     if (this.extension.remote) {
-      waitForParentDocument = this.createWindowedBrowser();
-    } else {
-      waitForParentDocument = this.createWindowlessBrowser();
+      browser.setAttribute("remote", "true");
+      browser.setAttribute("remoteType", E10SUtils.EXTENSION_REMOTE_TYPE);
+      awaitFrameLoader = promiseEvent(browser, "XULFrameLoaderCreated");
     }
 
-    return waitForParentDocument.then(chromeDoc => {
-      const browser = this.browser = chromeDoc.createElement("browser");
-      browser.setAttribute("type", "content");
-      browser.setAttribute("disableglobalhistory", "true");
-      browser.setAttribute("webextension-view-type", this.viewType);
+    chromeDoc.documentElement.appendChild(browser);
+    await awaitFrameLoader;
 
-      let awaitFrameLoader = Promise.resolve();
-
-      if (this.extension.remote) {
-        browser.setAttribute("remote", "true");
-        browser.setAttribute("remoteType", E10SUtils.EXTENSION_REMOTE_TYPE);
-        awaitFrameLoader = promiseEvent(browser, "XULFrameLoaderCreated");
-      }
-
-      chromeDoc.documentElement.appendChild(browser);
-      return awaitFrameLoader.then(() => browser);
-    });
+    return browser;
   }
 
   /**
@@ -747,58 +800,26 @@ class HiddenExtensionPage {
    *   a promise which resolves to the newly created XULDocument.
    */
   createWindowlessBrowser() {
-    return Task.spawn(function* () {
-      // The invisible page is currently wrapped in a XUL window to fix an issue
-      // with using the canvas API from a background page (See Bug 1274775).
-      let windowlessBrowser = Services.appShell.createWindowlessBrowser(true);
-      this.windowlessBrowser = windowlessBrowser;
+    // The invisible page is currently wrapped in a XUL window to fix an issue
+    // with using the canvas API from a background page (See Bug 1274775).
+    let windowlessBrowser = Services.appShell.createWindowlessBrowser(true);
+    this.windowlessBrowser = windowlessBrowser;
 
-      // The windowless browser is a thin wrapper around a docShell that keeps
-      // its related resources alive. It implements nsIWebNavigation and
-      // forwards its methods to the underlying docShell, but cannot act as a
-      // docShell itself. Calling `getInterface(nsIDocShell)` gives us the
-      // underlying docShell, and `QueryInterface(nsIWebNavigation)` gives us
-      // access to the webNav methods that are already available on the
-      // windowless browser, but contrary to appearances, they are not the same
-      // object.
-      let chromeShell = windowlessBrowser.QueryInterface(Ci.nsIInterfaceRequestor)
-                                         .getInterface(Ci.nsIDocShell)
-                                         .QueryInterface(Ci.nsIWebNavigation);
+    // The windowless browser is a thin wrapper around a docShell that keeps
+    // its related resources alive. It implements nsIWebNavigation and
+    // forwards its methods to the underlying docShell, but cannot act as a
+    // docShell itself. Calling `getInterface(nsIDocShell)` gives us the
+    // underlying docShell, and `QueryInterface(nsIWebNavigation)` gives us
+    // access to the webNav methods that are already available on the
+    // windowless browser, but contrary to appearances, they are not the same
+    // object.
+    let chromeShell = windowlessBrowser.QueryInterface(Ci.nsIInterfaceRequestor)
+                                       .getInterface(Ci.nsIDocShell)
+                                       .QueryInterface(Ci.nsIWebNavigation);
 
-      yield this.initParentWindow(chromeShell);
-
+    return this.initParentWindow(chromeShell).then(() => {
       return promiseDocumentLoaded(windowlessBrowser.document);
-    }.bind(this));
-  }
-
-  /**
-   * Private helper that create a XULDocument in a visible dialog window.
-   *
-   * Using this helper, the extension page is loaded into a visible dialog window.
-   * Only to be used for debugging, and in temporary, test-only use for
-   * out-of-process extensions.
-   *
-   * @returns {Promise<XULDocument>}
-   *   a promise which resolves to the newly created XULDocument.
-   */
-  createWindowedBrowser() {
-    return Task.spawn(function* () {
-      let window = Services.ww.openWindow(null, "about:blank", "_blank",
-                                          "chrome,alwaysLowered,dialog", null);
-
-      this.parentWindow = window;
-
-      let chromeShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                              .getInterface(Ci.nsIDocShell)
-                              .QueryInterface(Ci.nsIWebNavigation);
-
-
-      yield this.initParentWindow(chromeShell);
-
-      window.minimize();
-
-      return promiseDocumentLoaded(window.document);
-    }.bind(this));
+    });
   }
 
   /**
@@ -829,9 +850,9 @@ class HiddenExtensionPage {
 
 function promiseExtensionViewLoaded(browser) {
   return new Promise(resolve => {
-    browser.messageManager.addMessageListener("Extension:ExtensionViewLoaded", function onLoad() {
+    browser.messageManager.addMessageListener("Extension:ExtensionViewLoaded", function onLoad({data}) {
       browser.messageManager.removeMessageListener("Extension:ExtensionViewLoaded", onLoad);
-      resolve();
+      resolve(data.childId && ParentAPIManager.getContextById(data.childId));
     });
   });
 }
@@ -873,11 +894,28 @@ function watchExtensionProxyContextLoad({extension, viewType, browser}, onExtens
   };
 }
 
+// Used to cache the list of WebExtensionManifest properties defined in the BASE_SCHEMA.
+let gBaseManifestProperties = null;
+
 const ExtensionParent = {
   GlobalManager,
   HiddenExtensionPage,
   ParentAPIManager,
   apiManager,
+  get baseManifestProperties() {
+    if (gBaseManifestProperties) {
+      return gBaseManifestProperties;
+    }
+
+    let types = Schemas.schemaJSON.get(BASE_SCHEMA)[0].types;
+    let manifest = types.find(type => type.id === "WebExtensionManifest");
+    if (!manifest) {
+      throw new Error("Unable to find base manifest properties");
+    }
+
+    gBaseManifestProperties = Object.getOwnPropertyNames(manifest.properties);
+    return gBaseManifestProperties;
+  },
   promiseExtensionViewLoaded,
   watchExtensionProxyContextLoad,
 };

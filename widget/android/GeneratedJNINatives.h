@@ -14,21 +14,6 @@ namespace mozilla {
 namespace java {
 
 template<class Impl>
-class AlarmReceiver::Natives : public mozilla::jni::NativeImpl<AlarmReceiver, Impl>
-{
-public:
-    static const JNINativeMethod methods[1];
-};
-
-template<class Impl>
-const JNINativeMethod AlarmReceiver::Natives<Impl>::methods[] = {
-
-    mozilla::jni::MakeNativeMethod<AlarmReceiver::NotifyAlarmFired_t>(
-            mozilla::jni::NativeStub<AlarmReceiver::NotifyAlarmFired_t, Impl>
-            ::template Wrap<&Impl::NotifyAlarmFired>)
-};
-
-template<class Impl>
 class AndroidGamepadManager::Natives : public mozilla::jni::NativeImpl<AndroidGamepadManager, Impl>
 {
 public:
@@ -101,7 +86,7 @@ template<class Impl>
 class GeckoAppShell::Natives : public mozilla::jni::NativeImpl<GeckoAppShell, Impl>
 {
 public:
-    static const JNINativeMethod methods[8];
+    static const JNINativeMethod methods[7];
 };
 
 template<class Impl>
@@ -133,11 +118,7 @@ const JNINativeMethod GeckoAppShell::Natives<Impl>::methods[] = {
 
     mozilla::jni::MakeNativeMethod<GeckoAppShell::ReportJavaCrash_t>(
             mozilla::jni::NativeStub<GeckoAppShell::ReportJavaCrash_t, Impl>
-            ::template Wrap<&Impl::ReportJavaCrash>),
-
-    mozilla::jni::MakeNativeMethod<GeckoAppShell::SyncNotifyObservers_t>(
-            mozilla::jni::NativeStub<GeckoAppShell::SyncNotifyObservers_t, Impl>
-            ::template Wrap<&Impl::SyncNotifyObservers>)
+            ::template Wrap<&Impl::ReportJavaCrash>)
 };
 
 template<class Impl>
@@ -171,41 +152,37 @@ const JNINativeMethod GeckoBatteryManager::Natives<Impl>::methods[] = {
 };
 
 template<class Impl>
-class GeckoEditable::Natives : public mozilla::jni::NativeImpl<GeckoEditable, Impl>
+class GeckoEditableChild::Natives : public mozilla::jni::NativeImpl<GeckoEditableChild, Impl>
 {
 public:
-    static const JNINativeMethod methods[7];
+    static const JNINativeMethod methods[6];
 };
 
 template<class Impl>
-const JNINativeMethod GeckoEditable::Natives<Impl>::methods[] = {
+const JNINativeMethod GeckoEditableChild::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<GeckoEditable::DisposeNative_t>(
-            mozilla::jni::NativeStub<GeckoEditable::DisposeNative_t, Impl>
-            ::template Wrap<&Impl::DisposeNative>),
-
-    mozilla::jni::MakeNativeMethod<GeckoEditable::OnImeAddCompositionRange_t>(
-            mozilla::jni::NativeStub<GeckoEditable::OnImeAddCompositionRange_t, Impl>
+    mozilla::jni::MakeNativeMethod<GeckoEditableChild::OnImeAddCompositionRange_t>(
+            mozilla::jni::NativeStub<GeckoEditableChild::OnImeAddCompositionRange_t, Impl>
             ::template Wrap<&Impl::OnImeAddCompositionRange>),
 
-    mozilla::jni::MakeNativeMethod<GeckoEditable::OnImeReplaceText_t>(
-            mozilla::jni::NativeStub<GeckoEditable::OnImeReplaceText_t, Impl>
+    mozilla::jni::MakeNativeMethod<GeckoEditableChild::OnImeReplaceText_t>(
+            mozilla::jni::NativeStub<GeckoEditableChild::OnImeReplaceText_t, Impl>
             ::template Wrap<&Impl::OnImeReplaceText>),
 
-    mozilla::jni::MakeNativeMethod<GeckoEditable::OnImeRequestCursorUpdates_t>(
-            mozilla::jni::NativeStub<GeckoEditable::OnImeRequestCursorUpdates_t, Impl>
+    mozilla::jni::MakeNativeMethod<GeckoEditableChild::OnImeRequestCursorUpdates_t>(
+            mozilla::jni::NativeStub<GeckoEditableChild::OnImeRequestCursorUpdates_t, Impl>
             ::template Wrap<&Impl::OnImeRequestCursorUpdates>),
 
-    mozilla::jni::MakeNativeMethod<GeckoEditable::OnImeSynchronize_t>(
-            mozilla::jni::NativeStub<GeckoEditable::OnImeSynchronize_t, Impl>
+    mozilla::jni::MakeNativeMethod<GeckoEditableChild::OnImeSynchronize_t>(
+            mozilla::jni::NativeStub<GeckoEditableChild::OnImeSynchronize_t, Impl>
             ::template Wrap<&Impl::OnImeSynchronize>),
 
-    mozilla::jni::MakeNativeMethod<GeckoEditable::OnImeUpdateComposition_t>(
-            mozilla::jni::NativeStub<GeckoEditable::OnImeUpdateComposition_t, Impl>
+    mozilla::jni::MakeNativeMethod<GeckoEditableChild::OnImeUpdateComposition_t>(
+            mozilla::jni::NativeStub<GeckoEditableChild::OnImeUpdateComposition_t, Impl>
             ::template Wrap<&Impl::OnImeUpdateComposition>),
 
-    mozilla::jni::MakeNativeMethod<GeckoEditable::OnKeyEvent_t>(
-            mozilla::jni::NativeStub<GeckoEditable::OnKeyEvent_t, Impl>
+    mozilla::jni::MakeNativeMethod<GeckoEditableChild::OnKeyEvent_t>(
+            mozilla::jni::NativeStub<GeckoEditableChild::OnKeyEvent_t, Impl>
             ::template Wrap<&Impl::OnKeyEvent>)
 };
 
@@ -464,141 +441,84 @@ const JNINativeMethod VsyncSource::Natives<Impl>::methods[] = {
 };
 
 template<class Impl>
-class NativeJSContainer::Natives : public mozilla::jni::NativeImpl<NativeJSContainer, Impl>
+class CodecProxy::NativeCallbacks::Natives : public mozilla::jni::NativeImpl<NativeCallbacks, Impl>
 {
 public:
-    static const JNINativeMethod methods[2];
+    static const JNINativeMethod methods[4];
 };
 
 template<class Impl>
-const JNINativeMethod NativeJSContainer::Natives<Impl>::methods[] = {
+const JNINativeMethod CodecProxy::NativeCallbacks::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<NativeJSContainer::Clone2_t>(
-            mozilla::jni::NativeStub<NativeJSContainer::Clone2_t, Impl>
-            ::template Wrap<&Impl::Clone>),
+    mozilla::jni::MakeNativeMethod<CodecProxy::NativeCallbacks::OnError_t>(
+            mozilla::jni::NativeStub<CodecProxy::NativeCallbacks::OnError_t, Impl>
+            ::template Wrap<&Impl::OnError>),
 
-    mozilla::jni::MakeNativeMethod<NativeJSContainer::DisposeNative_t>(
-            mozilla::jni::NativeStub<NativeJSContainer::DisposeNative_t, Impl>
-            ::template Wrap<&Impl::DisposeNative>)
+    mozilla::jni::MakeNativeMethod<CodecProxy::NativeCallbacks::OnInputStatus_t>(
+            mozilla::jni::NativeStub<CodecProxy::NativeCallbacks::OnInputStatus_t, Impl>
+            ::template Wrap<&Impl::OnInputStatus>),
+
+    mozilla::jni::MakeNativeMethod<CodecProxy::NativeCallbacks::OnOutput_t>(
+            mozilla::jni::NativeStub<CodecProxy::NativeCallbacks::OnOutput_t, Impl>
+            ::template Wrap<&Impl::OnOutput>),
+
+    mozilla::jni::MakeNativeMethod<CodecProxy::NativeCallbacks::OnOutputFormatChanged_t>(
+            mozilla::jni::NativeStub<CodecProxy::NativeCallbacks::OnOutputFormatChanged_t, Impl>
+            ::template Wrap<&Impl::OnOutputFormatChanged>)
 };
 
 template<class Impl>
-class NativeJSObject::Natives : public mozilla::jni::NativeImpl<NativeJSObject, Impl>
+class MediaDrmProxy::NativeMediaDrmProxyCallbacks::Natives : public mozilla::jni::NativeImpl<NativeMediaDrmProxyCallbacks, Impl>
 {
 public:
-    static const JNINativeMethod methods[27];
+    static const JNINativeMethod methods[7];
 };
 
 template<class Impl>
-const JNINativeMethod NativeJSObject::Natives<Impl>::methods[] = {
+const JNINativeMethod MediaDrmProxy::NativeMediaDrmProxyCallbacks::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetBoolean_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetBoolean_t, Impl>
-            ::template Wrap<&Impl::GetBoolean>),
+    mozilla::jni::MakeNativeMethod<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnRejectPromise_t>(
+            mozilla::jni::NativeStub<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnRejectPromise_t, Impl>
+            ::template Wrap<&Impl::OnRejectPromise>),
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetBooleanArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetBooleanArray_t, Impl>
-            ::template Wrap<&Impl::GetBooleanArray>),
+    mozilla::jni::MakeNativeMethod<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionBatchedKeyChanged_t>(
+            mozilla::jni::NativeStub<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionBatchedKeyChanged_t, Impl>
+            ::template Wrap<&Impl::OnSessionBatchedKeyChanged>),
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetBundle_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetBundle_t, Impl>
-            ::template Wrap<&Impl::GetBundle>),
+    mozilla::jni::MakeNativeMethod<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionClosed_t>(
+            mozilla::jni::NativeStub<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionClosed_t, Impl>
+            ::template Wrap<&Impl::OnSessionClosed>),
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetBundleArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetBundleArray_t, Impl>
-            ::template Wrap<&Impl::GetBundleArray>),
+    mozilla::jni::MakeNativeMethod<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionCreated_t>(
+            mozilla::jni::NativeStub<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionCreated_t, Impl>
+            ::template Wrap<&Impl::OnSessionCreated>),
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetDouble_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetDouble_t, Impl>
-            ::template Wrap<&Impl::GetDouble>),
+    mozilla::jni::MakeNativeMethod<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionError_t>(
+            mozilla::jni::NativeStub<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionError_t, Impl>
+            ::template Wrap<&Impl::OnSessionError>),
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetDoubleArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetDoubleArray_t, Impl>
-            ::template Wrap<&Impl::GetDoubleArray>),
+    mozilla::jni::MakeNativeMethod<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionMessage_t>(
+            mozilla::jni::NativeStub<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionMessage_t, Impl>
+            ::template Wrap<&Impl::OnSessionMessage>),
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetInt_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetInt_t, Impl>
-            ::template Wrap<&Impl::GetInt>),
+    mozilla::jni::MakeNativeMethod<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionUpdated_t>(
+            mozilla::jni::NativeStub<MediaDrmProxy::NativeMediaDrmProxyCallbacks::OnSessionUpdated_t, Impl>
+            ::template Wrap<&Impl::OnSessionUpdated>)
+};
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetIntArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetIntArray_t, Impl>
-            ::template Wrap<&Impl::GetIntArray>),
+template<class Impl>
+class GeckoProcessManager::Natives : public mozilla::jni::NativeImpl<GeckoProcessManager, Impl>
+{
+public:
+    static const JNINativeMethod methods[1];
+};
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetObject_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetObject_t, Impl>
-            ::template Wrap<&Impl::GetObject>),
+template<class Impl>
+const JNINativeMethod GeckoProcessManager::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetObjectArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetObjectArray_t, Impl>
-            ::template Wrap<&Impl::GetObjectArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetString_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetString_t, Impl>
-            ::template Wrap<&Impl::GetString>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::GetStringArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::GetStringArray_t, Impl>
-            ::template Wrap<&Impl::GetStringArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::Has_t>(
-            mozilla::jni::NativeStub<NativeJSObject::Has_t, Impl>
-            ::template Wrap<&Impl::Has>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptBoolean_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptBoolean_t, Impl>
-            ::template Wrap<&Impl::OptBoolean>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptBooleanArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptBooleanArray_t, Impl>
-            ::template Wrap<&Impl::OptBooleanArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptBundle_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptBundle_t, Impl>
-            ::template Wrap<&Impl::OptBundle>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptBundleArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptBundleArray_t, Impl>
-            ::template Wrap<&Impl::OptBundleArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptDouble_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptDouble_t, Impl>
-            ::template Wrap<&Impl::OptDouble>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptDoubleArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptDoubleArray_t, Impl>
-            ::template Wrap<&Impl::OptDoubleArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptInt_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptInt_t, Impl>
-            ::template Wrap<&Impl::OptInt>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptIntArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptIntArray_t, Impl>
-            ::template Wrap<&Impl::OptIntArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptObject_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptObject_t, Impl>
-            ::template Wrap<&Impl::OptObject>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptObjectArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptObjectArray_t, Impl>
-            ::template Wrap<&Impl::OptObjectArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptString_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptString_t, Impl>
-            ::template Wrap<&Impl::OptString>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::OptStringArray_t>(
-            mozilla::jni::NativeStub<NativeJSObject::OptStringArray_t, Impl>
-            ::template Wrap<&Impl::OptStringArray>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::ToBundle_t>(
-            mozilla::jni::NativeStub<NativeJSObject::ToBundle_t, Impl>
-            ::template Wrap<&Impl::ToBundle>),
-
-    mozilla::jni::MakeNativeMethod<NativeJSObject::ToString_t>(
-            mozilla::jni::NativeStub<NativeJSObject::ToString_t, Impl>
-            ::template Wrap<&Impl::ToString>)
+    mozilla::jni::MakeNativeMethod<GeckoProcessManager::GetEditableParent_t>(
+            mozilla::jni::NativeStub<GeckoProcessManager::GetEditableParent_t, Impl>
+            ::template Wrap<&Impl::GetEditableParent>)
 };
 
 } /* java */

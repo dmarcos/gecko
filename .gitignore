@@ -7,6 +7,7 @@
 TAGS
 tags
 ID
+!/browser/extensions/screenshots/webextension/_locales/id/
 .DS_Store*
 *.pdb
 *.egg-info
@@ -100,8 +101,8 @@ testing/mozharness/logs/
 testing/mozharness/.coverage
 testing/mozharness/nosetests.xml
 
-# Ignore node_modules
-tools/lint/eslint/node_modules/
+# Ignore ESLint node_modules
+node_modules/
 
 # Ignore talos virtualenv and tp5n files.
 # The tp5n set is supposed to be decompressed at
@@ -122,3 +123,7 @@ lextab.py
 
 # tup database
 /.tup
+
+# Ignore Visual Studio Code workspace files.
+.vscode/
+!.vscode/extensions.json

@@ -1,6 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
 
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
 
@@ -44,6 +45,8 @@ function* tearDownAddon(addon) {
 }
 
 add_task(function* test_reloading_a_temp_addon() {
+  if (AppConstants.MOZ_APP_NAME == "thunderbird")
+    return;
   yield promiseRestartManager();
   yield AddonManager.installTemporaryAddon(do_get_addon(sampleAddon.name));
   const addon = yield promiseAddonByID(sampleAddon.id)
@@ -80,7 +83,10 @@ add_task(function* test_reloading_a_temp_addon() {
     AddonManager.addAddonListener(listener);
   });
 
-  yield addon.reload();
+  yield Promise.all([
+    addon.reload(),
+    promiseAddonStartup(),
+  ]);
   yield onReload;
 
   // Make sure reload() doesn't trigger uninstall events.
@@ -111,7 +117,10 @@ add_task(function* test_can_reload_permanent_addon() {
     }
   })
 
-  yield addon.reload();
+  yield Promise.all([
+    addon.reload(),
+    promiseAddonStartup(),
+  ]);
 
   do_check_true(disabledCalled);
   do_check_true(enabledCalled);

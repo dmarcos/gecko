@@ -18,6 +18,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/Logging.h"
 #include "mozilla/TimeStamp.h"
+#include "nsAppRunner.h"
 #include "nsAutoPtr.h"
 #include "nsDebug.h"
 #include "nsISupportsImpl.h"
@@ -129,6 +130,10 @@ namespace mozilla {
 namespace ipc {
 
 static const uint32_t kMinTelemetryMessageSize = 8192;
+
+// Note: we round the time we spend to the nearest millisecond. So a min value
+// of 1 ms actually captures from 500us and above.
+static const uint32_t kMinTelemetryIPCWriteLatencyMs = 1;
 
 // Note: we round the time we spend waiting for a response to the nearest
 // millisecond. So a min value of 1 ms actually captures from 500us and above.
@@ -483,8 +488,10 @@ private:
     nsAutoPtr<IPC::Message> mReply;
 };
 
-MessageChannel::MessageChannel(IToplevelProtocol *aListener)
-  : mListener(aListener),
+MessageChannel::MessageChannel(const char* aName,
+                               IToplevelProtocol *aListener)
+  : mName(aName),
+    mListener(aListener),
     mChannelState(ChannelClosed),
     mSide(UnknownSide),
     mLink(nullptr),
@@ -623,6 +630,18 @@ MessageChannel::CanSend() const
 }
 
 void
+MessageChannel::WillDestroyCurrentMessageLoop()
+{
+#if defined(DEBUG) && !defined(ANDROID)
+#if defined(MOZ_CRASHREPORTER)
+    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ProtocolName"),
+                                       nsDependentCString(mName));
+#endif
+    MOZ_CRASH("MessageLoop destroyed before MessageChannel that's bound to it");
+#endif
+}
+
+void
 MessageChannel::Clear()
 {
     // Don't clear mWorkerLoopID; we use it in AssertLinkThread() and
@@ -635,8 +654,22 @@ MessageChannel::Clear()
     // In practice, mListener owns the channel, so the channel gets deleted
     // before mListener.  But just to be safe, mListener is a weak pointer.
 
+#if !defined(ANDROID)
+    if (!Unsound_IsClosed()) {
+#if defined(MOZ_CRASHREPORTER)
+        CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ProtocolName"),
+                                           nsDependentCString(mName));
+#endif
+        MOZ_CRASH("MessageChannel destroyed without being closed");
+    }
+#endif
+
     if (gParentProcessBlocker == this) {
         gParentProcessBlocker = nullptr;
+    }
+
+    if (mWorkerLoop) {
+        mWorkerLoop->RemoveDestructionObserver(this);
     }
 
     mWorkerLoop = nullptr;
@@ -670,6 +703,8 @@ MessageChannel::Open(Transport* aTransport, MessageLoop* aIOLoop, Side aSide)
     mMonitor = new RefCountedMonitor();
     mWorkerLoop = MessageLoop::current();
     mWorkerLoopID = mWorkerLoop->id();
+
+    mWorkerLoop->AddDestructionObserver(this);
 
     ProcessLink *link = new ProcessLink(this);
     link->Open(aTransport, aIOLoop, aSide); // :TODO: n.b.: sets mChild
@@ -747,6 +782,7 @@ MessageChannel::CommonThreadOpenInit(MessageChannel *aTargetChan, Side aSide)
 {
     mWorkerLoop = MessageLoop::current();
     mWorkerLoopID = mWorkerLoop->id();
+    mWorkerLoop->AddDestructionObserver(this);
     mLink = new ThreadLink(this, aTargetChan);
     mSide = aSide;
 }
@@ -781,6 +817,18 @@ MessageChannel::Send(Message* aMsg)
                               nsDependentCString(aMsg->name()), aMsg->size());
     }
 
+    // If the message was created by the IPC bindings, the create time will be
+    // recorded. Use this information to report the IPC_WRITE_MAIN_THREAD_LATENCY_MS (time
+    // from message creation to it being sent).
+    if (NS_IsMainThread() && aMsg->create_time()) {
+        uint32_t latencyMs = round((mozilla::TimeStamp::Now() - aMsg->create_time()).ToMilliseconds());
+        if (latencyMs >= kMinTelemetryIPCWriteLatencyMs) {
+            mozilla::Telemetry::Accumulate(mozilla::Telemetry::IPC_WRITE_MAIN_THREAD_LATENCY_MS,
+                                           nsDependentCString(aMsg->name()),
+                                           latencyMs);
+        }
+    }
+
     MOZ_RELEASE_ASSERT(!aMsg->is_sync());
     MOZ_RELEASE_ASSERT(aMsg->nested_level() != IPC::Message::NESTED_INSIDE_SYNC);
 
@@ -803,6 +851,45 @@ MessageChannel::Send(Message* aMsg)
     return true;
 }
 
+class BuildIDMessage : public IPC::Message
+{
+public:
+    BuildIDMessage()
+        : IPC::Message(MSG_ROUTING_NONE, BUILD_ID_MESSAGE_TYPE)
+    {
+    }
+    void Log(const std::string& aPrefix, FILE* aOutf) const
+    {
+        fputs("(special `Build ID' message)", aOutf);
+    }
+};
+
+// Send the parent a special async message to allow it to detect if
+// this process is running a different build. This is a minor
+// variation on MessageChannel::Send(Message* aMsg).
+void
+MessageChannel::SendBuildID()
+{
+    MOZ_ASSERT(!XRE_IsParentProcess());
+    nsAutoPtr<BuildIDMessage> msg(new BuildIDMessage());
+    nsCString buildID(mozilla::PlatformBuildID());
+    IPC::WriteParam(msg, buildID);
+
+    MOZ_RELEASE_ASSERT(!msg->is_sync());
+    MOZ_RELEASE_ASSERT(msg->nested_level() != IPC::Message::NESTED_INSIDE_SYNC);
+
+    AssertWorkerThread();
+    mMonitor->AssertNotCurrentThreadOwns();
+    // Don't check for MSG_ROUTING_NONE.
+
+    MonitorAutoLock lock(*mMonitor);
+    if (!Connected()) {
+        ReportConnectionError("MessageChannel", msg);
+        MOZ_CRASH();
+    }
+    mLink->SendMessage(msg.forget());
+}
+
 class CancelMessage : public IPC::Message
 {
 public:
@@ -818,6 +905,22 @@ public:
         fputs("(special `Cancel' message)", aOutf);
     }
 };
+
+MOZ_NEVER_INLINE static void
+CheckChildProcessBuildID(const IPC::Message& aMsg)
+{
+    MOZ_ASSERT(XRE_IsParentProcess());
+    nsCString childBuildID;
+    PickleIterator msgIter(aMsg);
+    MOZ_ALWAYS_TRUE(IPC::ReadParam(&aMsg, &msgIter, &childBuildID));
+    aMsg.EndRead(msgIter);
+
+    nsCString parentBuildID(mozilla::PlatformBuildID());
+
+    // This assert can fail if the child process has been updated
+    // to a newer version while the parent process was running.
+    MOZ_RELEASE_ASSERT(parentBuildID == childBuildID);
+}
 
 bool
 MessageChannel::MaybeInterceptSpecialIOMessage(const Message& aMsg)
@@ -839,6 +942,10 @@ MessageChannel::MaybeInterceptSpecialIOMessage(const Message& aMsg)
             IPC_LOG("Cancel from message");
             CancelTransaction(aMsg.transaction_id());
             NotifyWorkerThread();
+            return true;
+        } else if (BUILD_ID_MESSAGE_TYPE == aMsg.type()) {
+            IPC_LOG("Build ID message");
+            CheckChildProcessBuildID(aMsg);
             return true;
         }
     }
@@ -1279,8 +1386,9 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
                               nsDependentCString(msgName), aReply->size());
     }
 
-    if (latencyMs >= kMinTelemetrySyncIPCLatencyMs) {
-      Telemetry::Accumulate(Telemetry::IPC_SYNC_LATENCY_MS,
+    // NOTE: Only collect IPC_SYNC_MAIN_LATENCY_MS on the main thread (bug 1343729)
+    if (NS_IsMainThread() && latencyMs >= kMinTelemetrySyncIPCLatencyMs) {
+      Telemetry::Accumulate(Telemetry::IPC_SYNC_MAIN_LATENCY_MS,
                             nsDependentCString(msgName), latencyMs);
     }
     return true;
@@ -2042,7 +2150,10 @@ MessageChannel::ShouldContinueFromTimeout()
     static enum { UNKNOWN, NOT_DEBUGGING, DEBUGGING } sDebuggingChildren = UNKNOWN;
 
     if (sDebuggingChildren == UNKNOWN) {
-        sDebuggingChildren = getenv("MOZ_DEBUG_CHILD_PROCESS") ? DEBUGGING : NOT_DEBUGGING;
+        sDebuggingChildren = getenv("MOZ_DEBUG_CHILD_PROCESS") ||
+                             getenv("MOZ_DEBUG_CHILD_PAUSE")
+                               ? DEBUGGING
+                               : NOT_DEBUGGING;
     }
     if (sDebuggingChildren == DEBUGGING) {
         return true;

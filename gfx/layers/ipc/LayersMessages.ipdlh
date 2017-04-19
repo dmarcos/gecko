@@ -50,7 +50,9 @@ using mozilla::layers::BorderCorners from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::BorderWidths from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::LayerHandle from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::CompositableHandle from "mozilla/layers/LayersTypes.h";
+using mozilla::layers::ReadLockHandle from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::SimpleLayerAttributes from "mozilla/layers/LayerAttributes.h";
+using mozilla::CrossProcessSemaphoreHandle from "mozilla/ipc/CrossProcessSemaphore.h";
 
 namespace mozilla {
 namespace layers {
@@ -100,10 +102,15 @@ struct StepFunction {
   int type;
 };
 
+struct FramesFunction {
+  int frames;
+};
+
 union TimingFunction {
   null_t;
   CubicBezierFunction;
   StepFunction;
+  FramesFunction;
 };
 
 // Send the angle with units rather than sending all angles in radians
@@ -231,6 +238,13 @@ struct Animation {
   Animatable baseStyle;
 };
 
+struct CompositorAnimations {
+  Animation[] animations;
+  // This id is used to map the layer animations between content
+  // and compositor side
+  uint64_t id;
+};
+
 // Change a layer's attributes
 struct CommonLayerAttributes {
   LayerIntRegion visibleRegion;
@@ -240,7 +254,7 @@ struct CommonLayerAttributes {
   LayerHandle maskLayer;
   LayerHandle[] ancestorMaskLayers;
   // Animated colors will only honored for ColorLayers.
-  Animation[] animations;
+  CompositorAnimations compositorAnimations;
   nsIntRegion invalidRegion;
   ScrollMetadata[] scrollMetadata;
   nsCString displayListLog;
@@ -271,7 +285,7 @@ struct TextLayerAttributes      { IntRect bounds; GlyphArray[] glyphs; uintptr_t
 struct ColorLayerAttributes     { LayerColor color; IntRect bounds; };
 struct CanvasLayerAttributes    { SamplingFilter samplingFilter; IntRect bounds; };
 struct RefLayerAttributes {
-  int64_t id;
+  uint64_t id;
   // TODO: Once bug 1132895 is fixed we shouldn't need to propagate the override
   // explicitly here.
   EventRegionsOverride eventRegionsOverride;
@@ -336,10 +350,20 @@ struct ShmemSection {
   size_t size;
 };
 
+struct CrossProcessSemaphoreDescriptor {
+  CrossProcessSemaphoreHandle sem;
+};
+
 union ReadLockDescriptor {
   ShmemSection;
+  CrossProcessSemaphoreDescriptor;
   uintptr_t;
   null_t;
+};
+
+struct ReadLockInit {
+  ReadLockDescriptor sharedLock;
+  ReadLockHandle handle;
 };
 
 union MaybeTexture {
@@ -383,11 +407,6 @@ struct OpUseTiledLayerBuffer {
   SurfaceDescriptorTiles tileLayerDescriptor;
 };
 
-struct OpUseOverlaySource {
-  OverlaySource overlay;
-  IntRect picture;
-};
-
 struct OpPaintTextureRegion {
   ThebesBufferData bufferData;
   nsIntRegion updatedRegion;
@@ -402,7 +421,7 @@ struct OpRemoveTexture {
 
 struct TimedTexture {
   PTexture texture;
-  ReadLockDescriptor sharedLock;
+  ReadLockHandle sharedLock;
   TimeStamp timeStamp;
   IntRect picture;
   uint32_t frameID;
@@ -426,8 +445,8 @@ struct OpUseTexture {
 struct OpUseComponentAlphaTextures {
   PTexture textureOnBlack;
   PTexture textureOnWhite;
-  ReadLockDescriptor sharedLockBlack;
-  ReadLockDescriptor sharedLockWhite;
+  ReadLockHandle sharedLockBlack;
+  ReadLockHandle sharedLockWhite;
 };
 
 union MaybeRegion {
@@ -449,7 +468,6 @@ union CompositableOperationDetail {
 
   OpUseTexture;
   OpUseComponentAlphaTextures;
-  OpUseOverlaySource;
 };
 
 struct CompositableOperation {
@@ -512,14 +530,16 @@ struct ImageCompositeNotification {
   uint32_t producerID;
 };
 
-// Unit of a "changeset reply".  This is a weird abstraction, probably
-// only to be used for buffer swapping.
-union EditReply {
-  OpContentBufferSwap;
-};
-
 union AsyncParentMessageData {
   OpNotifyNotUsed;
+};
+
+struct PaintTiming {
+  float serializeMs;
+  float sendMs;
+  float dlMs;
+  float flbMs;
+  float rasterMs;
 };
 
 struct TransactionInfo

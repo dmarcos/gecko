@@ -29,13 +29,16 @@ class MediaDecoderReader;
 
 struct WaitForDataRejectValue
 {
-  enum Reason {
+  enum Reason
+  {
     SHUTDOWN,
     CANCELED
   };
 
   WaitForDataRejectValue(MediaData::Type aType, Reason aReason)
-    :mType(aType), mReason(aReason) {}
+    :mType(aType), mReason(aReason)
+  {
+  }
   MediaData::Type mType;
   Reason mReason;
 };
@@ -43,11 +46,11 @@ struct WaitForDataRejectValue
 struct SeekRejectValue
 {
   MOZ_IMPLICIT SeekRejectValue(const MediaResult& aError)
-    : mType(MediaData::NULL_DATA), mError(aError) {}
+    : mType(MediaData::NULL_DATA), mError(aError) { }
   MOZ_IMPLICIT SeekRejectValue(nsresult aResult)
-    : mType(MediaData::NULL_DATA), mError(aResult) {}
+    : mType(MediaData::NULL_DATA), mError(aResult) { }
   SeekRejectValue(MediaData::Type aType, const MediaResult& aError)
-    : mType(aType), mError(aError) {}
+    : mType(aType), mError(aError) { }
   MediaData::Type mType;
   MediaResult mError;
 };
@@ -60,7 +63,7 @@ public:
   nsAutoPtr<MetadataTags> mTags;
 
 private:
-  virtual ~MetadataHolder() {}
+  virtual ~MetadataHolder() { }
 };
 
 // Encapsulates the decoding and reading of media data. Reading can either
@@ -69,7 +72,8 @@ private:
 // callback.
 // Unless otherwise specified, methods and fields of this class can only
 // be accessed on the decode task queue.
-class MediaDecoderReader {
+class MediaDecoderReader
+{
   friend class ReRequestVideoWithSkipTask;
   friend class ReRequestAudioTask;
 
@@ -80,8 +84,12 @@ public:
 
   using MetadataPromise =
     MozPromise<RefPtr<MetadataHolder>, MediaResult, IsExclusive>;
-  using MediaDataPromise =
-    MozPromise<RefPtr<MediaData>, MediaResult, IsExclusive>;
+
+  template <typename Type>
+  using DataPromise = MozPromise<RefPtr<Type>, MediaResult, IsExclusive>;
+  using AudioDataPromise = DataPromise<AudioData>;
+  using VideoDataPromise = DataPromise<VideoData>;
+
   using SeekPromise = MozPromise<media::TimeUnit, SeekRejectValue, IsExclusive>;
 
   // Note that, conceptually, WaitForData makes sense in a non-exclusive sense.
@@ -104,7 +112,7 @@ public:
   // Called by MDSM in dormant state to release resources allocated by this
   // reader. The reader can resume decoding by calling Seek() to a specific
   // position.
-  virtual void ReleaseResources() {}
+  virtual void ReleaseResources() { }
 
   // Destroys the decoding state. The reader cannot be made usable again.
   // This is different from ReleaseMediaResources() as it is irreversable,
@@ -128,21 +136,23 @@ public:
   //
   // aParam is a set of TrackInfo::TrackType enums specifying which
   // queues need to be reset, defaulting to both audio and video tracks.
-  virtual nsresult ResetDecode(TrackSet aTracks = TrackSet(TrackInfo::kAudioTrack,
-                                                           TrackInfo::kVideoTrack));
+  virtual nsresult ResetDecode(
+    TrackSet aTracks = TrackSet(TrackInfo::kAudioTrack,
+                                TrackInfo::kVideoTrack));
 
   // Requests one audio sample from the reader.
   //
   // The decode should be performed asynchronously, and the promise should
   // be resolved when it is complete.
-  virtual RefPtr<MediaDataPromise> RequestAudioData();
+  virtual RefPtr<AudioDataPromise> RequestAudioData();
 
   // Requests one video sample from the reader.
   //
   // If aSkipToKeyframe is true, the decode should skip ahead to the
-  // the next keyframe at or after aTimeThreshold microseconds.
-  virtual RefPtr<MediaDataPromise>
-  RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold);
+  // the next keyframe at or after aTimeThreshold.
+  virtual RefPtr<VideoDataPromise>
+  RequestVideoData(bool aSkipToNextKeyframe,
+                   const media::TimeUnit& aTimeThreshold);
 
   // By default, the state machine polls the reader once per second when it's
   // in buffering mode. Some readers support a promise-based mechanism by which
@@ -230,7 +240,7 @@ public:
     return mTimedMetadataEvent;
   }
 
-  // Notified by the OggReader during playback when chained ogg is detected.
+  // Notified by the OggDemuxer during playback when chained ogg is detected.
   MediaEventSource<void>& OnMediaNotSeekable() { return mOnMediaNotSeekable; }
 
   TimedMetadataEventProducer& TimedMetadataProducer()
@@ -243,10 +253,22 @@ public:
     return mOnMediaNotSeekable;
   }
 
-  // Switch the video decoder to BlankDecoderModule. It might takes effective
+  // Notified if the reader can't decode a sample due to a missing decryption
+  // key.
+  MediaEventSource<TrackInfo::TrackType>& OnTrackWaitingForKey()
+  {
+    return mOnTrackWaitingForKey;
+  }
+
+  MediaEventProducer<TrackInfo::TrackType>& OnTrackWaitingForKeyProducer()
+  {
+    return mOnTrackWaitingForKey;
+  }
+
+  // Switch the video decoder to NullDecoderModule. It might takes effective
   // since a few samples later depends on how much demuxed samples are already
   // queued in the original video decoder.
-  virtual void SetVideoBlankDecode(bool aIsBlankDecode) {}
+  virtual void SetVideoNullDecode(bool aIsNullDecode) { }
 
 protected:
   virtual ~MediaDecoderReader();
@@ -254,7 +276,7 @@ protected:
   // Recomputes mBuffered.
   virtual void UpdateBuffered();
 
-  RefPtr<MediaDataPromise> DecodeToFirstVideoData();
+  RefPtr<VideoDataPromise> DecodeToFirstVideoData();
 
   // Queue of audio frames. This queue is threadsafe, and is accessed from
   // the audio, decoder, state machine, and main threads.
@@ -306,6 +328,9 @@ protected:
   // Notify if this media is not seekable.
   MediaEventProducer<void> mOnMediaNotSeekable;
 
+  // Notify if we are waiting for a decryption key.
+  MediaEventProducer<TrackInfo::TrackType> mOnTrackWaitingForKey;
+
 private:
   virtual nsresult InitInternal() { return NS_OK; }
 
@@ -341,7 +366,8 @@ private:
   // (unless they're not keyframes and aKeyframeSkip is true), but will
   // not be added to the queue. This function blocks until the decode
   // is complete.
-  virtual bool DecodeVideoFrame(bool &aKeyframeSkip, int64_t aTimeThreshold)
+  virtual bool DecodeVideoFrame(bool& aKeyframeSkip,
+                                const media::TimeUnit& aTimeThreshold)
   {
     return false;
   }
@@ -357,8 +383,8 @@ private:
 
   // Promises used only for the base-class (sync->async adapter) implementation
   // of Request{Audio,Video}Data.
-  MozPromiseHolder<MediaDataPromise> mBaseAudioPromise;
-  MozPromiseHolder<MediaDataPromise> mBaseVideoPromise;
+  MozPromiseHolder<AudioDataPromise> mBaseAudioPromise;
+  MozPromiseHolder<VideoDataPromise> mBaseVideoPromise;
 
   MediaEventListener mDataArrivedListener;
 };

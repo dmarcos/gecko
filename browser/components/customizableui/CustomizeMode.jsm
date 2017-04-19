@@ -42,9 +42,7 @@ let gDebug;
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let scope = {};
   Cu.import("resource://gre/modules/Console.jsm", scope);
-  try {
-    gDebug = Services.prefs.getBoolPref(kPrefCustomizationDebug);
-  } catch (ex) {}
+  gDebug = Services.prefs.getBoolPref(kPrefCustomizationDebug, false);
   let consoleOptions = {
     maxLogLevel: gDebug ? "all" : "log",
     prefix: "CustomizeMode",
@@ -67,10 +65,24 @@ function closeGlobalTab() {
   gTab = null;
 }
 
+var gTabsProgressListener = {
+  onLocationChange(aBrowser, aWebProgress, aRequest, aLocation, aFlags) {
+    if (!gTab || gTab.linkedBrowser != aBrowser) {
+      return;
+    }
+
+    unregisterGlobalTab();
+  },
+}
+
 function unregisterGlobalTab() {
   gTab.removeEventListener("TabClose", unregisterGlobalTab);
-  gTab.ownerGlobal.removeEventListener("unload", unregisterGlobalTab);
+  let win = gTab.ownerGlobal;
+  win.removeEventListener("unload", unregisterGlobalTab);
+  win.gBrowser.removeTabsProgressListener(gTabsProgressListener);
+
   gTab.removeAttribute("customizemode");
+
   gTab = null;
 }
 
@@ -97,7 +109,7 @@ function CustomizeMode(aWindow) {
   }
   if (AppConstants.CAN_DRAW_IN_TITLEBAR) {
     this._updateTitlebarButton();
-    Services.prefs.addObserver(kDrawInTitlebarPref, this, false);
+    Services.prefs.addObserver(kDrawInTitlebarPref, this);
   }
   this.window.addEventListener("unload", this);
 }
@@ -179,6 +191,9 @@ CustomizeMode.prototype = {
                          "chrome://browser/skin/customizableui/customizeFavicon.ico");
 
     gTab.addEventListener("TabClose", unregisterGlobalTab);
+
+    win.gBrowser.addTabsProgressListener(gTabsProgressListener);
+
     win.addEventListener("unload", unregisterGlobalTab);
 
     if (gTab.selected) {
@@ -239,7 +254,7 @@ CustomizeMode.prototype = {
             }
           };
 
-          Services.obs.addObserver(delayedStartupObserver, "browser-delayed-startup-finished", false);
+          Services.obs.addObserver(delayedStartupObserver, "browser-delayed-startup-finished");
         });
       }
 
@@ -311,7 +326,7 @@ CustomizeMode.prototype = {
 
       yield this._doTransition(true);
 
-      Services.obs.addObserver(this, "lightweight-theme-window-updated", false);
+      Services.obs.addObserver(this, "lightweight-theme-window-updated");
 
       // Let everybody in this window know that we're about to customize.
       CustomizableUI.dispatchToolboxEvent("customizationstarting", {}, window);
@@ -447,7 +462,7 @@ CustomizeMode.prototype = {
       yield this.depopulatePalette();
 
       yield this._doTransition(false);
-      this.removeLWTStyling();
+      this.updateLWTStyling({});
 
       Services.obs.removeObserver(this, "lightweight-theme-window-updated");
 
@@ -611,76 +626,21 @@ CustomizeMode.prototype = {
     }
     let headerURL = aData && aData.headerURL;
     if (!headerURL) {
-      this.removeLWTStyling();
+      docElement.removeAttribute("customization-lwtheme");
       return;
     }
-
-    let deck = this.document.getElementById("tab-view-deck");
-    let headerImageRef = this._getHeaderImageRef(aData);
     docElement.setAttribute("customization-lwtheme", "true");
 
+    let deck = this.document.getElementById("tab-view-deck");
     let toolboxRect = this.window.gNavToolbox.getBoundingClientRect();
     let height = toolboxRect.bottom;
-
-    if (AppConstants.platform == "macosx") {
-      let drawingInTitlebar = !docElement.hasAttribute("drawtitle");
-      let titlebar = this.document.getElementById("titlebar");
-      if (drawingInTitlebar) {
-        titlebar.style.backgroundImage = headerImageRef;
-      } else {
-        titlebar.style.removeProperty("background-image");
-      }
-    }
-
-    let limitedBG = "-moz-image-rect(" + headerImageRef + ", 0, 100%, " +
-                    height + ", 0)";
-
-    let ridgeStart = height - 1;
-    let ridgeCenter = (ridgeStart + 1) + "px";
-    let ridgeEnd = (ridgeStart + 2) + "px";
-    ridgeStart = ridgeStart + "px";
-
-    let ridge = "linear-gradient(to bottom, " +
-                                 "transparent " + ridgeStart +
-                                 ", rgba(0,0,0,0.25) " + ridgeStart +
-                                 ", rgba(0,0,0,0.25) " + ridgeCenter +
-                                 ", rgba(255,255,255,0.5) " + ridgeCenter +
-                                 ", rgba(255,255,255,0.5) " + ridgeEnd + ", " +
-                                 "transparent " + ridgeEnd + ")";
-    deck.style.backgroundImage = ridge + ", " + limitedBG;
-
-    /* Remove the background styles from the <window> so we can style it instead. */
-    docElement.style.removeProperty("background-image");
-    docElement.style.removeProperty("background-color");
-  },
-
-  removeLWTStyling() {
-    let affectedNodes = AppConstants.platform == "macosx" ?
-                          ["tab-view-deck", "titlebar"] :
-                          ["tab-view-deck"];
-    for (let id of affectedNodes) {
-      let node = this.document.getElementById(id);
-      node.style.removeProperty("background-image");
-    }
-    let docElement = this.document.documentElement;
-    docElement.removeAttribute("customization-lwtheme");
-    let data = docElement._lightweightTheme.getData();
-    if (data && data.headerURL) {
-      docElement.style.backgroundImage = this._getHeaderImageRef(data);
-      docElement.style.backgroundColor = data.accentcolor || "white";
-    }
-  },
-
-  _getHeaderImageRef(aData) {
-    return "url(\"" + aData.headerURL.replace(/"/g, '\\"') + "\")";
+    deck.style.setProperty("--toolbox-rect-height", `${height}`);
+    deck.style.setProperty("--toolbox-rect-height-with-unit", `${height}px`);
   },
 
   maybeShowTip(aAnchor) {
-    let shown = false;
     const kShownPref = "browser.customizemode.tip0.shown";
-    try {
-      shown = Services.prefs.getBoolPref(kShownPref);
-    } catch (ex) {}
+    let shown = Services.prefs.getBoolPref(kShownPref, false);
     if (shown)
       return;
 
@@ -1425,8 +1385,7 @@ CustomizeMode.prototype = {
       }
 
       let lwthemePrefs = Services.prefs.getBranch("lightweightThemes.");
-      let recommendedThemes = lwthemePrefs.getComplexValue("recommendedThemes",
-                                                           Ci.nsISupportsString).data;
+      let recommendedThemes = lwthemePrefs.getStringPref("recommendedThemes");
       recommendedThemes = JSON.parse(recommendedThemes);
       let sb = Services.strings.createBundle("chrome://browser/locale/lightweightThemes.properties");
       for (let theme of recommendedThemes) {
@@ -1436,11 +1395,8 @@ CustomizeMode.prototype = {
         button.addEventListener("command", () => {
           LightweightThemeManager.setLocalTheme(button.theme);
           recommendedThemes = recommendedThemes.filter((aTheme) => { return aTheme.id != button.theme.id; });
-          let string = Cc["@mozilla.org/supports-string;1"]
-                         .createInstance(Ci.nsISupportsString);
-          string.data = JSON.stringify(recommendedThemes);
-          lwthemePrefs.setComplexValue("recommendedThemes",
-                                       Ci.nsISupportsString, string);
+          lwthemePrefs.setStringPref("recommendedThemes",
+                                     JSON.stringify(recommendedThemes));
           onThemeSelected(panel);
         });
         panel.insertBefore(button, footer);
@@ -1544,11 +1500,7 @@ CustomizeMode.prototype = {
       case "lightweight-theme-window-updated":
         if (aSubject == this.window) {
           aData = JSON.parse(aData);
-          if (!aData) {
-            this.removeLWTStyling();
-          } else {
-            this.updateLWTStyling(aData);
-          }
+          this.updateLWTStyling(aData);
         }
         break;
     }
@@ -1558,10 +1510,7 @@ CustomizeMode.prototype = {
     if (!AppConstants.CAN_DRAW_IN_TITLEBAR) {
       return;
     }
-    let drawInTitlebar = true;
-    try {
-      drawInTitlebar = Services.prefs.getBoolPref(kDrawInTitlebarPref);
-    } catch (ex) { }
+    let drawInTitlebar = Services.prefs.getBoolPref(kDrawInTitlebarPref, true);
     let button = this.document.getElementById("customization-titlebar-visibility-button");
     // Drawing in the titlebar means 'hiding' the titlebar:
     if (drawInTitlebar) {
@@ -2345,5 +2294,5 @@ function __dumpDragData(aEvent, caller) {
 }
 
 function dispatchFunction(aFunc) {
-  Services.tm.currentThread.dispatch(aFunc, Ci.nsIThread.DISPATCH_NORMAL);
+  Services.tm.dispatchToMainThread(aFunc);
 }

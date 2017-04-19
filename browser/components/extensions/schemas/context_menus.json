@@ -103,6 +103,14 @@
             "type": "boolean",
             "optional": true,
             "description": "A flag indicating the state of a checkbox or radio item after it is clicked."
+          },
+          "modifiers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["Shift", "Alt", "Command", "Ctrl", "MacCtrl"]
+            },
+            "description": "An array of keyboard modifiers that were held while the menu item was clicked."
           }
         }
       }
@@ -194,6 +202,11 @@
                 "type": "boolean",
                 "optional": true,
                 "description": "Whether this context menu item is enabled or disabled. Defaults to true."
+              },
+              "command": {
+                "type": "string",
+                "optional": true,
+                "description": "Specifies a command to issue for the context click.  Currently supports internal commands _execute_page_action, _execute_browser_action and _execute_sidebar_action."
               }
             }
           },
@@ -202,74 +215,6 @@
             "name": "callback",
             "optional": true,
             "description": "Called when the item has been created in the browser. If there were any problems creating the item, details will be available in $(ref:runtime.lastError).",
-            "parameters": []
-          }
-        ]
-      },
-      {
-        "name": "createInternal",
-        "type": "function",
-        "allowedContexts": ["addon_parent_only"],
-        "async": "callback",
-        "description": "Identical to contextMenus.create, except: the 'id' field is required and allows an integer, 'onclick' is not allowed, and the method is async (and the return value is not a menu item ID).",
-        "parameters": [
-          {
-            "type": "object",
-            "name": "createProperties",
-            "properties": {
-              "type": {
-                "$ref": "ItemType",
-                "optional": true
-              },
-              "id": {
-                "choices": [
-                  { "type": "integer" },
-                  { "type": "string" }
-                ]
-              },
-              "title": {
-                "type": "string",
-                "optional": true
-              },
-              "checked": {
-                "type": "boolean",
-                "optional": true
-              },
-              "contexts": {
-                "type": "array",
-                "items": {
-                  "$ref": "ContextType"
-                },
-                "minItems": 1,
-                "optional": true
-              },
-              "parentId": {
-                "choices": [
-                  { "type": "integer" },
-                  { "type": "string" }
-                ],
-                "optional": true
-              },
-              "documentUrlPatterns": {
-                "type": "array",
-                "items": {"type": "string"},
-                "optional": true
-              },
-              "targetUrlPatterns": {
-                "type": "array",
-                "items": {"type": "string"},
-                "optional": true
-              },
-              "enabled": {
-                "type": "boolean",
-                "optional": true
-              }
-            }
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
             "parameters": []
           }
         ]

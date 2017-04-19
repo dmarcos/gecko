@@ -31,11 +31,18 @@ class BrokerServices;
 
 namespace mozilla {
 
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+namespace sandboxing {
+class PermissionsService;
+}
+#endif
+
 struct BootstrapConfig
 {
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
   /* Chromium sandbox BrokerServices. */
   sandbox::BrokerServices* sandboxBrokerServices;
+  sandboxing::PermissionsService* sandboxPermissionsService;
 #endif
   /* Pointer to static XRE AppData from application.ini.h */
   const StaticXREAppData* appData;
@@ -106,7 +113,7 @@ public:
 #ifdef MOZ_WIDGET_ANDROID
   virtual void GeckoStart(JNIEnv* aEnv, char** argv, int argc, const StaticXREAppData& aAppData) = 0;
 
-  virtual void XRE_SetAndroidChildFds(int aCrashFd, int aIPCFd) = 0;
+  virtual void XRE_SetAndroidChildFds(JNIEnv* aEnv, int aCrashFd, int aIPCFd) = 0;
 #endif
 
 #ifdef LIBFUZZER

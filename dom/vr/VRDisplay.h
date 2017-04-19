@@ -16,6 +16,7 @@
 #include "mozilla/dom/DOMPoint.h"
 #include "mozilla/dom/DOMRect.h"
 #include "mozilla/dom/Pose.h"
+#include "mozilla/TimeStamp.h"
 
 #include "nsCOMPtr.h"
 #include "nsString.h"
@@ -150,6 +151,13 @@ struct VRFrameInfo
   gfx::Matrix4x4 mRightProjection;
   gfx::Matrix4x4 mRightView;
 
+  /**
+   * In order to avoid leaking information related to the duration of
+   * the user's VR session, we re-base timestamps.
+   * mTimeStampOffset is added to the actual timestamp returned by the
+   * underlying VR platform API when returned through WebVR API's.
+   */
+  double mTimeStampOffset;
 };
 
 class VRFrameData final : public nsWrapperCache
@@ -274,6 +282,7 @@ public:
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   bool IsPresenting() const;
+  bool IsAnyPresenting() const;
   bool IsConnected() const;
 
   VRDisplayCapabilities* Capabilities();
@@ -316,7 +325,9 @@ public:
     mDepthFar = aDepthFar;
   }
 
-  already_AddRefed<Promise> RequestPresent(const nsTArray<VRLayer>& aLayers, ErrorResult& aRv);
+  already_AddRefed<Promise> RequestPresent(const nsTArray<VRLayer>& aLayers,
+                                           CallerType aCallerType,
+                                           ErrorResult& aRv);
   already_AddRefed<Promise> ExitPresent(ErrorResult& aRv);
   void GetLayers(nsTArray<VRLayer>& result);
   void SubmitFrame();
@@ -324,6 +335,9 @@ public:
   int32_t RequestAnimationFrame(mozilla::dom::FrameRequestCallback& aCallback,
                                 mozilla::ErrorResult& aError);
   void CancelAnimationFrame(int32_t aHandle, mozilla::ErrorResult& aError);
+  void StartHandlingVRNavigationEvent();
+  void StopHandlingVRNavigationEvent();
+  bool IsHandlingVRNavigationEvent();
 
 protected:
   VRDisplay(nsPIDOMWindowInner* aWindow, gfx::VRDisplayClient* aClient);
@@ -331,6 +345,7 @@ protected:
   virtual void LastRelease() override;
 
   void ExitPresentInternal();
+  void Shutdown();
   void UpdateFrameInfo();
 
   RefPtr<gfx::VRDisplayClient> mClient;
@@ -354,6 +369,11 @@ protected:
   * will use these cached values.
   */
   VRFrameInfo mFrameInfo;
+
+  // Time at which we began expecting VR navigation.
+  TimeStamp mHandlingVRNavigationEventStart;
+  int32_t mVRNavigationEventDepth;
+  bool mShutdown;
 };
 
 } // namespace dom

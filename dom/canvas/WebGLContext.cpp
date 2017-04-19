@@ -32,6 +32,7 @@
 #include "mozilla/ProcessPriorityManager.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
+#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Telemetry.h"
 #include "nsContentUtils.h"
 #include "nsDisplayList.h"
@@ -709,8 +710,25 @@ bool
 WebGLContext::CreateAndInitGL(bool forceEnabled,
                               std::vector<FailureReason>* const out_failReasons)
 {
+    // WebGL2 is separately blocked:
+    if (IsWebGL2()) {
+        const nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
+        const auto feature = nsIGfxInfo::FEATURE_WEBGL2;
+
+        FailureReason reason;
+        if (IsFeatureInBlacklist(gfxInfo, feature, &reason.key)) {
+            reason.info = "Refused to create WebGL2 context because of blacklist"
+                          " entry: ";
+            reason.info.Append(reason.key);
+            out_failReasons->push_back(reason);
+            GenerateWarning("%s", reason.info.BeginReading());
+            return false;
+        }
+    }
+
     const gl::SurfaceCaps baseCaps = BaseCaps(mOptions, this);
-    gl::CreateContextFlags flags = gl::CreateContextFlags::NO_VALIDATION;
+    gl::CreateContextFlags flags = (gl::CreateContextFlags::NO_VALIDATION |
+                                    gl::CreateContextFlags::PREFER_ROBUSTNESS);
     bool tryNativeGL = true;
     bool tryANGLE = false;
 
@@ -754,7 +772,7 @@ WebGLContext::CreateAndInitGL(bool forceEnabled,
 
             out_failReasons->push_back(reason);
 
-            GenerateWarning(reason.info.BeginReading());
+            GenerateWarning("%s", reason.info.BeginReading());
             tryNativeGL = false;
         }
     }
@@ -1211,13 +1229,13 @@ WebGLContext::LoseOldestWebGLContextIfLimitExceeded()
     }
 
     if (numContextsThisPrincipal > kMaxWebGLContextsPerPrincipal) {
-        GenerateWarning("Exceeded %d live WebGL contexts for this principal, losing the "
+        GenerateWarning("Exceeded %" PRIuSIZE " live WebGL contexts for this principal, losing the "
                         "least recently used one.", kMaxWebGLContextsPerPrincipal);
         MOZ_ASSERT(oldestContextThisPrincipal); // if we reach this point, this can't be null
         const_cast<WebGLContext*>(oldestContextThisPrincipal)->LoseContext();
     } else if (numContexts > kMaxWebGLContexts) {
-        GenerateWarning("Exceeded %d live WebGL contexts, losing the least recently used one.",
-                        kMaxWebGLContexts);
+        GenerateWarning("Exceeded %" PRIuSIZE " live WebGL contexts, losing the least "
+                        "recently used one.", kMaxWebGLContexts);
         MOZ_ASSERT(oldestContext); // if we reach this point, this can't be null
         const_cast<WebGLContext*>(oldestContext)->LoseContext();
     }
@@ -1229,14 +1247,10 @@ WebGLContext::GetImageBuffer(int32_t* out_format)
     *out_format = 0;
 
     // Use GetSurfaceSnapshot() to make sure that appropriate y-flip gets applied
-    bool premult;
-    RefPtr<SourceSurface> snapshot =
-      GetSurfaceSnapshot(mOptions.premultipliedAlpha ? nullptr : &premult);
-    if (!snapshot) {
+    gfxAlphaType any;
+    RefPtr<SourceSurface> snapshot = GetSurfaceSnapshot(&any);
+    if (!snapshot)
         return nullptr;
-    }
-
-    MOZ_ASSERT(mOptions.premultipliedAlpha || !premult, "We must get unpremult when we ask for it!");
 
     RefPtr<DataSourceSurface> dataSurface = snapshot->GetDataSurface();
 
@@ -1254,13 +1268,10 @@ WebGLContext::GetInputStream(const char* mimeType,
         return NS_ERROR_FAILURE;
 
     // Use GetSurfaceSnapshot() to make sure that appropriate y-flip gets applied
-    bool premult;
-    RefPtr<SourceSurface> snapshot =
-      GetSurfaceSnapshot(mOptions.premultipliedAlpha ? nullptr : &premult);
+    gfxAlphaType any;
+    RefPtr<SourceSurface> snapshot = GetSurfaceSnapshot(&any);
     if (!snapshot)
         return NS_ERROR_FAILURE;
-
-    MOZ_ASSERT(mOptions.premultipliedAlpha || !premult, "We must get unpremult when we ask for it!");
 
     RefPtr<DataSourceSurface> dataSurface = snapshot->GetDataSurface();
     return gfxUtils::GetInputStream(dataSurface, mOptions.premultipliedAlpha, mimeType,
@@ -1916,21 +1927,19 @@ WebGLContext::MakeContextCurrent() const
 }
 
 already_AddRefed<mozilla::gfx::SourceSurface>
-WebGLContext::GetSurfaceSnapshot(bool* out_premultAlpha)
+WebGLContext::GetSurfaceSnapshot(gfxAlphaType* const out_alphaType)
 {
     if (!gl)
         return nullptr;
 
-    bool hasAlpha = mOptions.alpha;
-    SurfaceFormat surfFormat = hasAlpha ? SurfaceFormat::B8G8R8A8
-                                        : SurfaceFormat::B8G8R8X8;
+    const auto surfFormat = mOptions.alpha ? SurfaceFormat::B8G8R8A8
+                                           : SurfaceFormat::B8G8R8X8;
     RefPtr<DataSourceSurface> surf;
     surf = Factory::CreateDataSourceSurfaceWithStride(IntSize(mWidth, mHeight),
                                                       surfFormat,
                                                       mWidth * 4);
-    if (NS_WARN_IF(!surf)) {
+    if (NS_WARN_IF(!surf))
         return nullptr;
-    }
 
     gl->MakeCurrent();
     {
@@ -1941,35 +1950,40 @@ WebGLContext::GetSurfaceSnapshot(bool* out_premultAlpha)
         const GLenum readBufferMode = gl->Screen()->GetReadBufferMode();
 
         if (readBufferMode != LOCAL_GL_BACK) {
-            gl->fReadBuffer(LOCAL_GL_BACK);
+            gl->Screen()->SetReadBuffer(LOCAL_GL_BACK);
         }
         ReadPixelsIntoDataSurface(gl, surf);
 
         if (readBufferMode != LOCAL_GL_BACK) {
-            gl->fReadBuffer(readBufferMode);
+            gl->Screen()->SetReadBuffer(readBufferMode);
         }
     }
 
-    if (out_premultAlpha) {
-        *out_premultAlpha = true;
+    gfxAlphaType alphaType;
+    if (!mOptions.alpha) {
+        alphaType = gfxAlphaType::Opaque;
+    } else if (mOptions.premultipliedAlpha) {
+        alphaType = gfxAlphaType::Premult;
+    } else {
+        alphaType = gfxAlphaType::NonPremult;
     }
-    bool srcPremultAlpha = mOptions.premultipliedAlpha;
-    if (!srcPremultAlpha) {
-        if (out_premultAlpha) {
-            *out_premultAlpha = false;
-        } else if(hasAlpha) {
+
+    if (out_alphaType) {
+        *out_alphaType = alphaType;
+    } else {
+        // Expects Opaque or Premult
+        if (alphaType == gfxAlphaType::NonPremult) {
             gfxUtils::PremultiplyDataSurface(surf, surf);
+            alphaType = gfxAlphaType::Premult;
         }
     }
 
     RefPtr<DrawTarget> dt =
-        Factory::CreateDrawTarget(BackendType::CAIRO,
+        Factory::CreateDrawTarget(gfxPlatform::GetPlatform()->GetSoftwareBackend(),
                                   IntSize(mWidth, mHeight),
                                   SurfaceFormat::B8G8R8A8);
-
-    if (!dt) {
+    if (!dt)
         return nullptr;
-    }
 
     dt->SetTransform(Matrix::Translation(0.0, mHeight).PreScale(1.0, -1.0));
 
@@ -2207,25 +2221,47 @@ ScopedLazyBind::UnwrapImpl()
 
 ////////////////////////////////////////
 
-void
-Intersect(uint32_t srcSize, int32_t dstStartInSrc, uint32_t dstSize,
-          uint32_t* const out_intStartInSrc, uint32_t* const out_intStartInDst,
-          uint32_t* const out_intSize)
+bool
+Intersect(const int32_t srcSize, const int32_t read0, const int32_t readSize,
+          int32_t* const out_intRead0, int32_t* const out_intWrite0,
+          int32_t* const out_intSize)
 {
-    // Only >0 if dstStartInSrc is >0:
-    // 0  3          // src coords
-    // |  [========] // dst box
-    // ^--^
-    *out_intStartInSrc = std::max<int32_t>(0, dstStartInSrc);
+    MOZ_ASSERT(srcSize >= 0);
+    MOZ_ASSERT(readSize >= 0);
+    const auto read1 = int64_t(read0) + readSize;
 
-    // Only >0 if dstStartInSrc is <0:
-    //-6     0       // src coords
-    // [=====|==]    // dst box
-    // ^-----^
-    *out_intStartInDst = std::max<int32_t>(0, 0 - dstStartInSrc);
+    int32_t intRead0 = read0; // Clearly doesn't need validation.
+    int64_t intWrite0 = 0;
+    int64_t intSize = readSize;
 
-    int32_t intEndInSrc = std::min<int32_t>(srcSize, dstStartInSrc + dstSize);
-    *out_intSize = std::max<int32_t>(0, intEndInSrc - *out_intStartInSrc);
+    if (read1 <= 0 || read0 >= srcSize) {
+        // Disjoint ranges.
+        intSize = 0;
+    } else {
+        if (read0 < 0) {
+            const auto diff = int64_t(0) - read0;
+            MOZ_ASSERT(diff >= 0);
+            intRead0 = 0;
+            intWrite0 = diff;
+            intSize -= diff;
+        }
+        if (read1 > srcSize) {
+            const auto diff = int64_t(read1) - srcSize;
+            MOZ_ASSERT(diff >= 0);
+            intSize -= diff;
+        }
+
+        if (!CheckedInt<int32_t>(intWrite0).isValid() ||
+            !CheckedInt<int32_t>(intSize).isValid())
+        {
+            return false;
+        }
+    }
+
+    *out_intRead0 = intRead0;
+    *out_intWrite0 = intWrite0;
+    *out_intSize = intSize;
+    return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2347,7 +2383,9 @@ WebGLContext::StartVRPresentation()
             vrmc->GetBackendType(),
             TextureFlags::ORIGIN_BOTTOM_LEFT);
 
-    screen->Morph(Move(factory));
+    if (factory) {
+        screen->Morph(Move(factory));
+    }
     return true;
 }
 

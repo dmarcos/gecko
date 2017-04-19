@@ -18,7 +18,9 @@
 #include "mozilla/Services.h"
 #include "mozilla/Unused.h"
 #include "nsNetCID.h"
+#include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
+#include "nsString.h"
 
 class nsIURI;
 class nsIPrincipal;
@@ -54,26 +56,9 @@ namespace mozilla { class OriginAttributes; }
 template <class> class nsCOMPtr;
 template <typename> struct already_AddRefed;
 
-#ifdef MOZILLA_INTERNAL_API
-#include "nsReadableUtils.h"
-#include "nsString.h"
-#else
-#include "nsStringAPI.h"
-#endif
-
-#ifdef MOZILLA_INTERNAL_API
 already_AddRefed<nsIIOService> do_GetIOService(nsresult *error = 0);
 
 already_AddRefed<nsINetUtil> do_GetNetUtil(nsresult *error = 0);
-
-#else
-// Helper, to simplify getting the I/O service.
-const nsGetServiceByContractIDWithError do_GetIOService(nsresult *error = 0);
-
-// An alias to do_GetIOService
-const nsGetServiceByContractIDWithError do_GetNetUtil(nsresult *error = 0);
-
-#endif
 
 // private little helper function... don't call this directly!
 nsresult net_EnsureIOService(nsIIOService **ios, nsCOMPtr<nsIIOService> &grip);
@@ -479,14 +464,6 @@ nsresult NS_NewLocalFileInputStream(nsIInputStream **result,
                                     int32_t          perm          = -1,
                                     int32_t          behaviorFlags = 0);
 
-nsresult NS_NewPartialLocalFileInputStream(nsIInputStream **result,
-                                           nsIFile         *file,
-                                           uint64_t         offset,
-                                           uint64_t         length,
-                                           int32_t          ioFlags       = -1,
-                                           int32_t          perm          = -1,
-                                           int32_t          behaviorFlags = 0);
-
 nsresult NS_NewLocalFileOutputStream(nsIOutputStream **result,
                                      nsIFile          *file,
                                      int32_t           ioFlags       = -1,
@@ -567,14 +544,9 @@ nsresult NS_ReadInputStreamToBuffer(nsIInputStream *aInputStream,
                                     void **aDest,
                                     uint32_t aCount);
 
-// external code can't see fallible_t
-#ifdef MOZILLA_INTERNAL_API
-
 nsresult NS_ReadInputStreamToString(nsIInputStream *aInputStream,
                                     nsACString &aDest,
                                     uint32_t aCount);
-
-#endif
 
 nsresult
 NS_LoadPersistentPropertiesFromURISpec(nsIPersistentProperties **outResult,
@@ -679,6 +651,10 @@ bool NS_HasBeenCrossOrigin(nsIChannel* aChannel, bool aReport = false);
 // should also be changed.
 #define NECKO_SAFEBROWSING_FIRST_PARTY_DOMAIN \
   "safebrowsing.86868755-6b82-4842-b301-72671a0db32e.mozilla"
+
+// Unique first-party domain for separating about uri.
+#define ABOUT_URI_FIRST_PARTY_DOMAIN \
+  "about.ef2a7dd5-93bc-417f-a698-142c3116864f.mozilla"
 
 /**
  * Determines whether appcache should be checked for a given URI.
@@ -955,6 +931,7 @@ nsresult NS_ShouldSecureUpgrade(nsIURI* aURI,
                                 nsIPrincipal* aChannelResultPrincipal,
                                 bool aPrivateBrowsing,
                                 bool aAllowSTS,
+                                const mozilla::OriginAttributes& aOriginAttributes,
                                 bool& aShouldUpgrade);
 
 /**
@@ -969,6 +946,11 @@ nsresult NS_CompareLoadInfoAndLoadContext(nsIChannel *aChannel);
  * pref network.http.referer.userControlPolicy
  */
 uint32_t NS_GetDefaultReferrerPolicy();
+
+/**
+ * Update the window id of the current focused top level content window.
+ */
+nsresult NS_NotifyCurrentTopLevelOuterContentWindowId(uint64_t aWindowId);
 
 namespace mozilla {
 namespace net {
@@ -985,10 +967,5 @@ bool InScriptableRange(uint64_t val);
 
 } // namespace net
 } // namespace mozilla
-
-// Include some function bodies for callers with external linkage
-#ifndef MOZILLA_INTERNAL_API
-#include "nsNetUtilInlines.h"
-#endif
 
 #endif // !nsNetUtil_h__

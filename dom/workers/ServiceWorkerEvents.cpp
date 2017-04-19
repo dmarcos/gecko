@@ -12,6 +12,7 @@
 #include "nsINetworkInterceptController.h"
 #include "nsIOutputStream.h"
 #include "nsIScriptError.h"
+#include "nsITimedChannel.h"
 #include "nsIUnicodeDecoder.h"
 #include "nsIUnicodeEncoder.h"
 #include "nsContentPolicyUtils.h"
@@ -108,6 +109,12 @@ NS_IMETHODIMP
 CancelChannelRunnable::Run()
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  // TODO: When bug 1204254 is implemented, this time marker should be moved to
+  // the point where the body of the network request is complete.
+  mChannel->SetHandleFetchEventEnd(TimeStamp::Now());
+  mChannel->SaveTimeStampsToUnderlyingChannel();
+
   mChannel->Cancel(mStatus);
   mRegistration->MaybeScheduleUpdate();
   return NS_OK;
@@ -190,7 +197,7 @@ public:
     NS_ENSURE_TRUE(underlyingChannel, NS_ERROR_UNEXPECTED);
     nsCOMPtr<nsILoadInfo> loadInfo = underlyingChannel->GetLoadInfo();
 
-    if (!CSPPermitsResponse(loadInfo)) {
+    if (!loadInfo || !CSPPermitsResponse(loadInfo)) {
       mChannel->Cancel(NS_ERROR_CONTENT_BLOCKED);
       return NS_OK;
     }
@@ -229,6 +236,9 @@ public:
       mChannel->Cancel(NS_ERROR_INTERCEPTION_FAILED);
       return NS_OK;
     }
+
+    mChannel->SetHandleFetchEventEnd(TimeStamp::Now());
+    mChannel->SaveTimeStampsToUnderlyingChannel();
 
     nsCOMPtr<nsIObserverService> obsService = services::GetObserverService();
     if (obsService) {
@@ -658,7 +668,7 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
 
     nsCOMPtr<nsIOutputStream> responseBody;
     rv = mInterceptedChannel->GetResponseBody(getter_AddRefs(responseBody));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
+    if (NS_WARN_IF(NS_FAILED(rv)) || !responseBody) {
       return;
     }
 
@@ -833,7 +843,7 @@ public:
 
   WaitUntilHandler(WorkerPrivate* aWorkerPrivate, JSContext* aCx)
     : mWorkerPrivate(aWorkerPrivate)
-    , mScope(mWorkerPrivate->WorkerName())
+    , mScope(mWorkerPrivate->ServiceWorkerScope())
     , mLine(0)
     , mColumn(0)
   {
@@ -1191,7 +1201,8 @@ ExtendableMessageEvent::GetSource(Nullable<OwningClientOrServiceWorkerOrMessageP
   } else if (mMessagePort) {
     aValue.SetValue().SetAsMessagePort() = mMessagePort;
   } else {
-    MOZ_CRASH("Unexpected source value");
+    // nullptr source is possible for manually constructed event
+    aValue.SetNull();
   }
 }
 

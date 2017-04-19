@@ -6,14 +6,12 @@
 /* This content script should work in any browser or iframe and should not
  * depend on the frame being contained in tabbrowser. */
 
+/* eslint-env mozilla/frame-script */
+
 var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource:///modules/ContentWebRTC.jsm");
-Cu.import("resource:///modules/ContentObservers.jsm");
-Cu.import("resource://gre/modules/InlineSpellChecker.jsm");
-Cu.import("resource://gre/modules/InlineSpellCheckerContent.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
@@ -22,6 +20,12 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ContentLinkHandler",
   "resource:///modules/ContentLinkHandler.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ContentWebRTC",
+  "resource:///modules/ContentWebRTC.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "SpellCheckHelper",
+  "resource://gre/modules/InlineSpellChecker.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "InlineSpellCheckerContent",
+  "resource://gre/modules/InlineSpellCheckerContent.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoginManagerContent",
   "resource://gre/modules/LoginManagerContent.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoginFormFactory",
@@ -43,6 +47,8 @@ XPCOMUtils.defineLazyGetter(this, "PageMenuChild", function() {
   Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
   return new tmp.PageMenuChild();
 });
+XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
+  "resource://gre/modules/WebNavigationFrames.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Feeds",
   "resource:///modules/Feeds.jsm");
 
@@ -107,7 +113,7 @@ var handleContentContextMenu = function(event) {
     addonInfo,
   };
   subject.wrappedJSObject = subject;
-  Services.obs.notifyObservers(subject, "content-contextmenu", null);
+  Services.obs.notifyObservers(subject, "content-contextmenu");
 
   let doc = event.target.ownerDocument;
   let docLocation = doc.mozDocumentURIIfNotForErrorPages;
@@ -116,9 +122,7 @@ var handleContentContextMenu = function(event) {
   let baseURI = doc.baseURI;
   let referrer = doc.referrer;
   let referrerPolicy = doc.referrerPolicy;
-  let frameOuterWindowID = doc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
-                                          .getInterface(Ci.nsIDOMWindowUtils)
-                                          .outerWindowID;
+  let frameOuterWindowID = WebNavigationFrames.getFrameId(doc.defaultView);
   let loginFillInfo = LoginManagerContent.getFieldContext(event.target);
 
   // The same-origin check will be done in nsContextMenu.openLinkInTab.
@@ -260,6 +264,35 @@ function getSerializedSecurityInfo(docShell) {
   return serhelper.serializeToString(securityInfo);
 }
 
+function getSiteBlockedErrorDetails(docShell) {
+  let blockedInfo = {};
+  if (docShell.failedChannel) {
+    let classifiedChannel = docShell.failedChannel.
+                            QueryInterface(Ci.nsIClassifiedChannel);
+    if (classifiedChannel) {
+      let httpChannel = docShell.failedChannel.QueryInterface(Ci.nsIHttpChannel);
+
+      let reportUri = httpChannel.URI.clone();
+
+      // Remove the query to avoid leaking sensitive data
+      if (reportUri instanceof Ci.nsIURL) {
+        reportUri.query = "";
+      }
+
+      blockedInfo = { list: classifiedChannel.matchedList,
+                      provider: classifiedChannel.matchedProvider,
+                      uri: reportUri.asciiSpec };
+    }
+  }
+  return blockedInfo;
+}
+
+addMessageListener("DeceptiveBlockedDetails", (message) => {
+  sendAsyncMessage("DeceptiveBlockedDetails:Result", {
+    blockedInfo: getSiteBlockedErrorDetails(docShell),
+  });
+});
+
 var AboutNetAndCertErrorListener = {
   init(chromeGlobal) {
     addMessageListener("CertErrorDetails", this);
@@ -267,7 +300,6 @@ var AboutNetAndCertErrorListener = {
     chromeGlobal.addEventListener("AboutNetErrorLoad", this, false, true);
     chromeGlobal.addEventListener("AboutNetErrorOpenCaptivePortal", this, false, true);
     chromeGlobal.addEventListener("AboutNetErrorSetAutomatic", this, false, true);
-    chromeGlobal.addEventListener("AboutNetErrorOverride", this, false, true);
     chromeGlobal.addEventListener("AboutNetErrorResetPreferences", this, false, true);
   },
 
@@ -323,7 +355,9 @@ var AboutNetAndCertErrorListener = {
 
         // If the difference is more than a day.
         if (Math.abs(difference) > 60 * 60 * 24) {
-          let formatter = new Intl.DateTimeFormat();
+          let formatter = Services.intl.createDateTimeFormat(undefined, {
+            dateStyle: "short"
+          });
           let systemDate = formatter.format(new Date());
           // negative difference means local time is behind server time
           let actualDate = formatter.format(new Date(Date.now() - difference * 1000));
@@ -353,7 +387,9 @@ var AboutNetAndCertErrorListener = {
           let systemDate = new Date();
 
           if (buildDate > systemDate) {
-            let formatter = new Intl.DateTimeFormat();
+            let formatter = Services.intl.createDateTimeFormat(undefined, {
+              dateStyle: "short"
+            });
 
             content.document.getElementById("wrongSystemTimeWithoutReference_URL")
               .textContent = content.document.location.hostname;
@@ -389,9 +425,6 @@ var AboutNetAndCertErrorListener = {
       break;
     case "AboutNetErrorSetAutomatic":
       this.onSetAutomatic(aEvent);
-      break;
-    case "AboutNetErrorOverride":
-      this.onOverride(aEvent);
       break;
     case "AboutNetErrorResetPreferences":
       this.onResetPreferences(aEvent);
@@ -453,11 +486,6 @@ var AboutNetAndCertErrorListener = {
 
     }
   },
-
-  onOverride(evt) {
-    let {host, port} = content.document.mozDocumentURIIfNotForErrorPages;
-    sendAsyncMessage("Browser:OverrideWeakCrypto", { uri: {host, port} });
-  }
 }
 
 AboutNetAndCertErrorListener.init(this);
@@ -508,10 +536,12 @@ var ClickEventHandler = {
       }
     }
 
+    let frameOuterWindowID = WebNavigationFrames.getFrameId(ownerDoc.defaultView);
+
     let json = { button: event.button, shiftKey: event.shiftKey,
                  ctrlKey: event.ctrlKey, metaKey: event.metaKey,
                  altKey: event.altKey, href: null, title: null,
-                 bookmark: false, referrerPolicy,
+                 bookmark: false, frameOuterWindowID, referrerPolicy,
                  triggeringPrincipal: principal,
                  originAttributes: principal ? principal.originAttributes : {},
                  isContentWindowPrivate: PrivateBrowsingUtils.isContentWindowPrivate(ownerDoc.defaultView)};
@@ -552,6 +582,7 @@ var ClickEventHandler = {
         } catch (e) {}
       }
       json.originPrincipal = ownerDoc.nodePrincipal;
+      json.triggeringPrincipal = ownerDoc.nodePrincipal;
 
       sendAsyncMessage("Content:Click", json);
       return;
@@ -582,11 +613,17 @@ var ClickEventHandler = {
     } else if (/e=unwantedBlocked/.test(ownerDoc.documentURI)) {
       reason = "unwanted";
     }
+
+    let docShell = ownerDoc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
+                                       .getInterface(Ci.nsIWebNavigation)
+                                      .QueryInterface(Ci.nsIDocShell);
+
     sendAsyncMessage("Browser:SiteBlockedError", {
       location: ownerDoc.location.href,
       reason,
       elementId: targetElement.getAttribute("id"),
-      isTopFrame: (ownerDoc.defaultView.parent === ownerDoc.defaultView)
+      isTopFrame: (ownerDoc.defaultView.parent === ownerDoc.defaultView),
+      blockedInfo: getSiteBlockedErrorDetails(docShell),
     });
   },
 
@@ -666,27 +703,19 @@ ContentLinkHandler.init(this);
 // TODO: Load this lazily so the JSM is run only if a relevant event/message fires.
 var pluginContent = new PluginContent(global);
 
-addEventListener("DOMWebNotificationClicked", function(event) {
-  sendAsyncMessage("DOMWebNotificationClicked", {});
+addEventListener("DOMWindowFocus", function(event) {
+  sendAsyncMessage("DOMWindowFocus", {});
 }, false);
 
-addEventListener("DOMServiceWorkerFocusClient", function(event) {
-  sendAsyncMessage("DOMServiceWorkerFocusClient", {});
-}, false);
+// We use this shim so that ContentWebRTC.jsm will not be loaded until
+// it is actually needed.
+var ContentWebRTCShim = message => ContentWebRTC.receiveMessage(message);
 
-ContentWebRTC.init();
-addMessageListener("rtcpeer:Allow", ContentWebRTC);
-addMessageListener("rtcpeer:Deny", ContentWebRTC);
-addMessageListener("webrtc:Allow", ContentWebRTC);
-addMessageListener("webrtc:Deny", ContentWebRTC);
-addMessageListener("webrtc:StopSharing", ContentWebRTC);
-addMessageListener("webrtc:StartBrowserSharing", () => {
-  let windowID = content.QueryInterface(Ci.nsIInterfaceRequestor)
-                        .getInterface(Ci.nsIDOMWindowUtils).outerWindowID;
-  sendAsyncMessage("webrtc:response:StartBrowserSharing", {
-    windowID
-  });
-});
+addMessageListener("rtcpeer:Allow", ContentWebRTCShim);
+addMessageListener("rtcpeer:Deny", ContentWebRTCShim);
+addMessageListener("webrtc:Allow", ContentWebRTCShim);
+addMessageListener("webrtc:Deny", ContentWebRTCShim);
+addMessageListener("webrtc:StopSharing", ContentWebRTCShim);
 
 addEventListener("pageshow", function(event) {
   if (event.target == content.document) {
@@ -772,38 +801,41 @@ addMessageListener("ContextMenu:SaveVideoFrameAsImage", (message) => {
 });
 
 addMessageListener("ContextMenu:MediaCommand", (message) => {
-  let media = message.objects.element;
-
-  switch (message.data.command) {
-    case "play":
-      media.play();
-      break;
-    case "pause":
-      media.pause();
-      break;
-    case "loop":
-      media.loop = !media.loop;
-      break;
-    case "mute":
-      media.muted = true;
-      break;
-    case "unmute":
-      media.muted = false;
-      break;
-    case "playbackRate":
-      media.playbackRate = message.data.data;
-      break;
-    case "hidecontrols":
-      media.removeAttribute("controls");
-      break;
-    case "showcontrols":
-      media.setAttribute("controls", "true");
-      break;
-    case "fullscreen":
-      if (content.document.fullscreenEnabled)
-        media.requestFullscreen();
-      break;
-  }
+  E10SUtils.wrapHandlingUserInput(
+    content, message.data.handlingUserInput,
+    () => {
+      let media = message.objects.element;
+      switch (message.data.command) {
+        case "play":
+          media.play();
+          break;
+        case "pause":
+          media.pause();
+          break;
+        case "loop":
+          media.loop = !media.loop;
+          break;
+        case "mute":
+          media.muted = true;
+          break;
+        case "unmute":
+          media.muted = false;
+          break;
+        case "playbackRate":
+          media.playbackRate = message.data.data;
+          break;
+        case "hidecontrols":
+          media.removeAttribute("controls");
+          break;
+        case "showcontrols":
+          media.setAttribute("controls", "true");
+          break;
+        case "fullscreen":
+          if (content.document.fullscreenEnabled)
+            media.requestFullscreen();
+          break;
+      }
+    });
 });
 
 addMessageListener("ContextMenu:Canvas:ToBlobURL", (message) => {
@@ -1021,7 +1053,7 @@ var PageInfoListener = {
     let frameOuterWindowID = message.data.frameOuterWindowID;
 
     // If inside frame then get the frame's window and document.
-    if (frameOuterWindowID) {
+    if (frameOuterWindowID != undefined) {
       window = Services.wm.getOuterWindowWithId(frameOuterWindowID);
       document = window.document;
     } else {
@@ -1223,8 +1255,10 @@ var PageInfoListener = {
       try {
         // Note: makeURLAbsolute will throw if either the baseURI is not a valid URI
         //       or the URI formed from the baseURI and the URL is not a valid URI.
-        let href = makeURLAbsolute(elem.baseURI, elem.href.baseVal);
-        addImage(href, strings.mediaImg, "", elem, false);
+        if (elem.href.baseVal) {
+          let href = Services.io.newURI(elem.href.baseVal, null, Services.io.newURI(elem.baseURI)).spec;
+          addImage(href, strings.mediaImg, "", elem, false);
+        }
       } catch (e) { }
     } else if (elem instanceof content.HTMLVideoElement) {
       addImage(elem.currentSrc, strings.mediaVideo, "", elem, false);

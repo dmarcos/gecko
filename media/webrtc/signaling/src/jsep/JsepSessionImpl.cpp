@@ -313,8 +313,8 @@ JsepSessionImpl::SetParameters(const std::string& streamId,
     if (constraintEntry.rid != "") {
       switch (it->mTrack->GetMediaType()) {
         case SdpMediaSection::kVideo: {
-           addVideoExt = static_cast<SdpDirectionAttribute::Direction>(addVideoExt
-                                                                       | it->mTrack->GetDirection());
+          addVideoExt = static_cast<SdpDirectionAttribute::Direction>(addVideoExt
+                                                                      | it->mTrack->GetDirection());
           break;
         }
         case SdpMediaSection::kAudio: {
@@ -331,9 +331,6 @@ JsepSessionImpl::SetParameters(const std::string& streamId,
   }
   if (addVideoExt != SdpDirectionAttribute::kInactive) {
     AddVideoRtpExtension("urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id", addVideoExt);
-  }
-  if (addAudioExt != SdpDirectionAttribute::kInactive) {
-    AddAudioRtpExtension("urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id", addAudioExt);
   }
 
   it->mTrack->SetJsConstraints(constraints);
@@ -449,7 +446,7 @@ JsepSessionImpl::SetupOfferMSections(const JsepOfferOptions& options, Sdp* sdp)
 
 nsresult
 JsepSessionImpl::SetupOfferMSectionsByType(SdpMediaSection::MediaType mediatype,
-                                           Maybe<size_t> offerToReceiveMaybe,
+                                           const Maybe<size_t>& offerToReceiveMaybe,
                                            Sdp* sdp)
 {
   // Convert the Maybe into a size_t*, since that is more readable, especially
@@ -1477,7 +1474,7 @@ JsepSessionImpl::MakeNegotiatedTrackPair(const SdpMediaSection& remote,
   trackPairOut->mRecvonlySsrc = mRecvonlySsrcs[local.GetLevel()];
 
   if (usingBundle) {
-    trackPairOut->mBundleLevel = Some(transportLevel);
+    trackPairOut->SetBundleLevel(transportLevel);
   }
 
   auto sendTrack = FindTrackByLevel(mLocalTracks, local.GetLevel());
@@ -1500,7 +1497,7 @@ JsepSessionImpl::MakeNegotiatedTrackPair(const SdpMediaSection& remote,
     trackPairOut->mReceiving = recvTrack->mTrack;
 
     if (receiving &&
-        trackPairOut->mBundleLevel.isSome() &&
+        trackPairOut->HasBundleLevel() &&
         recvTrack->mTrack->GetSsrcs().empty() &&
         recvTrack->mTrack->GetMediaType() != SdpMediaSection::kApplication) {
       MOZ_MTLOG(ML_ERROR, "Bundled m-section has no ssrc attributes. "
@@ -1704,10 +1701,10 @@ JsepSessionImpl::ParseSdp(const std::string& sdp, UniquePtr<Sdp>* parsedp)
       return NS_ERROR_INVALID_ARG;
     }
 
-    if (mediaAttrs.HasAttribute(SdpAttribute::kSetupAttribute) &&
+    if (mediaAttrs.HasAttribute(SdpAttribute::kSetupAttribute, true) &&
         mediaAttrs.GetSetup().mRole == SdpSetupAttribute::kHoldconn) {
       JSEP_SET_ERROR("Description has illegal setup attribute "
-                     "\"holdconn\" at level "
+                     "\"holdconn\" in m-section at level "
                      << i);
       return NS_ERROR_INVALID_ARG;
     }
@@ -1766,9 +1763,12 @@ JsepSessionImpl::SetRemoteDescriptionOffer(UniquePtr<Sdp> offer)
 {
   MOZ_ASSERT(mState == kJsepStateStable);
 
+  nsresult rv = ValidateOffer(*offer);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   // TODO(bug 1095780): Note that we create remote tracks even when
   // They contain only codecs we can't negotiate or other craziness.
-  nsresult rv = SetRemoteTracksFromDescription(offer.get());
+  rv = SetRemoteTracksFromDescription(offer.get());
   NS_ENSURE_SUCCESS(rv, rv);
 
   mPendingRemoteDescription = Move(offer);
@@ -1811,8 +1811,8 @@ nsresult
 JsepSessionImpl::SetRemoteTracksFromDescription(const Sdp* remoteDescription)
 {
   // Unassign all remote tracks
-  for (auto i = mRemoteTracks.begin(); i != mRemoteTracks.end(); ++i) {
-    i->mAssignedMLine.reset();
+  for (auto& remoteTrack : mRemoteTracks) {
+    remoteTrack.mAssignedMLine.reset();
   }
 
   // This will not exist if we're rolling back the first remote description
@@ -1992,6 +1992,26 @@ JsepSessionImpl::ValidateRemoteDescription(const Sdp& description)
 }
 
 nsresult
+JsepSessionImpl::ValidateOffer(const Sdp& offer)
+{
+  for (size_t i = 0; i < offer.GetMediaSectionCount(); ++i) {
+    const SdpMediaSection& offerMsection = offer.GetMediaSection(i);
+    if (mSdpHelper.MsectionIsDisabled(offerMsection)) {
+      continue;
+    }
+
+    const SdpAttributeList& offerAttrs(offerMsection.GetAttributeList());
+    if (!offerAttrs.HasAttribute(SdpAttribute::kSetupAttribute, true)) {
+      JSEP_SET_ERROR("Offer is missing required setup attribute "
+                     " at level " << i);
+      return NS_ERROR_INVALID_ARG;
+    }
+  }
+
+  return NS_OK;
+}
+
+nsresult
 JsepSessionImpl::ValidateAnswer(const Sdp& offer, const Sdp& answer)
 {
   if (offer.GetMediaSectionCount() != answer.GetMediaSectionCount()) {
@@ -2031,6 +2051,64 @@ JsepSessionImpl::ValidateAnswer(const Sdp& offer, const Sdp& answer)
                      << "\', now \'"
                      << answerMsection.GetAttributeList().GetMid() << "\'");
       return NS_ERROR_INVALID_ARG;
+    }
+
+    if (answerAttrs.HasAttribute(SdpAttribute::kSetupAttribute, true) &&
+        answerAttrs.GetSetup().mRole == SdpSetupAttribute::kActpass) {
+      JSEP_SET_ERROR("Answer contains illegal setup attribute \"actpass\""
+                     " at level " << i);
+      return NS_ERROR_INVALID_ARG;
+    }
+
+    // Sanity check extmap
+    if (answerAttrs.HasAttribute(SdpAttribute::kExtmapAttribute)) {
+      if (!offerAttrs.HasAttribute(SdpAttribute::kExtmapAttribute)) {
+        JSEP_SET_ERROR("Answer adds extmap attributes to level " << i);
+        return NS_ERROR_INVALID_ARG;
+      }
+
+      for (const auto& ansExt : answerAttrs.GetExtmap().mExtmaps) {
+        bool found = false;
+        for (const auto& offExt : offerAttrs.GetExtmap().mExtmaps) {
+          if (ansExt.extensionname == offExt.extensionname) {
+            if ((ansExt.direction & reverse(offExt.direction))
+                  != ansExt.direction) {
+              // FIXME we do not return an error here, because Chrome up to
+              // version 57 is actually tripping over this if they are the
+              // answerer. See bug 1355010 for details.
+              MOZ_MTLOG(ML_WARNING, "Answer has inconsistent direction on extmap "
+                             "attribute at level " << i << " ("
+                             << ansExt.extensionname << "). Offer had "
+                             << offExt.direction << ", answer had "
+                             << ansExt.direction << ".");
+              // return NS_ERROR_INVALID_ARG;
+            }
+
+            if (offExt.entry < 4096 && (offExt.entry != ansExt.entry)) {
+              JSEP_SET_ERROR("Answer changed id for extmap attribute at level "
+                             << i << " (" << offExt.extensionname << ") from "
+                             << offExt.entry << " to " << ansExt.entry << ".");
+              return NS_ERROR_INVALID_ARG;
+            }
+
+            if (ansExt.entry >= 4096) {
+              JSEP_SET_ERROR("Answer used an invalid id (" << ansExt.entry
+                             << ") for extmap attribute at level " << i
+                             << " (" << ansExt.extensionname << ").");
+              return NS_ERROR_INVALID_ARG;
+            }
+
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          JSEP_SET_ERROR("Answer has extmap " << ansExt.extensionname << " at "
+                         "level " << i << " that was not present in offer.");
+          return NS_ERROR_INVALID_ARG;
+        }
+      }
     }
   }
 
@@ -2092,9 +2170,8 @@ JsepSessionImpl::CreateGenericSDP(UniquePtr<Sdp>* sdpp)
 
   UniquePtr<SdpFingerprintAttributeList> fpl =
       MakeUnique<SdpFingerprintAttributeList>();
-  for (auto fp = mDtlsFingerprints.begin(); fp != mDtlsFingerprints.end();
-       ++fp) {
-    fpl->PushEntry(fp->mAlgorithm, fp->mValue);
+  for (auto& dtlsFingerprint : mDtlsFingerprints) {
+    fpl->PushEntry(dtlsFingerprint.mAlgorithm, dtlsFingerprint.mValue);
   }
   sdp->GetAttributeList().SetAttribute(fpl.release());
 
@@ -2292,6 +2369,11 @@ JsepSessionImpl::SetupDefaultRtpExtensions()
 {
   AddAudioRtpExtension("urn:ietf:params:rtp-hdrext:ssrc-audio-level",
                        SdpDirectionAttribute::Direction::kSendonly);
+  AddVideoRtpExtension(
+    "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+                       SdpDirectionAttribute::Direction::kSendrecv);
+  AddVideoRtpExtension("urn:ietf:params:rtp-hdrext:toffset",
+                       SdpDirectionAttribute::Direction::kSendrecv);
 }
 
 void
@@ -2500,11 +2582,8 @@ JsepSessionImpl::GetParsedLocalDescription() const
 {
   if (mPendingLocalDescription) {
     return mPendingLocalDescription.get();
-  } else if (mCurrentLocalDescription) {
-    return mCurrentLocalDescription.get();
   }
-
-  return nullptr;
+  return mCurrentLocalDescription.get();
 }
 
 mozilla::Sdp*
@@ -2512,11 +2591,8 @@ JsepSessionImpl::GetParsedRemoteDescription() const
 {
   if (mPendingRemoteDescription) {
     return mPendingRemoteDescription.get();
-  } else if (mCurrentRemoteDescription) {
-    return mCurrentRemoteDescription.get();
   }
-
-  return nullptr;
+  return mCurrentRemoteDescription.get();
 }
 
 const Sdp*
@@ -2543,8 +2619,8 @@ JsepSessionImpl::GetLastError() const
 bool
 JsepSessionImpl::AllLocalTracksAreAssigned() const
 {
-  for (auto i = mLocalTracks.begin(); i != mLocalTracks.end(); ++i) {
-    if (!i->mAssignedMLine.isSome()) {
+  for (const auto& localTrack : mLocalTracks) {
+    if (!localTrack.mAssignedMLine.isSome()) {
       return false;
     }
   }

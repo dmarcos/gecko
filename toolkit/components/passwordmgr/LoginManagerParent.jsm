@@ -49,7 +49,7 @@ var LoginManagerParent = {
     XPCOMUtils.defineLazyGetter(this, "recipeParentPromise", () => {
       const { LoginRecipesParent } = Cu.import("resource://gre/modules/LoginRecipes.jsm", {});
       this._recipeManager = new LoginRecipesParent({
-        defaults: Services.prefs.getComplexValue("signon.recipes.path", Ci.nsISupportsString).data,
+        defaults: Services.prefs.getStringPref("signon.recipes.path"),
       });
       return this._recipeManager.initializationPromise;
     });
@@ -197,8 +197,8 @@ var LoginManagerParent = {
       // never return). We should guarantee that at least one of these
       // will fire.
       // See bug XXX.
-      Services.obs.addObserver(observer, "passwordmgr-crypto-login", false);
-      Services.obs.addObserver(observer, "passwordmgr-crypto-loginCanceled", false);
+      Services.obs.addObserver(observer, "passwordmgr-crypto-login");
+      Services.obs.addObserver(observer, "passwordmgr-crypto-loginCanceled");
       return;
     }
 

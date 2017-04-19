@@ -15,7 +15,8 @@ Cu.import("resource://gre/modules/Timer.jsm"); /* globals setTimeout, clearTimeo
 Cu.import("resource://shield-recipe-client/lib/LogManager.jsm");
 Cu.import("resource://shield-recipe-client/lib/Storage.jsm");
 Cu.import("resource://shield-recipe-client/lib/Heartbeat.jsm");
-Cu.import("resource://shield-recipe-client/lib/EnvExpressions.jsm");
+Cu.import("resource://shield-recipe-client/lib/FilterExpressions.jsm");
+Cu.import("resource://shield-recipe-client/lib/ClientEnvironment.jsm");
 
 const {generateUUID} = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
 
@@ -24,7 +25,7 @@ this.EXPORTED_SYMBOLS = ["NormandyDriver"];
 const log = LogManager.getLogger("normandy-driver");
 const actionLog = LogManager.getLogger("normandy-driver.actions");
 
-this.NormandyDriver = function(sandboxManager, extraContext = {}) {
+this.NormandyDriver = function(sandboxManager) {
   if (!sandboxManager) {
     throw new Error("sandboxManager is required");
   }
@@ -40,7 +41,7 @@ this.NormandyDriver = function(sandboxManager, extraContext = {}) {
     },
 
     get userId() {
-      return EnvExpressions.getUserId();
+      return ClientEnvironment.getEnvironment().userId;
     },
 
     log(message, level = "debug") {
@@ -75,8 +76,12 @@ this.NormandyDriver = function(sandboxManager, extraContext = {}) {
         isDefaultBrowser: ShellService.isDefaultBrowser() || null,
         searchEngine: null,
         syncSetup: Preferences.isSet("services.sync.username"),
+        syncDesktopDevices: Preferences.get("services.sync.clients.devices.desktop", 0),
+        syncMobileDevices: Preferences.get("services.sync.clients.devices.mobile", 0),
+        syncTotalDevices: Preferences.get("services.sync.numClients", 0),
         plugins: {},
         doNotTrack: Preferences.get("privacy.donottrackheader.enabled", false),
+        distribution: Preferences.get("distribution.id", "default"),
       };
 
       const searchEnginePromise = new Promise(resolve => {
@@ -121,11 +126,6 @@ this.NormandyDriver = function(sandboxManager, extraContext = {}) {
         throw e;
       }
       return storage;
-    },
-
-    location() {
-      const location = Cu.cloneInto({countryCode: extraContext.country}, sandbox);
-      return sandbox.Promise.resolve(location);
     },
 
     setTimeout(cb, time) {

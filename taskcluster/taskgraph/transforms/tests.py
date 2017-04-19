@@ -19,56 +19,36 @@ for example - use `all_tests.py` instead.
 
 from __future__ import absolute_import, print_function, unicode_literals
 
-from taskgraph.transforms.base import TransformSequence, resolve_keyed_by
+from taskgraph.transforms.base import TransformSequence
+from taskgraph.util.schema import resolve_keyed_by
 from taskgraph.util.treeherder import split_symbol, join_symbol
-from taskgraph.transforms.job.common import (
-    docker_worker_support_vcs_checkout,
+from taskgraph.util.schema import (
+    validate_schema,
+    optionally_keyed_by,
+    Schema,
 )
-from taskgraph.transforms.base import validate_schema, optionally_keyed_by
 from voluptuous import (
     Any,
     Optional,
     Required,
-    Schema,
 )
 
 import copy
 import logging
-import os.path
-import re
 
-ARTIFACT_URL = 'https://queue.taskcluster.net/v1/task/{}/artifacts/{}'
 WORKER_TYPE = {
     # default worker types keyed by instance-size
     'large': 'aws-provisioner-v1/gecko-t-linux-large',
     'xlarge': 'aws-provisioner-v1/gecko-t-linux-xlarge',
     'legacy': 'aws-provisioner-v1/gecko-t-linux-medium',
     'default': 'aws-provisioner-v1/gecko-t-linux-large',
-    # windows worker types keyed by test-platform
+    # windows / os x worker types keyed by test-platform
     'windows7-32-vm': 'aws-provisioner-v1/gecko-t-win7-32',
     'windows7-32': 'aws-provisioner-v1/gecko-t-win7-32-gpu',
     'windows10-64-vm': 'aws-provisioner-v1/gecko-t-win10-64',
-    'windows10-64': 'aws-provisioner-v1/gecko-t-win10-64-gpu'
-}
-
-ARTIFACTS = [
-    # (artifact name prefix, in-image path)
-    ("public/logs/", "build/upload/logs/"),
-    ("public/test", "artifacts/"),
-    ("public/test_info/", "build/blobber_upload_dir/"),
-]
-
-BUILDER_NAME_PREFIX = {
-    'linux64-pgo': 'Ubuntu VM 12.04 x64',
-    'linux64': 'Ubuntu VM 12.04 x64',
-    'linux64-asan': 'Ubuntu ASAN VM 12.04 x64',
-    'linux64-ccov': 'Ubuntu Code Coverage VM 12.04 x64',
-    'linux64-jsdcov': 'Ubuntu Code Coverage VM 12.04 x64',
-    'linux64-stylo': 'Ubuntu VM 12.04 x64',
-    'macosx64': 'Rev7 MacOSX Yosemite 10.10.5',
-    'android-4.3-arm7-api-15': 'Android 4.3 armv7 API 15+',
-    'android-4.2-x86': 'Android 4.2 x86 Emulator',
-    'android-4.3-arm7-api-15-gradle': 'Android 4.3 armv7 API 15+',
+    'windows10-64': 'aws-provisioner-v1/gecko-t-win10-64-gpu',
+    'windows10-64-asan': 'aws-provisioner-v1/gecko-t-win10-64-gpu',
+    'macosx64': 'scl3-puppet/os-x-10-10-gw'
 }
 
 logger = logging.getLogger(__name__)
@@ -99,6 +79,9 @@ test_description_schema = Schema({
 
     # the name by which this talos test is addressed in try syntax
     Optional('talos-try-name'): basestring,
+
+    # additional tags to mark up this type of test
+    Optional('tags'): {basestring: object},
 
     # the symbol, or group(symbol), under which this task should appear in
     # treeherder.
@@ -141,7 +124,7 @@ test_description_schema = Schema({
     # one task without e10s.  E10s tasks have "-e10s" appended to the test name
     # and treeherder group.
     Required('e10s', default='both'): optionally_keyed_by(
-        'test-platform',
+        'test-platform', 'project',
         Any(bool, 'both')),
 
     # The EC2 instance size to run these tests on.
@@ -198,7 +181,7 @@ test_description_schema = Schema({
     Required('checkout', default=False): bool,
 
     # Wheter to perform a machine reboot after test is done
-    Optional('reboot', default=False): bool,
+    Optional('reboot', default=True): bool,
 
     # What to run
     Required('mozharness'): optionally_keyed_by(
@@ -210,6 +193,9 @@ test_description_schema = Schema({
             Required('config'): optionally_keyed_by(
                 'test-platform',
                 [basestring]),
+
+            # mochitest flavor for mochitest runs
+            Optional('mochitest-flavor'): basestring,
 
             # any additional actions to pass to the mozharness command
             Optional('actions'): [basestring],
@@ -246,7 +232,9 @@ test_description_schema = Schema({
 
             # If true, include chunking information in the command even if the number
             # of chunks is 1
-            Required('chunked', default=False): bool,
+            Required('chunked', default=False): optionally_keyed_by(
+                'test-platform',
+                bool),
 
             # The chunking argument format to use
             Required('chunking-args', default='this-chunk'): Any(
@@ -288,6 +276,11 @@ test_description_schema = Schema({
 
     # the product name, defaults to firefox
     Optional('product'): basestring,
+
+    # conditional files to determine when these tests should be run
+    Optional('when'): Any({
+        Optional('files-changed'): [basestring],
+    }),
 
 }, required=True)
 
@@ -336,7 +329,7 @@ def set_defaults(config, tests):
         test.setdefault('run-on-projects', ['all'])
         test.setdefault('instance-size', 'default')
         test.setdefault('max-run-time', 3600)
-        test.setdefault('reboot', False)
+        test.setdefault('reboot', True)
         test['mozharness'].setdefault('extra-options', [])
         yield test
 
@@ -348,7 +341,15 @@ def set_target(config, tests):
         if build_platform.startswith('macosx'):
             target = 'target.dmg'
         elif build_platform.startswith('android'):
-            target = 'target.apk'
+            if 'geckoview' in test['test-name']:
+                target = 'geckoview_example.apk'
+            else:
+                target = 'target.apk'
+        elif build_platform.startswith('win'):
+            target = 'firefox-{}.en-US.{}.zip'.format(
+                get_firefox_version(),
+                build_platform.split('/')[0]
+            )
         else:
             target = 'target.tar.bz2'
         test['mozharness']['build-artifact-name'] = 'public/build/' + target
@@ -365,6 +366,7 @@ def set_treeherder_machine_platform(config, tests):
         'linux64-pgo/opt': 'linux64/pgo',
         'macosx64/debug': 'osx-10-10/debug',
         'macosx64/opt': 'osx-10-10/opt',
+        'win64-asan/opt': 'windows10-64/asan',
         # The build names for Android platforms have partially evolved over the
         # years and need to be translated.
         'android-api-15/debug': 'android-4-3-armv7-api15/debug',
@@ -394,12 +396,19 @@ def set_asan_docker_image(config, tests):
 def set_worker_implementation(config, tests):
     """Set the worker implementation based on the test platform."""
     for test in tests:
-        if test.get('suite', '') == 'talos':
+        if test['test-platform'].startswith('macosx'):
+            # see if '-g' appears in try syntax
+            if config.config['args'].generic_worker:
+                test['worker-implementation'] = 'generic-worker'
+            # see if '-w' appears in try syntax
+            elif config.config['args'].taskcluster_worker:
+                test['worker-implementation'] = 'native-engine'
+            else:
+                test['worker-implementation'] = 'buildbot-bridge'
+        elif test.get('suite', '') == 'talos':
             test['worker-implementation'] = 'buildbot-bridge'
         elif test['test-platform'].startswith('win'):
             test['worker-implementation'] = 'generic-worker'
-        elif test['test-platform'].startswith('macosx'):
-            test['worker-implementation'] = 'native-engine'
         else:
             test['worker-implementation'] = 'docker-worker'
         yield test
@@ -417,7 +426,9 @@ def set_tier(config, tests):
         if 'tier' not in test or test['tier'] == 'default':
             if test['test-platform'] in ['linux32/opt',
                                          'linux32/debug',
+                                         'linux32-nightly/opt',
                                          'linux64/opt',
+                                         'linux64-nightly/opt',
                                          'linux64/debug',
                                          'linux64-pgo/opt',
                                          'linux64-asan/opt',
@@ -425,7 +436,7 @@ def set_tier(config, tests):
                                          'android-4.3-arm7-api-15/debug',
                                          'android-4.2-x86/opt']:
                 test['tier'] = 1
-            elif test['test-platform'].startswith('windows'):
+            elif test['worker-implementation'] == 'native-engine':
                 test['tier'] = 3
             else:
                 test['tier'] = 2
@@ -453,7 +464,8 @@ def set_download_symbols(config, tests):
     for test in tests:
         if test['test-platform'].split('/')[-1] == 'debug':
             test['mozharness']['download-symbols'] = True
-        elif test['build-platform'] == 'linux64-asan/opt':
+        elif test['build-platform'] == 'linux64-asan/opt' or \
+                test['build-platform'] == 'windows10-64-asan/opt':
             if 'download-symbols' in test['mozharness']:
                 del test['mozharness']['download-symbols']
         else:
@@ -473,21 +485,27 @@ def handle_keyed_by(config, tests):
         'suite',
         'run-on-projects',
         'os-groups',
+        'mozharness.chunked',
         'mozharness.config',
         'mozharness.extra-options',
     ]
     for test in tests:
         for field in fields:
-            resolve_keyed_by(test, field, item_name=test['test-name'])
+            resolve_keyed_by(test, field, item_name=test['test-name'],
+                             project=config.params['project'])
         yield test
 
 
 @transforms.add
 def enable_code_coverage(config, tests):
-    """Enable code coverage for linux64-ccov/opt build-platforms"""
+    """Enable code coverage for the linux64-ccov/opt & linux64-jsdcov/opt build-platforms"""
     for test in tests:
         if test['build-platform'] == 'linux64-ccov/opt':
             test['mozharness'].setdefault('extra-options', []).append('--code-coverage')
+            test['instance-size'] = 'xlarge'
+            test['e10s'] = False
+            test['run-on-projects'] = []
+        elif test['build-platform'] == 'linux64-jsdcov/opt':
             test['run-on-projects'] = []
         yield test
 
@@ -568,12 +586,31 @@ def set_retry_exit_status(config, tests):
 
 
 @transforms.add
+def set_profile(config, tests):
+    """Set profiling mode for tests."""
+    for test in tests:
+        if config.config['args'].profile and test['suite'] == 'talos':
+            test['mozharness']['extra-options'].append('--geckoProfile')
+        yield test
+
+
+@transforms.add
+def set_tag(config, tests):
+    """Set test for a specific tag."""
+    for test in tests:
+        tag = config.config['args'].tag
+        if tag:
+            test['mozharness']['extra-options'].extend(['--tag', tag])
+        yield test
+
+
+@transforms.add
 def remove_linux_pgo_try_talos(config, tests):
     """linux64-pgo talos tests don't run on try."""
     def predicate(test):
         return not(
             test['test-platform'] == 'linux64-pgo/opt'
-            and test['suite'] == 'talos'
+            and (test['suite'] == 'talos' or test['suite'] == 'awsy')
             and config.params['project'] == 'try'
         )
     for test in filter(predicate, tests):
@@ -581,18 +618,40 @@ def remove_linux_pgo_try_talos(config, tests):
 
 
 @transforms.add
-def remove_native_non_try(config, tests):
-    """Remove native-engine jobs if they are not in try branch."""
+def set_test_type(config, tests):
     for test in tests:
-        if test['worker-implementation'] != 'native-engine' \
-                or config.params['project'] != 'try':
-            yield test
+        for test_type in ['mochitest', 'reftest']:
+            if test_type in test['suite'] and 'web-platform' not in test['suite']:
+                test.setdefault('tags', {})['test-type'] = test_type
+        yield test
 
 
 @transforms.add
-def make_task_description(config, tests):
-    """Convert *test* descriptions to *task* descriptions (input to
-    taskgraph.transforms.task)"""
+def parallel_stylo_tests(config, tests):
+    """Ensure that any stylo tests running with e10s enabled also test
+    parallel traversal in the style system."""
+
+    for test in tests:
+        if not test['test-platform'].startswith('linux64-stylo/'):
+            yield test
+            continue
+
+        e10s = test['e10s']
+        # We should have already handled 'both' in an earlier transform.
+        assert e10s != 'both'
+        if not e10s:
+            yield test
+            continue
+
+        test['mozharness'].setdefault('extra-options', [])\
+                          .append('--parallel-stylo-traversal')
+        yield test
+
+
+@transforms.add
+def make_job_description(config, tests):
+    """Convert *test* descriptions to *job* descriptions (input to
+    taskgraph.transforms.job)"""
 
     for test in tests:
         label = '{}-{}-{}'.format(config.kind, test['test-platform'], test['test-name'])
@@ -628,17 +687,21 @@ def make_task_description(config, tests):
             attr_try_name: try_name,
         })
 
-        taskdesc = {}
-        taskdesc['label'] = label
-        taskdesc['description'] = test['description']
-        taskdesc['attributes'] = attributes
-        taskdesc['dependencies'] = {'build': build_label}
-        taskdesc['deadline-after'] = '1 day'
-        taskdesc['expires-after'] = test['expires-after']
-        taskdesc['routes'] = []
-        taskdesc['run-on-projects'] = test.get('run-on-projects', ['all'])
-        taskdesc['scopes'] = []
-        taskdesc['extra'] = {
+        jobdesc = {}
+        name = '{}-{}'.format(test['test-platform'], test['test-name'])
+        jobdesc['name'] = name
+        jobdesc['label'] = label
+        jobdesc['description'] = test['description']
+        jobdesc['when'] = test.get('when', {})
+        jobdesc['attributes'] = attributes
+        jobdesc['dependencies'] = {'build': build_label}
+        jobdesc['expires-after'] = test['expires-after']
+        jobdesc['routes'] = []
+        jobdesc['run-on-projects'] = test.get('run-on-projects', ['all'])
+        jobdesc['scopes'] = []
+        jobdesc['tags'] = test.get('tags', {})
+        jobdesc['optimizations'] = [['seta']]  # always run SETA for tests
+        jobdesc['extra'] = {
             'chunks': {
                 'current': test['this-chunk'],
                 'total': test['chunks'],
@@ -648,155 +711,35 @@ def make_task_description(config, tests):
                 'flavor': flavor,
             },
         }
-        taskdesc['treeherder'] = {
+        jobdesc['treeherder'] = {
             'symbol': test['treeherder-symbol'],
             'kind': 'test',
             'tier': test['tier'],
             'platform': test.get('treeherder-machine-platform', test['build-platform']),
         }
+        run = jobdesc['run'] = {}
+        run['using'] = 'mozharness-test'
+        run['test'] = test
+        worker = jobdesc['worker'] = {}
+        implementation = worker['implementation'] = test['worker-implementation']
 
-        # the remainder (the worker-type and worker) differs depending on the
-        # worker implementation
-        worker_setup_functions[test['worker-implementation']](config, test, taskdesc)
-
-        # yield only the task description, discarding the test description
-        yield taskdesc
-
-worker_setup_functions = {}
-
-
-def worker_setup_function(name):
-    def wrap(func):
-        worker_setup_functions[name] = func
-        return func
-    return wrap
-
-
-@worker_setup_function("docker-engine")
-@worker_setup_function("docker-worker")
-def docker_worker_setup(config, test, taskdesc):
-
-    artifacts = [
-        # (artifact name prefix, in-image path)
-        ("public/logs/", "/home/worker/workspace/build/upload/logs/"),
-        ("public/test", "/home/worker/artifacts/"),
-        ("public/test_info/", "/home/worker/workspace/build/blobber_upload_dir/"),
-    ]
-    mozharness = test['mozharness']
-
-    installer_url = ARTIFACT_URL.format('<build>', mozharness['build-artifact-name'])
-    test_packages_url = ARTIFACT_URL.format('<build>',
-                                            'public/build/target.test_packages.json')
-    mozharness_url = ARTIFACT_URL.format('<build>',
-                                         'public/build/mozharness.zip')
-
-    taskdesc['worker-type'] = WORKER_TYPE[test['instance-size']]
-
-    worker = taskdesc['worker'] = {}
-    worker['implementation'] = test['worker-implementation']
-    worker['docker-image'] = test['docker-image']
-
-    worker['allow-ptrace'] = True  # required for all tests, for crashreporter
-    worker['relengapi-proxy'] = False  # but maybe enabled for tooltool below
-    worker['loopback-video'] = test['loopback-video']
-    worker['loopback-audio'] = test['loopback-audio']
-    worker['max-run-time'] = test['max-run-time']
-    worker['retry-exit-status'] = test['retry-exit-status']
-
-    worker['artifacts'] = [{
-        'name': prefix,
-        'path': os.path.join('/home/worker/workspace', path),
-        'type': 'directory',
-    } for (prefix, path) in artifacts]
-
-    worker['caches'] = [{
-        'type': 'persistent',
-        'name': 'level-{}-{}-test-workspace'.format(
-            config.params['level'], config.params['project']),
-        'mount-point': "/home/worker/workspace",
-    }]
-
-    env = worker['env'] = {
-        'MOZHARNESS_CONFIG': ' '.join(mozharness['config']),
-        'MOZHARNESS_SCRIPT': mozharness['script'],
-        'MOZILLA_BUILD_URL': {'task-reference': installer_url},
-        'NEED_PULSEAUDIO': 'true',
-        'NEED_WINDOW_MANAGER': 'true',
-    }
-
-    if mozharness['set-moz-node-path']:
-        env['MOZ_NODE_PATH'] = '/usr/local/bin/node'
-
-    if 'actions' in mozharness:
-        env['MOZHARNESS_ACTIONS'] = ' '.join(mozharness['actions'])
-
-    if config.params['project'] == 'try':
-        env['TRY_COMMIT_MSG'] = config.params['message']
-
-    # handle some of the mozharness-specific options
-
-    if mozharness['tooltool-downloads']:
-        worker['relengapi-proxy'] = True
-        worker['caches'].append({
-            'type': 'persistent',
-            'name': 'tooltool-cache',
-            'mount-point': '/home/worker/tooltool-cache',
-        })
-        taskdesc['scopes'].extend([
-            'docker-worker:relengapi-proxy:tooltool.download.internal',
-            'docker-worker:relengapi-proxy:tooltool.download.public',
-        ])
-
-    # assemble the command line
-    command = [
-        '/home/worker/bin/run-task',
-        # The workspace cache/volume is default owned by root:root.
-        '--chown', '/home/worker/workspace',
-    ]
-
-    # Support vcs checkouts regardless of whether the task runs from
-    # source or not in case it is needed on an interactive loaner.
-    docker_worker_support_vcs_checkout(config, test, taskdesc)
-
-    # If we have a source checkout, run mozharness from it instead of
-    # downloading a zip file with the same content.
-    if test['checkout']:
-        command.extend(['--vcs-checkout', '/home/worker/checkouts/gecko'])
-        env['MOZHARNESS_PATH'] = '/home/worker/checkouts/gecko/testing/mozharness'
-    else:
-        env['MOZHARNESS_URL'] = {'task-reference': mozharness_url}
-
-    command.extend([
-        '--',
-        '/home/worker/bin/test-linux.sh',
-    ])
-
-    if mozharness.get('no-read-buildbot-config'):
-        command.append("--no-read-buildbot-config")
-    command.extend([
-        {"task-reference": "--installer-url=" + installer_url},
-        {"task-reference": "--test-packages-url=" + test_packages_url},
-    ])
-    command.extend(mozharness.get('extra-options', []))
-
-    # TODO: remove the need for run['chunked']
-    if mozharness.get('chunked') or test['chunks'] > 1:
-        # Implement mozharness['chunking-args'], modifying command in place
-        if mozharness['chunking-args'] == 'this-chunk':
-            command.append('--total-chunk={}'.format(test['chunks']))
-            command.append('--this-chunk={}'.format(test['this-chunk']))
-        elif mozharness['chunking-args'] == 'test-suite-suffix':
-            suffix = mozharness['chunk-suffix'].replace('<CHUNK>', str(test['this-chunk']))
-            for i, c in enumerate(command):
-                if isinstance(c, basestring) and c.startswith('--test-suite'):
-                    command[i] += suffix
-
-    if 'download-symbols' in mozharness:
-        download_symbols = mozharness['download-symbols']
-        download_symbols = {True: 'true', False: 'false'}.get(download_symbols, download_symbols)
-        command.append('--download-symbols=' + download_symbols)
-
-    worker['command'] = command
+        if implementation == 'buildbot-bridge':
+            jobdesc['worker-type'] = 'buildbot-bridge/buildbot-bridge'
+        elif implementation == 'native-engine':
+            jobdesc['worker-type'] = 'tc-worker-provisioner/gecko-t-osx-10-10'
+        elif implementation == 'generic-worker':
+            test_platform = test['test-platform'].split('/')[0]
+            jobdesc['worker-type'] = WORKER_TYPE[test_platform]
+        elif implementation == 'docker-worker' or implementation == 'docker-engine':
+            jobdesc['worker-type'] = WORKER_TYPE[test['instance-size']]
+            worker = jobdesc['worker']
+            worker['docker-image'] = test['docker-image']
+            worker['allow-ptrace'] = True  # required for all tests, for crashreporter
+            worker['loopback-video'] = test['loopback-video']
+            worker['loopback-audio'] = test['loopback-audio']
+            worker['max-run-time'] = test['max-run-time']
+            worker['retry-exit-status'] = test['retry-exit-status']
+        yield jobdesc
 
 
 def normpath(path):
@@ -806,232 +749,3 @@ def normpath(path):
 def get_firefox_version():
     with open('browser/config/version.txt', 'r') as f:
         return f.readline().strip()
-
-
-@worker_setup_function('generic-worker')
-def generic_worker_setup(config, test, taskdesc):
-    artifacts = [
-        {
-            'path': 'public\\logs\\localconfig.json',
-            'type': 'file'
-        },
-        {
-            'path': 'public\\logs\\log_critical.log',
-            'type': 'file'
-        },
-        {
-            'path': 'public\\logs\\log_error.log',
-            'type': 'file'
-        },
-        {
-            'path': 'public\\logs\\log_fatal.log',
-            'type': 'file'
-        },
-        {
-            'path': 'public\\logs\\log_info.log',
-            'type': 'file'
-        },
-        {
-            'path': 'public\\logs\\log_raw.log',
-            'type': 'file'
-        },
-        {
-            'path': 'public\\logs\\log_warning.log',
-            'type': 'file'
-        },
-        {
-            'path': 'public\\test_info',
-            'type': 'directory'
-        }
-    ]
-    mozharness = test['mozharness']
-
-    build_platform = taskdesc['attributes']['build_platform']
-    test_platform = test['test-platform'].split('/')[0]
-
-    target = 'firefox-{}.en-US.{}'.format(get_firefox_version(), build_platform)
-
-    installer_url = ARTIFACT_URL.format(
-        '<build>', 'public/build/{}.zip'.format(target))
-    test_packages_url = ARTIFACT_URL.format(
-        '<build>', 'public/build/{}.test_packages.json'.format(target))
-    mozharness_url = ARTIFACT_URL.format(
-        '<build>', 'public/build/mozharness.zip')
-
-    taskdesc['worker-type'] = WORKER_TYPE[test_platform]
-
-    taskdesc['scopes'].extend(
-        ['generic-worker:os-group:{}'.format(group) for group in test['os-groups']])
-
-    worker = taskdesc['worker'] = {}
-    worker['os-groups'] = test['os-groups']
-    worker['implementation'] = test['worker-implementation']
-    worker['max-run-time'] = test['max-run-time']
-    worker['artifacts'] = artifacts
-
-    worker['env'] = {}
-
-    # assemble the command line
-    mh_command = [
-        'c:\\mozilla-build\\python\\python.exe',
-        '-u',
-        'mozharness\\scripts\\' + normpath(mozharness['script'])
-    ]
-    for mh_config in mozharness['config']:
-        mh_command.extend(['--cfg', 'mozharness\\configs\\' + normpath(mh_config)])
-    mh_command.extend(mozharness.get('extra-options', []))
-    if mozharness.get('no-read-buildbot-config'):
-        mh_command.append('--no-read-buildbot-config')
-    mh_command.extend(['--installer-url', installer_url])
-    mh_command.extend(['--test-packages-url', test_packages_url])
-    if mozharness.get('download-symbols'):
-        if isinstance(mozharness['download-symbols'], basestring):
-            mh_command.extend(['--download-symbols', mozharness['download-symbols']])
-        else:
-            mh_command.extend(['--download-symbols', 'true'])
-
-    # TODO: remove the need for run['chunked']
-    if mozharness.get('chunked') or test['chunks'] > 1:
-        # Implement mozharness['chunking-args'], modifying command in place
-        if mozharness['chunking-args'] == 'this-chunk':
-            mh_command.append('--total-chunk={}'.format(test['chunks']))
-            mh_command.append('--this-chunk={}'.format(test['this-chunk']))
-        elif mozharness['chunking-args'] == 'test-suite-suffix':
-            suffix = mozharness['chunk-suffix'].replace('<CHUNK>', str(test['this-chunk']))
-            for i, c in enumerate(mh_command):
-                if isinstance(c, basestring) and c.startswith('--test-suite'):
-                    mh_command[i] += suffix
-
-    # bug 1311966 - symlink to artifacts until generic worker supports virtual artifact paths
-    artifact_link_commands = ['mklink /d %cd%\\public\\test_info %cd%\\build\\blobber_upload_dir']
-    for link in [a['path'] for a in artifacts if a['path'].startswith('public\\logs\\')]:
-        artifact_link_commands.append('mklink %cd%\\{} %cd%\\{}'.format(link, link[7:]))
-
-    worker['command'] = artifact_link_commands + [
-        {'task-reference': 'c:\\mozilla-build\\wget\\wget.exe {}'.format(mozharness_url)},
-        'c:\\mozilla-build\\info-zip\\unzip.exe mozharness.zip',
-        {'task-reference': ' '.join(mh_command)}
-    ]
-
-
-@worker_setup_function("native-engine")
-def macosx_engine_setup(config, test, taskdesc):
-    mozharness = test['mozharness']
-
-    installer_url = ARTIFACT_URL.format('<build>', mozharness['build-artifact-name'])
-    test_packages_url = ARTIFACT_URL.format('<build>',
-                                            'public/build/target.test_packages.json')
-    mozharness_url = ARTIFACT_URL.format('<build>',
-                                         'public/build/mozharness.zip')
-
-    # for now we have only 10.10 machines
-    taskdesc['worker-type'] = 'tc-worker-provisioner/gecko-t-osx-10-10'
-
-    worker = taskdesc['worker'] = {}
-    worker['implementation'] = test['worker-implementation']
-
-    worker['reboot'] = test['reboot']
-    worker['artifacts'] = [{
-        'name': prefix.rstrip('/'),
-        'path': path.rstrip('/'),
-        'type': 'directory',
-    } for (prefix, path) in ARTIFACTS]
-
-    worker['env'] = {
-        'GECKO_HEAD_REPOSITORY': config.params['head_repository'],
-        'GECKO_HEAD_REV': config.params['head_rev'],
-        'MOZHARNESS_CONFIG': ' '.join(mozharness['config']),
-        'MOZHARNESS_SCRIPT': mozharness['script'],
-        'MOZHARNESS_URL': {'task-reference': mozharness_url},
-        'MOZILLA_BUILD_URL': {'task-reference': installer_url},
-    }
-
-    # assemble the command line
-
-    worker['context'] = '{}/raw-file/{}/taskcluster/scripts/tester/test-macosx.sh'.format(
-        config.params['head_repository'], config.params['head_rev']
-    )
-
-    command = worker['command'] = ["./test-macosx.sh"]
-    if mozharness.get('no-read-buildbot-config'):
-        command.append("--no-read-buildbot-config")
-    command.extend([
-        {"task-reference": "--installer-url=" + installer_url},
-        {"task-reference": "--test-packages-url=" + test_packages_url},
-    ])
-    if mozharness.get('include-blob-upload-branch'):
-        command.append('--blob-upload-branch=' + config.params['project'])
-    command.extend(mozharness.get('extra-options', []))
-
-    # TODO: remove the need for run['chunked']
-    if mozharness.get('chunked') or test['chunks'] > 1:
-        # Implement mozharness['chunking-args'], modifying command in place
-        if mozharness['chunking-args'] == 'this-chunk':
-            command.append('--total-chunk={}'.format(test['chunks']))
-            command.append('--this-chunk={}'.format(test['this-chunk']))
-        elif mozharness['chunking-args'] == 'test-suite-suffix':
-            suffix = mozharness['chunk-suffix'].replace('<CHUNK>', str(test['this-chunk']))
-            for i, c in enumerate(command):
-                if isinstance(c, basestring) and c.startswith('--test-suite'):
-                    command[i] += suffix
-
-    if 'download-symbols' in mozharness:
-        download_symbols = mozharness['download-symbols']
-        download_symbols = {True: 'true', False: 'false'}.get(download_symbols, download_symbols)
-        command.append('--download-symbols=' + download_symbols)
-
-
-@worker_setup_function("buildbot-bridge")
-def buildbot_bridge_setup(config, test, taskdesc):
-    branch = config.params['project']
-    platform, build_type = test['build-platform'].split('/')
-    test_name = test.get('talos-try-name', test['test-name'])
-    mozharness = test['mozharness']
-
-    if test['e10s'] and not test_name.endswith('-e10s'):
-        test_name += '-e10s'
-
-    if mozharness.get('chunked', False):
-        this_chunk = test.get('this-chunk')
-        test_name = '{}-{}'.format(test_name, this_chunk)
-
-    worker = taskdesc['worker'] = {}
-    worker['implementation'] = test['worker-implementation']
-
-    taskdesc['worker-type'] = 'buildbot-bridge/buildbot-bridge'
-
-    if test.get('suite', '') == 'talos':
-        # on linux64-<variant>/<build>, we add the variant to the buildername
-        m = re.match(r'\w+-([^/]+)/.*', test['test-platform'])
-        variant = ''
-        if m and m.group(1):
-            variant = m.group(1) + ' '
-        buildername = '{} {} {}talos {}'.format(
-            BUILDER_NAME_PREFIX[platform],
-            branch,
-            variant,
-            test_name
-        )
-        if buildername.startswith('Ubuntu'):
-            buildername = buildername.replace('VM', 'HW')
-    else:
-        buildername = '{} {} {} test {}'.format(
-            BUILDER_NAME_PREFIX[platform],
-            branch,
-            build_type,
-            test_name
-        )
-
-    worker.update({
-        'buildername': buildername,
-        'sourcestamp': {
-            'branch': branch,
-            'repository': config.params['head_repository'],
-            'revision': config.params['head_rev'],
-        },
-        'properties': {
-            'product': test.get('product', 'firefox'),
-            'who': config.params['owner'],
-            'installer_path': mozharness['build-artifact-name'],
-        }
-    })

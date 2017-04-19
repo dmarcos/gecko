@@ -7,6 +7,8 @@
 window.addEventListener('DOMContentLoaded', function() {
   let viewport = new Viewport();
   let toolbar = new Toolbar(viewport);
+  let presentationController = new PresentationController(viewport);
+  let passwordPrompt = new PasswordPrompt(viewport);
 
   // Expose the custom viewport object to runtime
   window.createCustomViewport = function(actionHandler) {

@@ -1251,6 +1251,10 @@ ChromeTooltipListener::MouseMove(nsIDOMEvent* aMouseEvent)
         aMouseEvent->InternalDOMEvent()->GetTarget();
       if (eventTarget) {
         mPossibleTooltipNode = do_QueryInterface(eventTarget);
+        nsCOMPtr<nsIGlobalObject> global(eventTarget->GetOwnerGlobal());
+        if (global) {
+          mTooltipTimer->SetTarget(global->EventTargetFor(TaskCategory::UI));
+        }
       }
       if (mPossibleTooltipNode) {
         nsresult rv = mTooltipTimer->InitWithFuncCallback(
@@ -1553,7 +1557,7 @@ ChromeContextMenuListener::HandleEvent(nsIDOMEvent* aMouseEvent)
 
     nsCOMPtr<nsIFormControl> formControl(do_QueryInterface(node));
     if (formControl) {
-      if (formControl->GetType() == NS_FORM_TEXTAREA) {
+      if (formControl->ControlType() == NS_FORM_TEXTAREA) {
         flags |= nsIContextMenuListener::CONTEXT_TEXT;
         flags2 |= nsIContextMenuListener2::CONTEXT_TEXT;
         targetDOMnode = node;

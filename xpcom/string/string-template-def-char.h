@@ -9,9 +9,11 @@
 #define CharT_is_char                       1
 #define nsTAString_IncompatibleCharT        nsAString
 #define nsTString_CharT                     nsCString
+#define nsTStringRepr_CharT                 nsCStringRepr
 #define nsTFixedString_CharT                nsFixedCString
 #define nsTAutoString_CharT                 nsAutoCString
 #define nsTSubstring_CharT                  nsACString
+#define PrintfAppend_CharT                  PrintfAppend_nsACString
 #define nsTSubstringTuple_CharT             nsCSubstringTuple
 #define nsTStringComparator_CharT           nsCStringComparator
 #define nsTDefaultStringComparator_CharT    nsDefaultCStringComparator

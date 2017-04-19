@@ -191,9 +191,9 @@ this.BrowserUITelemetry = {
     UITelemetry.addSimpleMeasureFunction("syncstate",
                                          this.getSyncState.bind(this));
 
-    Services.obs.addObserver(this, "sessionstore-windows-restored", false);
-    Services.obs.addObserver(this, "browser-delayed-startup-finished", false);
-    Services.obs.addObserver(this, "autocomplete-did-enter-text", false);
+    Services.obs.addObserver(this, "sessionstore-windows-restored");
+    Services.obs.addObserver(this, "browser-delayed-startup-finished");
+    Services.obs.addObserver(this, "autocomplete-did-enter-text");
     CustomizableUI.addListener(this);
   },
 
@@ -600,10 +600,7 @@ this.BrowserUITelemetry = {
   getSyncState() {
     let result = {};
     for (let sub of ["desktop", "mobile"]) {
-      let count = 0;
-      try {
-        count = Services.prefs.getIntPref("services.sync.clients.devices." + sub);
-      } catch (ex) {}
+      let count = Services.prefs.getIntPref("services.sync.clients.devices." + sub, 0);
       result[sub] = count;
     }
     return result;

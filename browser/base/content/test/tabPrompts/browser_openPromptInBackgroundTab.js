@@ -43,12 +43,26 @@ add_task(function*() {
   ourPrompt.onButtonClick(0);
   // Wait for that click to actually be handled completely.
   yield new Promise(function(resolve) {
-    Services.tm.mainThread.dispatch(resolve, Ci.nsIThread.DISPATCH_NORMAL);
+    Services.tm.dispatchToMainThread(resolve);
   });
   // check permission is set
   let ps = Services.perms;
   is(ps.ALLOW_ACTION, ps.testPermission(makeURI(pageWithAlert), "focus-tab-by-prompt"),
      "Tab switching should now be allowed");
+
+  // Check if the control center shows the correct permission.
+  let shown = BrowserTestUtils.waitForEvent(gIdentityHandler._identityPopup, "popupshown");
+  gIdentityHandler._identityBox.click();
+  yield shown;
+  let labelText = SitePermissions.getPermissionLabel("focus-tab-by-prompt");
+  let permissionsList = document.getElementById("identity-popup-permission-list");
+  let label = permissionsList.querySelector(".identity-popup-permission-label");
+  is(label.textContent, labelText);
+  gIdentityHandler._identityPopup.hidePopup()
+
+  // Check if the identity icon signals granted permission.
+  ok(gIdentityHandler._identityBox.classList.contains("grantedPermissions"),
+    "identity-box signals granted permissions");
 
   let openedTabSelectedPromise = BrowserTestUtils.waitForAttribute("selected", openedTab, "true");
   // switch to other tab again

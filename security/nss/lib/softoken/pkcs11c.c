@@ -5591,6 +5591,7 @@ sftk_unwrapPrivateKey(SFTKObject *key, SECItem *bpki)
 
     switch (SECOID_GetAlgorithmTag(&pki->algorithm)) {
         case SEC_OID_PKCS1_RSA_ENCRYPTION:
+        case SEC_OID_PKCS1_RSA_PSS_SIGNATURE:
             keyTemplate = nsslowkey_RSAPrivateKeyTemplate;
             paramTemplate = NULL;
             paramDest = NULL;
@@ -7240,14 +7241,9 @@ NSC_DeriveKey(CK_SESSION_HANDLE hSession,
             ecPoint.data = mechParams->pPublicData;
             ecPoint.len = mechParams->ulPublicDataLen;
 
-            pubKeyLen = privKey->u.ec.ecParams.pointSize;
+            pubKeyLen = EC_GetPointSize(&privKey->u.ec.ecParams);
 
-            /* if the len is too small, can't be a valid point */
-            if (ecPoint.len < pubKeyLen) {
-                goto ec_loser;
-            }
-            /* if the len is too large, must be an encoded point (length is
-             * equal case just falls through */
+            /* if the len is too large, might be an encoded point */
             if (ecPoint.len > pubKeyLen) {
                 SECItem newPoint;
 

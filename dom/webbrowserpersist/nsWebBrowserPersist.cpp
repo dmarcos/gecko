@@ -14,6 +14,7 @@
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "nsIInterfaceRequestorUtils.h"
+#include "nsILoadContext.h"
 #include "nsIPrivateBrowsingChannel.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIComponentRegistrar.h"
@@ -61,6 +62,7 @@
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/HTMLSharedElement.h"
 #include "mozilla/dom/HTMLSharedObjectElement.h"
+#include "mozilla/Printf.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -1118,6 +1120,8 @@ NS_IMETHODIMP nsWebBrowserPersist::OnStatus(
         case NS_NET_STATUS_END_FTP_TRANSACTION:
         case NS_NET_STATUS_CONNECTING_TO:
         case NS_NET_STATUS_CONNECTED_TO:
+        case NS_NET_STATUS_TLS_HANDSHAKE_STARTING:
+        case NS_NET_STATUS_TLS_HANDSHAKE_ENDED:
         case NS_NET_STATUS_SENDING_TO:
         case NS_NET_STATUS_RECEIVING_FROM:
         case NS_NET_STATUS_WAITING_FOR:
@@ -1385,8 +1389,10 @@ nsresult nsWebBrowserPersist::SaveURIInternal(
     {
         nsCOMPtr<nsIHttpChannelInternal> httpChannelInternal =
                 do_QueryInterface(inputChannel);
-        if (httpChannelInternal)
-            httpChannelInternal->SetThirdPartyFlags(nsIHttpChannelInternal::THIRD_PARTY_FORCE_ALLOW);
+        if (httpChannelInternal) {
+            rv = httpChannelInternal->SetThirdPartyFlags(nsIHttpChannelInternal::THIRD_PARTY_FORCE_ALLOW);
+            MOZ_ASSERT(NS_SUCCEEDED(rv));
+        }
     }
 
     // Set the referrer, post data and headers if any
@@ -1396,7 +1402,8 @@ nsresult nsWebBrowserPersist::SaveURIInternal(
         // Referrer
         if (aReferrer)
         {
-            httpChannel->SetReferrerWithPolicy(aReferrer, aReferrerPolicy);
+            rv = httpChannel->SetReferrerWithPolicy(aReferrer, aReferrerPolicy);
+            MOZ_ASSERT(NS_SUCCEEDED(rv));
         }
 
         // Post data
@@ -2021,7 +2028,7 @@ nsWebBrowserPersist::CalculateUniqueFilename(nsIURI *aURI)
 
             if (base.IsEmpty() || duplicateCounter > 1)
             {
-                char * tmp = PR_smprintf("_%03d", duplicateCounter);
+                char * tmp = mozilla::Smprintf("_%03d", duplicateCounter);
                 NS_ENSURE_TRUE(tmp, NS_ERROR_OUT_OF_MEMORY);
                 if (filename.Length() < kDefaultMaxFilenameLength - 4)
                 {
@@ -2032,7 +2039,7 @@ nsWebBrowserPersist::CalculateUniqueFilename(nsIURI *aURI)
                     base.Mid(tmpBase, 0, base.Length() - 4);
                 }
                 tmpBase.Append(tmp);
-                PR_smprintf_free(tmp);
+                mozilla::SmprintfFree(tmp);
             }
             else
             {

@@ -2,10 +2,8 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 var {
   promiseObserved,
-  SingletonEventManager,
 } = ExtensionUtils;
 
 XPCOMUtils.defineLazyModuleGetter(this, "SessionStore",
@@ -21,16 +19,16 @@ function getRecentlyClosed(maxResults, extension) {
   for (let window of closedWindowData) {
     recentlyClosed.push({
       lastModified: window.closedAt,
-      window: WindowManager.convertFromSessionStoreClosedData(window, extension)});
+      window: Window.convertFromSessionStoreClosedData(extension, window)});
   }
 
   // Get closed tabs
-  for (let window of WindowListManager.browserWindows()) {
+  for (let window of windowTracker.browserWindows()) {
     let closedTabData = SessionStore.getClosedTabData(window, false);
     for (let tab of closedTabData) {
       recentlyClosed.push({
         lastModified: tab.closedAt,
-        tab: TabManager.for(extension).convertFromSessionStoreClosedData(tab, window)});
+        tab: Tab.convertFromSessionStoreClosedData(extension, tab, window)});
     }
   }
 
@@ -46,62 +44,95 @@ function createSession(restored, extension, sessionId) {
   let sessionObj = {lastModified: Date.now()};
   if (restored instanceof Ci.nsIDOMChromeWindow) {
     return promiseObserved("sessionstore-single-window-restored", subject => subject == restored).then(() => {
-      sessionObj.window = WindowManager.convert(extension, restored, {populate: true});
+      sessionObj.window = extension.windowManager.convert(restored, {populate: true});
       return Promise.resolve([sessionObj]);
     });
   }
-  sessionObj.tab = TabManager.for(extension).convert(restored);
+  sessionObj.tab = extension.tabManager.convert(restored);
   return Promise.resolve([sessionObj]);
 }
 
-extensions.registerSchemaAPI("sessions", "addon_parent", context => {
-  let {extension} = context;
-  return {
-    sessions: {
-      getRecentlyClosed: function(filter) {
-        let maxResults = filter.maxResults == undefined ? this.MAX_SESSION_RESULTS : filter.maxResults;
-        return Promise.resolve(getRecentlyClosed(maxResults, extension));
-      },
+this.sessions = class extends ExtensionAPI {
+  getAPI(context) {
+    let {extension} = context;
+    return {
+      sessions: {
+        getRecentlyClosed: function(filter) {
+          let maxResults = filter.maxResults == undefined ? this.MAX_SESSION_RESULTS : filter.maxResults;
+          return Promise.resolve(getRecentlyClosed(maxResults, extension));
+        },
 
-      restore: function(sessionId) {
-        let session, closedId;
-        if (sessionId) {
-          closedId = sessionId;
-          session = SessionStore.undoCloseById(closedId);
-        } else if (SessionStore.lastClosedObjectType == "window") {
-          // If the most recently closed object is a window, just undo closing the most recent window.
-          session = SessionStore.undoCloseWindow(0);
-        } else {
-          // It is a tab, and we cannot call SessionStore.undoCloseTab without a window,
-          // so we must find the tab in which case we can just use its closedId.
-          let recentlyClosedTabs = [];
-          for (let window of WindowListManager.browserWindows()) {
-            let closedTabData = SessionStore.getClosedTabData(window, false);
-            for (let tab of closedTabData) {
-              recentlyClosedTabs.push(tab);
-            }
+        forgetClosedTab: function(windowId, sessionId) {
+          let window = context.extension.windowManager.get(windowId).window;
+          let closedTabData = SessionStore.getClosedTabData(window, false);
+
+          let closedTabIndex = closedTabData.findIndex((closedTab) => {
+            return closedTab.closedId === parseInt(sessionId, 10);
+          });
+
+          if (closedTabIndex < 0) {
+            return Promise.reject({message: `Could not find closed tab using sessionId ${sessionId}.`});
           }
 
-          // Sort the tabs.
-          recentlyClosedTabs.sort((a, b) => b.closedAt - a.closedAt);
+          SessionStore.forgetClosedTab(window, closedTabIndex);
+          return Promise.resolve();
+        },
 
-          // Use the closedId of the most recently closed tab to restore it.
-          closedId = recentlyClosedTabs[0].closedId;
-          session = SessionStore.undoCloseById(closedId);
-        }
-        return createSession(session, extension, closedId);
+        forgetClosedWindow: function(sessionId) {
+          let closedWindowData = SessionStore.getClosedWindowData(false);
+
+          let closedWindowIndex = closedWindowData.findIndex((closedWindow) => {
+            return closedWindow.closedId === parseInt(sessionId, 10);
+          });
+
+          if (closedWindowIndex < 0) {
+            return Promise.reject({message: `Could not find closed window using sessionId ${sessionId}.`});
+          }
+
+          SessionStore.forgetClosedWindow(closedWindowIndex);
+          return Promise.resolve();
+        },
+
+        restore: function(sessionId) {
+          let session, closedId;
+          if (sessionId) {
+            closedId = sessionId;
+            session = SessionStore.undoCloseById(closedId);
+          } else if (SessionStore.lastClosedObjectType == "window") {
+            // If the most recently closed object is a window, just undo closing the most recent window.
+            session = SessionStore.undoCloseWindow(0);
+          } else {
+            // It is a tab, and we cannot call SessionStore.undoCloseTab without a window,
+            // so we must find the tab in which case we can just use its closedId.
+            let recentlyClosedTabs = [];
+            for (let window of windowTracker.browserWindows()) {
+              let closedTabData = SessionStore.getClosedTabData(window, false);
+              for (let tab of closedTabData) {
+                recentlyClosedTabs.push(tab);
+              }
+            }
+
+            // Sort the tabs.
+            recentlyClosedTabs.sort((a, b) => b.closedAt - a.closedAt);
+
+            // Use the closedId of the most recently closed tab to restore it.
+            closedId = recentlyClosedTabs[0].closedId;
+            session = SessionStore.undoCloseById(closedId);
+          }
+          return createSession(session, extension, closedId);
+        },
+
+        onChanged: new SingletonEventManager(context, "sessions.onChanged", fire => {
+          let observer = () => {
+            fire.async();
+          };
+
+          Services.obs.addObserver(observer, SS_ON_CLOSED_OBJECTS_CHANGED);
+          return () => {
+            Services.obs.removeObserver(observer, SS_ON_CLOSED_OBJECTS_CHANGED);
+          };
+        }).api(),
       },
-
-      onChanged: new SingletonEventManager(context, "sessions.onChanged", fire => {
-        let observer = () => {
-          fire.async();
-        };
-
-        Services.obs.addObserver(observer, SS_ON_CLOSED_OBJECTS_CHANGED, false);
-        return () => {
-          Services.obs.removeObserver(observer, SS_ON_CLOSED_OBJECTS_CHANGED);
-        };
-      }).api(),
-    },
-  };
-});
+    };
+  }
+};

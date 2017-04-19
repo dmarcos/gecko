@@ -43,16 +43,14 @@ def rewrite_patch(patch, strip_dir):
     return Patch(patch.author, patch.email, rewrite_message(patch), new_diff)
 
 def rewrite_message(patch):
-    rest = patch.message.body
-
     if patch.message.bug is not None:
         return "\n".join([patch.message.summary,
                           patch.message.body,
                           "",
-                          "Upstreamed from https://bugzilla.mozilla.org/show_bug.cgi?id=%s" %
+                          "Upstreamed from https://bugzilla.mozilla.org/show_bug.cgi?id=%s [ci skip]" %
                           patch.message.bug])
 
-    return "\n".join([patch.message.full_summary, rest])
+    return "\n".join([patch.message.full_summary, "%s\n[ci skip]\n" % patch.message.body])
 
 
 class SyncToUpstream(Step):
@@ -98,7 +96,8 @@ class GetLastSyncData(Step):
                 key, value = [item.strip() for item in line.split(":", 1)]
                 items[key] = value
 
-        state.last_sync_commit = Commit(state.local_tree, items["local"])
+        state.last_sync_commit = Commit(state.local_tree,
+                                        state.local_tree.rev_from_hg(items["local"]))
         state.old_upstream_rev = items["upstream"]
 
         if not state.local_tree.contains_commit(state.last_sync_commit):
@@ -311,7 +310,7 @@ class UpdateLastSyncData(Step):
 
     def create(self, state):
         self.logger.info("Updating last sync commit")
-        data = {"local": state.local_tree.rev,
+        data = {"local": state.local_tree.rev_to_hg(state.local_tree.rev),
                 "upstream": state.sync_tree.rev}
         with open(state.sync_data_path, "w") as f:
             for key, value in data.iteritems():

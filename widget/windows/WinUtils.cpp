@@ -57,6 +57,7 @@
 #include "TSFTextStore.h"
 #endif // #ifdef NS_ENABLE_TSF
 
+#include <shlobj.h>
 #include <shlwapi.h>
 
 mozilla::LazyLogModule gWindowsLog("Widget");
@@ -417,28 +418,6 @@ NS_IMPL_ISUPPORTS(AsyncDeleteAllFaviconsFromDisk, nsIRunnable)
 const char FaviconHelper::kJumpListCacheDir[] = "jumpListCache";
 const char FaviconHelper::kShortcutCacheDir[] = "shortcutCache";
 
-// apis available on vista and up.
-WinUtils::SHCreateItemFromParsingNamePtr WinUtils::sCreateItemFromParsingName = nullptr;
-WinUtils::SHGetKnownFolderPathPtr WinUtils::sGetKnownFolderPath = nullptr;
-
-// We just leak these DLL HMODULEs. There's no point in calling FreeLibrary
-// on them during shutdown anyway.
-static const wchar_t kShellLibraryName[] =  L"shell32.dll";
-static HMODULE sShellDll = nullptr;
-static const wchar_t kDwmLibraryName[] = L"dwmapi.dll";
-static HMODULE sDwmDll = nullptr;
-
-WinUtils::DwmExtendFrameIntoClientAreaProc WinUtils::dwmExtendFrameIntoClientAreaPtr = nullptr;
-WinUtils::DwmIsCompositionEnabledProc WinUtils::dwmIsCompositionEnabledPtr = nullptr;
-WinUtils::DwmSetIconicThumbnailProc WinUtils::dwmSetIconicThumbnailPtr = nullptr;
-WinUtils::DwmSetIconicLivePreviewBitmapProc WinUtils::dwmSetIconicLivePreviewBitmapPtr = nullptr;
-WinUtils::DwmGetWindowAttributeProc WinUtils::dwmGetWindowAttributePtr = nullptr;
-WinUtils::DwmSetWindowAttributeProc WinUtils::dwmSetWindowAttributePtr = nullptr;
-WinUtils::DwmInvalidateIconicBitmapsProc WinUtils::dwmInvalidateIconicBitmapsPtr = nullptr;
-WinUtils::DwmDefWindowProcProc WinUtils::dwmDwmDefWindowProcPtr = nullptr;
-WinUtils::DwmGetCompositionTimingInfoProc WinUtils::dwmGetCompositionTimingInfoPtr = nullptr;
-WinUtils::DwmFlushProc WinUtils::dwmFlushProcPtr = nullptr;
-
 // Prefix for path used by NT calls.
 const wchar_t kNTPrefix[] = L"\\??\\";
 const size_t kNTPrefixLen = ArrayLength(kNTPrefix) - 1;
@@ -462,30 +441,22 @@ static NtTestAlertPtr sNtTestAlert = nullptr;
 void
 WinUtils::Initialize()
 {
-  if (!sDwmDll) {
-    sDwmDll = ::LoadLibraryW(kDwmLibraryName);
-
-    if (sDwmDll) {
-      dwmExtendFrameIntoClientAreaPtr = (DwmExtendFrameIntoClientAreaProc)::GetProcAddress(sDwmDll, "DwmExtendFrameIntoClientArea");
-      dwmIsCompositionEnabledPtr = (DwmIsCompositionEnabledProc)::GetProcAddress(sDwmDll, "DwmIsCompositionEnabled");
-      dwmSetIconicThumbnailPtr = (DwmSetIconicThumbnailProc)::GetProcAddress(sDwmDll, "DwmSetIconicThumbnail");
-      dwmSetIconicLivePreviewBitmapPtr = (DwmSetIconicLivePreviewBitmapProc)::GetProcAddress(sDwmDll, "DwmSetIconicLivePreviewBitmap");
-      dwmGetWindowAttributePtr = (DwmGetWindowAttributeProc)::GetProcAddress(sDwmDll, "DwmGetWindowAttribute");
-      dwmSetWindowAttributePtr = (DwmSetWindowAttributeProc)::GetProcAddress(sDwmDll, "DwmSetWindowAttribute");
-      dwmInvalidateIconicBitmapsPtr = (DwmInvalidateIconicBitmapsProc)::GetProcAddress(sDwmDll, "DwmInvalidateIconicBitmaps");
-      dwmDwmDefWindowProcPtr = (DwmDefWindowProcProc)::GetProcAddress(sDwmDll, "DwmDefWindowProc");
-      dwmGetCompositionTimingInfoPtr = (DwmGetCompositionTimingInfoProc)::GetProcAddress(sDwmDll, "DwmGetCompositionTimingInfo");
-      dwmFlushProcPtr = (DwmFlushProc)::GetProcAddress(sDwmDll, "DwmFlush");
-    }
-  }
-
   if (IsWin10OrLater()) {
     HMODULE user32Dll = ::GetModuleHandleW(L"user32");
     if (user32Dll) {
-      sEnableNonClientDpiScaling = (EnableNonClientDpiScalingProc)
-        ::GetProcAddress(user32Dll, "EnableNonClientDpiScaling");
-      sSetThreadDpiAwarenessContext = (SetThreadDpiAwarenessContextProc)
-        ::GetProcAddress(user32Dll, "SetThreadDpiAwarenessContext");
+      auto getThreadDpiAwarenessContext = (decltype(GetThreadDpiAwarenessContext)*)
+        ::GetProcAddress(user32Dll, "GetThreadDpiAwarenessContext");
+      auto areDpiAwarenessContextsEqual = (decltype(AreDpiAwarenessContextsEqual)*)
+        ::GetProcAddress(user32Dll, "AreDpiAwarenessContextsEqual");
+      if (getThreadDpiAwarenessContext && areDpiAwarenessContextsEqual &&
+          areDpiAwarenessContextsEqual(getThreadDpiAwarenessContext(),
+                                       DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE)) {
+        // Only per-monitor v1 requires these workarounds.
+        sEnableNonClientDpiScaling = (EnableNonClientDpiScalingProc)
+          ::GetProcAddress(user32Dll, "EnableNonClientDpiScaling");
+        sSetThreadDpiAwarenessContext = (SetThreadDpiAwarenessContextProc)
+          ::GetProcAddress(user32Dll, "SetThreadDpiAwarenessContext");
+      }
     }
   }
 
@@ -501,7 +472,7 @@ LRESULT WINAPI
 WinUtils::NonClientDpiScalingDefWindowProcW(HWND hWnd, UINT msg,
                                             WPARAM wParam, LPARAM lParam)
 {
-  if (msg == WM_NCCREATE && sEnableNonClientDpiScaling) {
+  if (msg == WM_NCCREATE) {
     sEnableNonClientDpiScaling(hWnd);
   }
   return ::DefWindowProcW(hWnd, msg, wParam, lParam);
@@ -1155,56 +1126,6 @@ WinUtils::InitMSG(UINT aMessage, WPARAM wParam, LPARAM lParam, HWND aWnd)
   return msg;
 }
 
-/* static */
-HRESULT
-WinUtils::SHCreateItemFromParsingName(PCWSTR pszPath, IBindCtx *pbc,
-                                      REFIID riid, void **ppv)
-{
-  if (sCreateItemFromParsingName) {
-    return sCreateItemFromParsingName(pszPath, pbc, riid, ppv);
-  }
-
-  if (!sShellDll) {
-    sShellDll = ::LoadLibraryW(kShellLibraryName);
-    if (!sShellDll) {
-      return false;
-    }
-  }
-
-  sCreateItemFromParsingName = (SHCreateItemFromParsingNamePtr)
-    GetProcAddress(sShellDll, "SHCreateItemFromParsingName");
-  if (!sCreateItemFromParsingName)
-    return E_FAIL;
-
-  return sCreateItemFromParsingName(pszPath, pbc, riid, ppv);
-}
-
-/* static */
-HRESULT 
-WinUtils::SHGetKnownFolderPath(REFKNOWNFOLDERID rfid,
-                               DWORD dwFlags,
-                               HANDLE hToken,
-                               PWSTR *ppszPath)
-{
-  if (sGetKnownFolderPath) {
-    return sGetKnownFolderPath(rfid, dwFlags, hToken, ppszPath);
-  }
-
-  if (!sShellDll) {
-    sShellDll = ::LoadLibraryW(kShellLibraryName);
-    if (!sShellDll) {
-      return false;
-    }
-  }
-
-  sGetKnownFolderPath = (SHGetKnownFolderPathPtr)
-    GetProcAddress(sShellDll, "SHGetKnownFolderPath");
-  if (!sGetKnownFolderPath)
-    return E_FAIL;
-
-  return sGetKnownFolderPath(rfid, dwFlags, hToken, ppszPath);
-}
-
 static BOOL
 WINAPI EnumFirstChild(HWND hwnd, LPARAM lParam)
 {
@@ -1317,7 +1238,8 @@ NS_IMETHODIMP
 AsyncFaviconDataReady::OnComplete(nsIURI *aFaviconURI,
                                   uint32_t aDataLen,
                                   const uint8_t *aData, 
-                                  const nsACString &aMimeType)
+                                  const nsACString &aMimeType,
+                                  uint16_t aWidth)
 {
   if (!aDataLen || !aData) {
     if (mURLShortcut) {
@@ -1745,7 +1667,7 @@ nsresult
                                                aIOThread, 
                                                aURLShortcut);
 
-  favIconSvc->GetFaviconDataForPage(aFaviconPageURI, callback);
+  favIconSvc->GetFaviconDataForPage(aFaviconPageURI, callback, 0);
 #endif
   return NS_OK;
 }
@@ -1916,8 +1838,8 @@ bool
 WinUtils::ResolveMovedUsersFolder(std::wstring& aPath)
 {
   wchar_t* usersPath;
-  if (FAILED(WinUtils::SHGetKnownFolderPath(FOLDERID_UserProfiles, 0, nullptr,
-                                            &usersPath))) {
+  if (FAILED(SHGetKnownFolderPath(FOLDERID_UserProfiles, 0, nullptr,
+                                  &usersPath))) {
     return false;
   }
 

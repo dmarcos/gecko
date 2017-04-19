@@ -8,17 +8,22 @@
  */
 
 add_task(function* () {
-  let { L10N } = require("devtools/client/netmonitor/l10n");
+  let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
   let { tab, monitor } = yield initNetMonitor(STATUS_CODES_URL);
 
   info("Starting test... ");
 
-  let { document, NetMonitorView } = monitor.panelWin;
-  let { RequestsMenu } = NetMonitorView;
-  let requestItems = [];
+  let { document, gStore, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  let {
+    getDisplayedRequests,
+    getSortedRequests,
+  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  RequestsMenu.lazyUpdate = false;
+  gStore.dispatch(Actions.batchEnable(false));
+
+  let requestItems = [];
 
   const REQUEST_DATA = [
     {
@@ -103,18 +108,24 @@ add_task(function* () {
 
   /**
    * A helper that verifies all requests show the correct information and caches
-   * RequestsMenu items to requestItems array.
+   * request list items to requestItems array.
    */
   function* verifyRequests() {
     info("Verifying requests contain correct information.");
     let index = 0;
     for (let request of REQUEST_DATA) {
-      let item = RequestsMenu.getItemAtIndex(index);
+      let item = getSortedRequests(gStore.getState()).get(index);
       requestItems[index] = item;
 
       info("Verifying request #" + index);
-      yield verifyRequestItemTarget(RequestsMenu, item,
-        request.method, request.uri, request.details);
+      yield verifyRequestItemTarget(
+        document,
+        getDisplayedRequests(gStore.getState()),
+        item,
+        request.method,
+        request.uri,
+        request.details
+      );
 
       index++;
     }
@@ -145,10 +156,8 @@ add_task(function* () {
    * A function that tests "Headers" panel contains correct information.
    */
   function* testHeaders(data, index) {
-    let wait = waitForDOM(document, "#headers-panel");
     EventUtils.sendMouseEvent({ type: "mousedown" },
       document.querySelectorAll(".request-list-item")[index]);
-    yield wait;
 
     let panel = document.querySelector("#headers-panel");
     let summaryValues = panel.querySelectorAll(".tabpanel-summary-value.textbox-input");
@@ -156,7 +165,7 @@ add_task(function* () {
 
     is(summaryValues[0].value, uri, "The url summary value is incorrect.");
     is(summaryValues[1].value, method, "The method summary value is incorrect.");
-    is(panel.querySelector(".requests-menu-status-icon").dataset.code, status,
+    is(panel.querySelector(".requests-list-status-icon").dataset.code, status,
       "The status summary code is incorrect.");
     is(summaryValues[3].value, status + " " + statusText,
       "The status summary value is incorrect.");
@@ -166,17 +175,14 @@ add_task(function* () {
    * A function that tests "Params" panel contains correct information.
    */
   function* testParams(data, index) {
-    let wait = waitForDOM(document, "#params-panel .properties-view");
     EventUtils.sendMouseEvent({ type: "mousedown" },
       document.querySelectorAll(".request-list-item")[index]);
-    document.querySelector("#params-tab").click();
-    yield wait;
+    EventUtils.sendMouseEvent({ type: "click" },
+      document.querySelector("#params-tab"));
 
     let panel = document.querySelector("#params-panel");
     let statusParamValue = data.uri.split("=").pop();
-    let statusParamShownValue = "\"" + statusParamValue + "\"";
     let treeSections = panel.querySelectorAll(".tree-section");
-    debugger
 
     is(treeSections.length, 1,
       "There should be 1 param section displayed in this panel.");
@@ -195,7 +201,7 @@ add_task(function* () {
       "The params scope doesn't have the correct title.");
 
     is(labels[0].textContent, "sts", "The param name was incorrect.");
-    is(values[0].textContent, statusParamShownValue, "The param value was incorrect.");
+    is(values[0].textContent, statusParamValue, "The param value was incorrect.");
 
     ok(panel.querySelector(".treeTable"),
       "The request params tree view should be displayed.");

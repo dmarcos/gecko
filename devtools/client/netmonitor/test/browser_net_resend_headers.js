@@ -11,10 +11,15 @@ add_task(function* () {
   let { monitor } = yield initNetMonitor(SIMPLE_SJS);
   info("Starting test... ");
 
-  let { NetMonitorView, NetMonitorController } = monitor.panelWin;
-  let { RequestsMenu } = NetMonitorView;
+  let { gStore, windowRequire } = monitor.panelWin;
+  let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+  let { NetMonitorController } =
+    windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
+  let {
+    getSortedRequests,
+  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  RequestsMenu.lazyUpdate = false;
+  gStore.dispatch(Actions.batchEnable(false));
 
   let requestUrl = SIMPLE_SJS;
   let requestHeaders = [
@@ -35,7 +40,7 @@ add_task(function* () {
   });
   yield wait;
 
-  let item = RequestsMenu.getItemAtIndex(0);
+  let item = getSortedRequests(gStore.getState()).get(0);
   is(item.method, "POST", "The request has the right method");
   is(item.url, requestUrl, "The request has the right URL");
 

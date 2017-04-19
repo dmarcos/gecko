@@ -341,6 +341,34 @@ nsCaret::GetGeometryForFrame(nsIFrame* aFrame,
     framePos.y = baseline - ascent;
   }
   Metrics caretMetrics = ComputeMetrics(aFrame, aFrameOffset, height);
+
+  nsTextFrame* textFrame = do_QueryFrame(aFrame);
+  if (textFrame) {
+    gfxTextRun* textRun =
+      textFrame->GetTextRun(nsTextFrame::TextRunType::eInflated);
+    if (textRun) {
+      // For "upstream" text where the textrun direction is reversed from the
+      // frame's inline-dir we want the caret to be painted before rather than
+      // after its nominal inline position, so we offset by its width.
+      bool textRunDirIsReverseOfFrame =
+        wm.IsInlineReversed() != textRun->IsInlineReversed();
+      // However, in sideways-lr mode we invert this behavior because this is
+      // the one writing mode where bidi-LTR corresponds to inline-reversed
+      // already, which reverses the desired caret placement behavior.
+      // Note that the following condition is equivalent to:
+      //   if ( (!textRun->IsSidewaysLeft() && textRunDirIsReverseOfFrame) ||
+      //        (textRun->IsSidewaysLeft()  && !textRunDirIsReverseOfFrame) )
+      if (textRunDirIsReverseOfFrame != textRun->IsSidewaysLeft()) {
+        int dir = wm.IsBidiLTR() ? -1 : 1;
+        if (vertical) {
+          framePos.y += dir * caretMetrics.mCaretWidth;
+        } else {
+          framePos.x += dir * caretMetrics.mCaretWidth;
+        }
+      }
+    }
+  }
+
   rect = nsRect(framePos, vertical ? nsSize(height, caretMetrics.mCaretWidth) :
                                      nsSize(caretMetrics.mCaretWidth, height));
 
@@ -537,13 +565,20 @@ nsCaret::GetPaintGeometry(nsRect* aRect)
   return frame;
 }
 
+nsIFrame*
+nsCaret::GetFrame(int32_t* aContentOffset) {
+  return GetFrameAndOffset(GetSelectionInternal(),
+                           mOverrideContent,
+                           mOverrideOffset,
+                           aContentOffset);
+}
+
 void nsCaret::PaintCaret(DrawTarget& aDrawTarget,
                          nsIFrame* aForFrame,
                          const nsPoint &aOffset)
 {
   int32_t contentOffset;
-  nsIFrame* frame = GetFrameAndOffset(GetSelectionInternal(),
-    mOverrideContent, mOverrideOffset, &contentOffset);
+  nsIFrame* frame = GetFrame(&contentOffset);
   if (!frame) {
     return;
   }
@@ -615,8 +650,9 @@ void nsCaret::ResetBlinking()
     LookAndFeel::GetInt(LookAndFeel::eIntID_CaretBlinkTime, 500));
   if (blinkRate > 0) {
     mBlinkCount = Preferences::GetInt("ui.caretBlinkCount", -1);
-    mBlinkTimer->InitWithFuncCallback(CaretBlinkCallback, this, blinkRate,
-                                      nsITimer::TYPE_REPEATING_SLACK);
+    mBlinkTimer->InitWithNamedFuncCallback(CaretBlinkCallback, this, blinkRate,
+                                           nsITimer::TYPE_REPEATING_SLACK,
+                                           "nsCaret::CaretBlinkCallback_timer");
   }
 }
 

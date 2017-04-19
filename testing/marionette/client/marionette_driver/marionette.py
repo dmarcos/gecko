@@ -3,7 +3,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import base64
-import copy
 import datetime
 import json
 import os
@@ -99,10 +98,15 @@ class HTMLElement(object):
         body = {"id": self.id}
         return self.marionette._send_message("getElementText", body, key="value")
 
-    def send_keys(self, *string):
-        """Sends the string via synthesized keypresses to the element."""
-        keys = Marionette.convert_keys(*string)
-        body = {"id": self.id, "value": keys}
+    def send_keys(self, *strings):
+        """Sends the string via synthesized keypresses to the element.
+           If an array is passed in like `marionette.send_keys(Keys.SHIFT, "a")` it
+           will be joined into a string.
+           If an integer is passed in like `marionette.send_keys(1234)` it will be
+           coerced into a string.
+        """
+        keys = Marionette.convert_keys(*strings)
+        body = {"id": self.id, "text": keys}
         self.marionette._send_message("sendKeysToElement", body)
 
     def clear(self):
@@ -514,7 +518,7 @@ class Alert(object):
     ::
 
         Alert(marionette).accept()
-        Alert(merionette).dismiss()
+        Alert(marionette).dismiss()
     """
 
     def __init__(self, marionette):
@@ -536,7 +540,7 @@ class Alert(object):
     def send_keys(self, *string):
         """Send keys to the currently displayed text input area in an open
         tab modal dialog."""
-        body = {"value": Marionette.convert_keys(*string)}
+        body = {"text": Marionette.convert_keys(*string)}
         self.marionette._send_message("sendKeysToDialog", body)
 
 
@@ -545,9 +549,14 @@ class Marionette(object):
 
     CONTEXT_CHROME = "chrome"  # non-browser content: windows, dialogs, etc.
     CONTEXT_CONTENT = "content"  # browser content: iframes, divs, etc.
-    DEFAULT_SOCKET_TIMEOUT = 65
     DEFAULT_STARTUP_TIMEOUT = 120
     DEFAULT_SHUTDOWN_TIMEOUT = 65  # Firefox will kill hanging threads after 60s
+
+    # Bug 1336953 - Until we can remove the socket timeout parameter it has to be
+    # set a default value which is larger than the longest timeout as defined by the
+    # WebDriver spec. In that case its 300s for page load. Also add another minute
+    # so that slow builds have enough time to send the timeout error to the client.
+    DEFAULT_SOCKET_TIMEOUT = 360
 
     def __init__(self, host="localhost", port=2828, app=None, bin=None,
                  baseurl=None, socket_timeout=DEFAULT_SOCKET_TIMEOUT,
@@ -609,7 +618,7 @@ class Marionette(object):
             return self.instance.profile.profile
 
     def cleanup(self):
-        if self.session:
+        if self.session is not None:
             try:
                 self.delete_session()
             except (errors.MarionetteException, IOError):
@@ -618,7 +627,8 @@ class Marionette(object):
                 # do no further server-side cleanup in this case.
                 pass
         if self.instance:
-            self.instance.close()
+            # stop application and, if applicable, stop emulator
+            self.instance.close(clean=True)
 
     def __del__(self):
         self.cleanup()
@@ -708,7 +718,7 @@ class Marionette(object):
         try:
             if self.protocol < 3:
                 data = {"name": name}
-                if params:
+                if params is not None:
                     data["parameters"] = params
                 self.client.send(data)
                 msg = self.client.receive()
@@ -830,7 +840,7 @@ class Marionette(object):
             else:
                 for i in range(len(val)):
                     typing.append(val[i])
-        return typing
+        return "".join(typing)
 
     def get_permission(self, perm):
         script = """
@@ -1120,31 +1130,60 @@ class Marionette(object):
             # Restore the context as used before the restart
             self.set_context(context)
 
-    def _request_in_app_shutdown(self, shutdown_flags=None):
-        """Terminate the currently running instance from inside the application.
+    def _request_in_app_shutdown(self, *shutdown_flags):
+        """Attempt to quit the currently running instance from inside the
+        application.
 
-        :param shutdown_flags: If specified use additional flags for the shutdown
-                               of the application. Possible values here correspond
-                               to constants in nsIAppStartup: http://mzl.la/1X0JZsC.
+        Duplicate entries in `shutdown_flags` are removed, and
+        `"eAttemptQuit"` is added if no other `*Quit` flags are given.
+        This provides backwards compatible behaviour with earlier
+        Firefoxen.
+
+        This method effectively calls `Services.startup.quit` in Gecko.
+        Possible flag values are listed at http://mzl.la/1X0JZsC.
+
+        :param shutdown_flags: Optional additional quit masks to include.
+            Duplicates are removed, and `"eAttemptQuit"` is added if no
+            flags ending with `"Quit"` are present.
+
+        :throws InvalidArgumentException: If there are multiple
+            `shutdown_flags` ending with `"Quit"`.
+
         """
-        flags = set([])
-        if shutdown_flags:
-            flags.add(shutdown_flags)
 
-        # Trigger a 'quit-application-requested' observer notification so that
-        # components can safely shutdown before quitting the application.
+        # The vast majority of this function was implemented inside
+        # the quit command as part of bug 1337743, and can be
+        # removed from here in Firefox 55 at the earliest.
+
+        # remove duplicates
+        flags = set(shutdown_flags)
+
+        # add eAttemptQuit if there are no *Quits
+        if not any(flag.endswith("Quit") for flag in flags):
+            flags = flags | set(("eAttemptQuit",))
+
+        # Trigger a quit-application-requested observer notification
+        # so that components can safely shutdown before quitting the
+        # application.
         with self.using_context("chrome"):
             canceled = self.execute_script("""
                 Components.utils.import("resource://gre/modules/Services.jsm");
-                let cancelQuit = Components.classes["@mozilla.org/supports-PRBool;1"].
-                                 createInstance(Components.interfaces.nsISupportsPRBool);
+                let cancelQuit = Components.classes["@mozilla.org/supports-PRBool;1"]
+                    .createInstance(Components.interfaces.nsISupportsPRBool);
                 Services.obs.notifyObservers(cancelQuit, "quit-application-requested", null);
                 return cancelQuit.data;
                 """)
             if canceled:
-                raise errors.MarionetteException("Something canceled the quit application request")
+                raise errors.MarionetteException(
+                    "Something cancelled the quit application request")
 
-        self._send_message("quitApplication", {"flags": list(flags)})
+        body = None
+        if len(flags) > 0:
+            body = {"flags": list(flags)}
+
+        # quitApplication was renamed quit in bug 1337743,
+        # and this can safely be renamed when Firefox 56 becomes stable
+        self._send_message("quitApplication", body)
 
     @do_process_check
     def quit(self, in_app=False, callback=None):
@@ -1279,25 +1318,7 @@ class Marionette(object):
         self.wait_for_port(timeout=timeout)
         self.protocol, _ = self.client.connect()
 
-        if capabilities is not None:
-            caps = copy.deepcopy(capabilities)
-        else:
-            caps = {}
-
-        # Bug 1322277 - Override some default capabilities which are defined by
-        # the Webdriver spec but which don't really apply to tests executed with
-        # the Marionette client. Using "desiredCapabilities" here will allow tests
-        # to override the settings via "desiredCapabilities" and requiredCapabilities".
-        if "desiredCapabilities" not in caps:
-            caps.update({
-                "desiredCapabilities": {
-                    "timeouts": {
-                        "page load": 60000,  # webdriver specifies 300000ms
-                    }
-                }
-            })
-
-        body = {"capabilities": caps, "sessionId": session_id}
+        body = {"capabilities": capabilities, "sessionId": session_id}
         resp = self._send_message("newSession", body)
 
         self.session_id = resp["sessionId"]
@@ -1445,6 +1466,8 @@ class Marionette(object):
 
         :returns: a dictionary with x and y
         """
+        warnings.warn("get_window_position() has been deprecated, please use get_window_rect()",
+                      DeprecationWarning)
         return self._send_message(
             "getWindowPosition", key="value" if self.protocol == 1 else None)
 
@@ -1454,7 +1477,34 @@ class Marionette(object):
         :param x: x coordinate for the top left of the window
         :param y: y coordinate for the top left of the window
         """
+        warnings.warn("set_window_position() has been deprecated, please use set_window_rect()",
+                      DeprecationWarning)
         self._send_message("setWindowPosition", {"x": x, "y": y})
+
+    def set_window_rect(self, x=None, y=None, height=None, width=None):
+        """Set the position and size of the current window.
+
+        The supplied width and height values refer to the window outerWidth
+        and outerHeight values, which include scroll bars, title bars, etc.
+
+        An error will be returned if the requested window size would result
+        in the window being in the maximised state.
+
+        :param x: x coordinate for the top left of the window
+        :param y: y coordinate for the top left of the window
+        :param width: The width to resize the window to.
+        :param height: The height to resize the window to.
+        """
+        if (x is None and y is None) and (height is None and width is None):
+            raise errors.InvalidArgumentException("x and y or height and width need values")
+
+        return self._send_message("setWindowRect", {"x": x, "y": y,
+                                                    "height": height,
+                                                    "width": width})
+
+    @property
+    def window_rect(self):
+        return self._send_message("getWindowRect")
 
     @property
     def title(self):
@@ -2140,14 +2190,16 @@ class Marionette(object):
 
         :returns: dictionary representation of current window width and height
         """
+        warnings.warn("window_size property has been deprecated, please use get_window_rect()",
+                      DeprecationWarning)
         return self._send_message("getWindowSize",
                                   key="value" if self.protocol == 1 else None)
 
     def set_window_size(self, width, height):
         """Resize the browser window currently in focus.
 
-        The supplied width and height values refer to the window outerWidth
-        and outerHeight values, which include scroll bars, title bars, etc.
+        The supplied ``width`` and ``height`` values refer to the window `outerWidth`
+        and `outerHeight` values, which include scroll bars, title bars, etc.
 
         An error will be returned if the requested window size would result
         in the window being in the maximised state.
@@ -2156,6 +2208,8 @@ class Marionette(object):
         :param height: The height to resize the window to.
 
         """
+        warnings.warn("set_window_size() has been deprecated, please use set_window_rect()",
+                      DeprecationWarning)
         body = {"width": width, "height": height}
         return self._send_message("setWindowSize", body)
 

@@ -24,6 +24,11 @@ var gBrowserThumbnails = {
   _timeouts: null,
 
   /**
+   * Top site URLs refresh timer.
+   */
+  _topSiteURLsRefreshTimer: null,
+
+  /**
    * List of tab events we want to listen for.
    */
   _tabEvents: ["TabClose", "TabSelect"],
@@ -31,7 +36,7 @@ var gBrowserThumbnails = {
   init: function Thumbnails_init() {
     PageThumbs.addExpirationFilter(this);
     gBrowser.addTabsProgressListener(this);
-    Services.prefs.addObserver(this.PREF_DISK_CACHE_SSL, this, false);
+    Services.prefs.addObserver(this.PREF_DISK_CACHE_SSL, this);
 
     this._sslDiskCacheEnabled =
       Services.prefs.getBoolPref(this.PREF_DISK_CACHE_SSL);
@@ -47,6 +52,10 @@ var gBrowserThumbnails = {
     PageThumbs.removeExpirationFilter(this);
     gBrowser.removeTabsProgressListener(this);
     Services.prefs.removeObserver(this.PREF_DISK_CACHE_SSL, this);
+    if (this._topSiteURLsRefreshTimer) {
+      this._topSiteURLsRefreshTimer.cancel();
+      this._topSiteURLsRefreshTimer = null;
+    }
 
     this._tabEvents.forEach(function(aEvent) {
       gBrowser.tabContainer.removeEventListener(aEvent, this);
@@ -75,6 +84,22 @@ var gBrowserThumbnails = {
       Services.prefs.getBoolPref(this.PREF_DISK_CACHE_SSL);
   },
 
+  clearTopSiteURLCache: function Thumbnails_clearTopSiteURLCache() {
+    if (this._topSiteURLsRefreshTimer) {
+      this._topSiteURLsRefreshTimer.cancel();
+      this._topSiteURLsRefreshTimer = null;
+    }
+    // Delete the defined property
+    delete this._topSiteURLs;
+    XPCOMUtils.defineLazyGetter(this, "_topSiteURLs",
+                                Thumbnails_getTopSiteURLs);
+  },
+
+  notify: function Thumbnails_notify(timer) {
+    gBrowserThumbnails._topSiteURLsRefreshTimer = null;
+    gBrowserThumbnails.clearTopSiteURLCache();
+  },
+
   filterForThumbnailExpiration:
   function Thumbnails_filterForThumbnailExpiration(aCallback) {
     aCallback(this._topSiteURLs);
@@ -92,7 +117,8 @@ var gBrowserThumbnails = {
 
   _capture: function Thumbnails_capture(aBrowser) {
     // Only capture about:newtab top sites.
-    if (this._topSiteURLs.indexOf(aBrowser.currentURI.spec) == -1)
+    if (!aBrowser.currentURI ||
+        this._topSiteURLs.indexOf(aBrowser.currentURI.spec) == -1)
       return;
     this._shouldCapture(aBrowser, function(aResult) {
       if (aResult) {
@@ -124,14 +150,6 @@ var gBrowserThumbnails = {
     PageThumbs.shouldStoreThumbnail(aBrowser, aCallback);
   },
 
-  get _topSiteURLs() {
-    return NewTabUtils.links.getLinks().reduce((urls, link) => {
-      if (link)
-        urls.push(link.url);
-      return urls;
-    }, []);
-  },
-
   _clearTimeout: function Thumbnails_clearTimeout(aBrowser) {
     if (this._timeouts.has(aBrowser)) {
       aBrowser.removeEventListener("scroll", this);
@@ -140,3 +158,22 @@ var gBrowserThumbnails = {
     }
   }
 };
+
+function Thumbnails_getTopSiteURLs() {
+  // The _topSiteURLs getter can be expensive to run, but its return value can
+  // change frequently on new profiles, so as a compromise we cache its return
+  // value as a lazy getter for 1 minute every time it's called.
+  gBrowserThumbnails._topSiteURLsRefreshTimer =
+    Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+  gBrowserThumbnails._topSiteURLsRefreshTimer.initWithCallback(gBrowserThumbnails,
+                                                               60 * 1000,
+                                                               Ci.nsITimer.TYPE_ONE_SHOT);
+  return NewTabUtils.links.getLinks().reduce((urls, link) => {
+    if (link)
+      urls.push(link.url);
+    return urls;
+  }, []);
+}
+
+XPCOMUtils.defineLazyGetter(gBrowserThumbnails, "_topSiteURLs",
+                            Thumbnails_getTopSiteURLs);

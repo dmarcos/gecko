@@ -16,8 +16,8 @@
 #include "nsTableFrame.h"
 #include "celldata.h"
 
-#include "mozilla/RestyleManagerHandle.h"
-#include "mozilla/RestyleManagerHandleInlines.h"
+#include "mozilla/RestyleManager.h"
+#include "mozilla/RestyleManagerInlines.h"
 #include <algorithm>
 
 #include "nsIScriptError.h"
@@ -167,7 +167,7 @@ FindCellProperty(const nsIFrame* aCellFrame,
   nsTArray<int8_t>* propertyData = nullptr;
 
   while (currentFrame) {
-    FrameProperties props = currentFrame->Properties();
+    ConstFrameProperties props = currentFrame->Properties();
     propertyData = props.Get(aFrameProperty);
     bool frameIsTable = (currentFrame->GetType() == nsGkAtoms::tableFrame);
 

@@ -163,7 +163,7 @@ static NPNetscapeFuncs sBrowserFuncs = {
   _construct,
   _getvalueforurl,
   _setvalueforurl,
-  _getauthenticationinfo,
+  nullptr, //NPN GetAuthenticationInfo, not supported
   _scheduletimer,
   _unscheduletimer,
   _popupcontextmenu,
@@ -209,8 +209,6 @@ static void CheckClassInitialized()
 
   NPN_PLUGIN_LOG(PLUGIN_LOG_NORMAL,("NPN callbacks initialized\n"));
 }
-
-NS_IMPL_ISUPPORTS0(nsNPAPIPlugin)
 
 nsNPAPIPlugin::nsNPAPIPlugin()
 {
@@ -559,7 +557,10 @@ NPPExceptionAutoHolder::~NPPExceptionAutoHolder()
 nsPluginThreadRunnable::nsPluginThreadRunnable(NPP instance,
                                                PluginThreadCallback func,
                                                void *userData)
-  : mInstance(instance), mFunc(func), mUserData(userData)
+  : Runnable("nsPluginThreadRunnable"),
+    mInstance(instance),
+    mFunc(func),
+    mUserData(userData)
 {
   if (!sPluginThreadAsyncCallLock) {
     // Failed to create lock, not much we can do here then...
@@ -1370,14 +1371,23 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
   options.setFileAndLine(spec, 0)
          .setVersion(JSVERSION_DEFAULT);
   JS::Rooted<JS::Value> rval(cx);
-  nsJSUtils::EvaluateOptions evalOptions(cx);
+  JS::AutoObjectVector scopeChain(cx);
   if (obj != js::GetGlobalForObjectCrossCompartment(obj) &&
-      !evalOptions.scopeChain.append(obj)) {
+      !scopeChain.append(obj)) {
     return false;
   }
   obj = js::GetGlobalForObjectCrossCompartment(obj);
-  nsresult rv = nsJSUtils::EvaluateString(cx, utf16script, obj, options,
-                                          evalOptions, &rval);
+  nsresult rv = NS_OK;
+  {
+    nsJSUtils::ExecutionContext exec(cx, obj);
+    exec.SetScopeChain(scopeChain);
+    exec.CompileAndExec(options, utf16script);
+    rv = exec.ExtractReturnValue(&rval);
+  }
+
+  if (!JS_WrapValue(cx, &rval)) {
+    return false;
+  }
 
   return NS_SUCCEEDED(rv) &&
          (!result || JSValToNPVariant(npp, cx, rval, result));
@@ -2215,53 +2225,19 @@ _setvalue(NPP npp, NPPVariable variable, void *result)
     }
 
     case NPPVpluginIsPlayingAudio: {
-      bool isMuted = !result;
+      const bool isPlaying = result;
 
       nsNPAPIPluginInstance* inst = (nsNPAPIPluginInstance*) npp->ndata;
       MOZ_ASSERT(inst);
 
-      if (isMuted && !inst->HasAudioChannelAgent()) {
+      if (!isPlaying && !inst->HasAudioChannelAgent()) {
         return NPERR_NO_ERROR;
       }
 
-      nsCOMPtr<nsIAudioChannelAgent> agent;
-      nsresult rv = inst->GetOrCreateAudioChannelAgent(getter_AddRefs(agent));
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return NPERR_NO_ERROR;
-      }
-
-      MOZ_ASSERT(agent);
-
-      if (isMuted) {
-        rv = agent->NotifyStoppedPlaying();
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return NPERR_NO_ERROR;
-        }
+      if (isPlaying) {
+        inst->NotifyStartedPlaying();
       } else {
-
-        dom::AudioPlaybackConfig config;
-        rv = agent->NotifyStartedPlaying(&config,
-                                         dom::AudioChannelService::AudibleState::eAudible);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return NPERR_NO_ERROR;
-        }
-
-        rv = inst->WindowVolumeChanged(config.mVolume, config.mMuted);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return NPERR_NO_ERROR;
-        }
-
-        // Since we only support for muting now, the implementation of suspend
-        // is equal to muting. Therefore, if we have already muted the plugin,
-        // then we don't need to call WindowSuspendChanged() again.
-        if (config.mMuted) {
-          return NPERR_NO_ERROR;
-        }
-
-        rv = inst->WindowSuspendChanged(config.mSuspend);
-        if (NS_WARN_IF(NS_FAILED(rv))) {
-          return NPERR_NO_ERROR;
-        }
+        inst->NotifyStoppedPlaying();
       }
 
       return NPERR_NO_ERROR;
@@ -2274,9 +2250,7 @@ _setvalue(NPP npp, NPPVariable variable, void *result)
         inst->SetDrawingModel((NPDrawingModel)NS_PTR_TO_INT32(result));
         return NPERR_NO_ERROR;
       }
-      else {
-        return NPERR_GENERIC_ERROR;
-      }
+      return NPERR_GENERIC_ERROR;
     }
 #endif
 
@@ -2463,15 +2437,10 @@ _getvalueforurl(NPP instance, NPNURLVariable variable, const char *url,
 
   switch (variable) {
   case NPNURLVProxy:
-    {
-      nsCOMPtr<nsIPluginHost> pluginHostCOM(do_GetService(MOZ_PLUGIN_HOST_CONTRACTID));
-      nsPluginHost *pluginHost = static_cast<nsPluginHost*>(pluginHostCOM.get());
-      if (pluginHost && NS_SUCCEEDED(pluginHost->FindProxyForURL(url, value))) {
-        *len = *value ? strlen(*value) : 0;
-        return NPERR_NO_ERROR;
-      }
-      break;
-    }
+    // NPNURLVProxy is no longer supported.
+    *value = nullptr;
+    return NPERR_GENERIC_ERROR;
+
   case NPNURLVCookie:
     // NPNURLVCookie is no longer supported.
     *value = nullptr;
@@ -2515,70 +2484,6 @@ _setvalueforurl(NPP instance, NPNURLVariable variable, const char *url,
   }
 
   return NPERR_GENERIC_ERROR;
-}
-
-NPError
-_getauthenticationinfo(NPP instance, const char *protocol, const char *host,
-                       int32_t port, const char *scheme, const char *realm,
-                       char **username, uint32_t *ulen, char **password,
-                       uint32_t *plen)
-{
-  if (!NS_IsMainThread()) {
-    NPN_PLUGIN_LOG(PLUGIN_LOG_ALWAYS,("NPN_getauthenticationinfo called from the wrong thread\n"));
-    return NPERR_GENERIC_ERROR;
-  }
-
-  if (!instance || !protocol || !host || !scheme || !realm || !username ||
-      !ulen || !password || !plen)
-    return NPERR_INVALID_PARAM;
-
-  *username = nullptr;
-  *password = nullptr;
-  *ulen = 0;
-  *plen = 0;
-
-  nsDependentCString proto(protocol);
-
-  if (!proto.LowerCaseEqualsLiteral("http") &&
-      !proto.LowerCaseEqualsLiteral("https"))
-    return NPERR_GENERIC_ERROR;
-
-  nsCOMPtr<nsIHttpAuthManager> authManager =
-    do_GetService("@mozilla.org/network/http-auth-manager;1");
-  if (!authManager)
-    return NPERR_GENERIC_ERROR;
-
-  nsNPAPIPluginInstance *inst = static_cast<nsNPAPIPluginInstance*>(instance->ndata);
-  if (!inst)
-    return NPERR_GENERIC_ERROR;
-
-  bool authPrivate = false;
-  if (NS_FAILED(inst->IsPrivateBrowsing(&authPrivate)))
-    return NPERR_GENERIC_ERROR;
-
-  nsIDocument *doc = GetDocumentFromNPP(instance);
-  NS_ENSURE_TRUE(doc, NPERR_GENERIC_ERROR);
-  nsIPrincipal *principal = doc->NodePrincipal();
-
-  nsAutoString unused, uname16, pwd16;
-  if (NS_FAILED(authManager->GetAuthIdentity(proto, nsDependentCString(host),
-                                             port, nsDependentCString(scheme),
-                                             nsDependentCString(realm),
-                                             EmptyCString(), unused, uname16,
-                                             pwd16, authPrivate, principal))) {
-    return NPERR_GENERIC_ERROR;
-  }
-
-  NS_ConvertUTF16toUTF8 uname8(uname16);
-  NS_ConvertUTF16toUTF8 pwd8(pwd16);
-
-  *username = ToNewCString(uname8);
-  *ulen = *username ? uname8.Length() : 0;
-
-  *password = ToNewCString(pwd8);
-  *plen = *password ? pwd8.Length() : 0;
-
-  return NPERR_NO_ERROR;
 }
 
 uint32_t

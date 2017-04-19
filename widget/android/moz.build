@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files("**"):
+    BUG_COMPONENT = ("Core", "Widget: Android")
+
 DIRS += [
     'bindings',
     'fennec',
@@ -40,9 +43,9 @@ UNIFIED_SOURCES += [
     'AndroidUiThread.cpp',
     'ANRReporter.cpp',
     'EventDispatcher.cpp',
+    'GeckoEditableSupport.cpp',
     'GeneratedJNIWrappers.cpp',
     'GfxInfo.cpp',
-    'NativeJSContainer.cpp',
     'nsAndroidProtocolHandler.cpp',
     'nsAppShell.cpp',
     'nsClipboard.cpp',

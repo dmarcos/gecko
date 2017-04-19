@@ -140,10 +140,17 @@ function testService() {
       let prin = ssm.createCodebasePrincipal(uri, {});
       is(service.classifyLocal(uri, tables), test.table,
          `Successful synchronous classification of ${test.url} with TP=${test.trackingProtection}`);
-      let result = service.classify(prin, test.trackingProtection, function(errorCode) {
+      let result = SpecialPowers.doUrlClassify(prin, null, test.trackingProtection, function(errorCode) {
         is(errorCode, test.result,
            `Successful asynchronous classification of ${test.url} with TP=${test.trackingProtection}`);
-        runNextTest();
+
+        // Same as classifyLocal except for the 'async' call.
+        SpecialPowers.doUrlClassifyLocal(uri, tables, function(errorCode, tables) {
+          is(tables, test.table,
+             `Successful asynchronous local classification of ${test.url} with TP=${test.trackingProtection}`);
+          runNextTest();
+        });
+
       });
     }
     runNextTest(resolve);
@@ -157,6 +164,7 @@ SpecialPowers.pushPrefEnv(
             ["urlclassifier.trackingTable", "test-track-simple"],
             ["privacy.trackingprotection.annotate_channels", true]]},
   function() {
+    netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
     classifierHelper.waitForInit()
       .then(() => classifierHelper.addUrlToDB(testData))
       .then(updateSuccess)

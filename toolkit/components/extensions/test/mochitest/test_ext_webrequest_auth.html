@@ -12,16 +12,6 @@
 <script>
 "use strict";
 
-let Assert = {
-  rejects(promise, msg) {
-    return promise.then(() => {
-      ok(false, msg);
-    }, () => {
-      ok(true, msg);
-    });
-  },
-};
-
 let baseUrl = "http://mochi.test:8888/tests/toolkit/components/passwordmgr/test/authenticate.sjs";
 function testXHR(url) {
   return new Promise((resolve, reject) => {
@@ -279,7 +269,7 @@ add_task(function* test_webRequest_auth_nonblocking_forwardAuthProvider() {
         },
       };
     };
-    Services.obs.addObserver(observer, "http-on-modify-request", false);
+    Services.obs.addObserver(observer, "http-on-modify-request");
     sendAsyncMessage("chrome-ready");
   });
   yield chromeScript.promiseOneMessage("chrome-ready");
@@ -334,7 +324,7 @@ add_task(function* test_webRequest_auth_nonblocking_forwardAuthPrompt2() {
         },
       };
     };
-    Services.obs.addObserver(observer, "http-on-modify-request", false);
+    Services.obs.addObserver(observer, "http-on-modify-request");
     sendAsyncMessage("chrome-ready");
   });
   yield chromeScript.promiseOneMessage("chrome-ready");

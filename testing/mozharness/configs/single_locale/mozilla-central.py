@@ -5,7 +5,6 @@ config = {
     "branch": "mozilla-central",
     "en_us_binary_url": "http://archive.mozilla.org/pub/firefox/nightly/latest-mozilla-central",
     "update_channel": "nightly",
-    "latest_mar_dir": '/pub/firefox/nightly/latest-mozilla-central-l10n',
 
     # l10n
     "hg_l10n_base": "https://hg.mozilla.org/l10n-central",
@@ -29,6 +28,7 @@ config = {
         "repo": "https://hg.mozilla.org/mozilla-central",
         "revision": "%(revision)s",
         "dest": "mozilla-central",
+        "clone_upstream_url": "https://hg.mozilla.org/mozilla-unified",
     }],
     # purge options
     'is_automation': True,
