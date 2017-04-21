@@ -58,6 +58,13 @@ static void Output(const char *fmt, ... )
   va_end(ap);
 }
 
+#ifndef XP_WIN
+void OutputDebugString( const char *pchMsg )
+{
+  fprintf( stderr, "%s", pchMsg );
+}
+#endif
+
 //-----------------------------------------------------------------------------
 // Purpose: callback hook for debug text emitted from the Steam API
 //-----------------------------------------------------------------------------
@@ -71,7 +78,7 @@ extern "C" void __cdecl SteamAPIDebugTextHook( int nSeverity, const char *pchDeb
   {
     // place to set a breakpoint for catching API errors
     int x = 3;
-    x = x;
+    x += x;
   }
 }
 

@@ -47,9 +47,17 @@ EXPORTS.steam += [
 ]
 
 FINAL_TARGET_FILES += [
-  '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api.dll',
   'steam_appid.txt'
 ]
+
+if CONFIG['OS_ARCH'] == 'WINNT':
+  FINAL_TARGET_FILES += [
+    '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api.dll',
+  ]
+elif CONFIG['OS_ARCH'] == 'Darwin':
+  FINAL_TARGET_FILES += [
+    '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/osx32/libsteam_api.dylib',
+  ]
 
 Library('vrbrowser')
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
