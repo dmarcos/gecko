@@ -50,3 +50,10 @@ FINAL_TARGET_FILES += [
   '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api.dll',
   'steam_appid.txt'
 ]
+
+Library('vrbrowser')
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+    SOURCES += [
+        '../other-licenses/nsis/Contrib/CityHash/cityhash/city.cpp',
+    ]
+FINAL_LIBRARY = 'xul'
