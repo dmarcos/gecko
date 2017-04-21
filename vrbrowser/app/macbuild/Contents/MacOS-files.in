@@ -1,4 +1,5 @@
 /*.app/***
 /*.dylib
+/steam_appid.txt
 /vrbrowser
 /XUL
