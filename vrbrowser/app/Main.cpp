@@ -23,6 +23,8 @@
 
 mozilla::Bootstrap::UniquePtr gBootstrap;
 
+using namespace mozilla;
+
 #define kDesktopFolder "vrbrowser"
 
 static void Output(const char *fmt, ... )
