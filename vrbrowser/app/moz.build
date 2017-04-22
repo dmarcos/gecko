@@ -29,3 +29,19 @@ elif CONFIG['OS_ARCH'] == 'Darwin':
     '-L' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/osx32',
     'steam_api',
   ]
+
+if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
+    # For sandbox includes and the include dependencies those have
+    LOCAL_INCLUDES += [
+        '/security/sandbox/chromium',
+        '/security/sandbox/chromium-shim',
+    ]
+
+    USE_LIBS += [
+        'sandbox_s',
+    ]
+
+    DELAYLOAD_DLLS += [
+        'winmm.dll',
+        'user32.dll',
+    ]
