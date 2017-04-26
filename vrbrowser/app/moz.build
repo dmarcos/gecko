@@ -21,9 +21,14 @@ JS_PREFERENCE_FILES += [
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
-  OS_LIBS += [
-    CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api',
-  ]
+  if CONFIG['HAVE_64BIT_BUILD']:
+    OS_LIBS += [
+      CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/win64/steam_api64',
+    ]
+  else:
+    OS_LIBS += [
+      CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api',
+    ]
 elif CONFIG['OS_ARCH'] == 'Darwin':
   OS_LIBS += [
     '-L' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/osx32',

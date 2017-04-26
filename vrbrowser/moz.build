@@ -51,9 +51,14 @@ FINAL_TARGET_FILES += [
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
-  FINAL_TARGET_FILES += [
-    '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api.dll',
-  ]
+  if CONFIG['HAVE_64BIT_BUILD']:
+    FINAL_TARGET_FILES += [
+      '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/win64/steam_api64.dll',
+    ]
+  else:
+    FINAL_TARGET_FILES += [
+      '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api.dll',
+    ]
 elif CONFIG['OS_ARCH'] == 'Darwin':
   FINAL_TARGET_FILES += [
     '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/osx32/libsteam_api.dylib',
