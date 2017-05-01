@@ -7,5 +7,5 @@ chrome.jar:
 
   content/shell.xul                     (content/shell.xul)
   content/shell.js                      (content/shell.js)
-  content/vrchrome/*
+  content/vrchrome/					(content/*)
 
