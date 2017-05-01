@@ -10,3 +10,6 @@ pref("devtools.selfxss.count", 5);
 pref("devtools.debugger.remote-enabled", true);
 pref("devtools.chrome.enabled", true);
 pref("devtools.debugger.prompt-connection", false);
+pref("devtools.debugger.prompt-connection", false);
+pref("dom.vr.require-gesture", true);
+pref("full-screen-api.enabled", false);

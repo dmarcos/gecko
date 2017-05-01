@@ -1,0 +1,645 @@
+{
+    "accessors": {
+        "accessor_102": {
+            "bufferView": "bufferView_137",
+            "byteOffset": 7536,
+            "byteStride": 0,
+            "componentType": 5123,
+            "count": 672,
+            "type": "SCALAR"
+        },
+        "accessor_104": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 120576,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 672,
+            "max": [
+                0.0214,
+                -0.0278367,
+                0.0063222
+            ],
+            "min": [
+                -0.0214,
+                -0.0709158,
+                -0.00365567
+            ],
+            "type": "VEC3"
+        },
+        "accessor_106": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 128640,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 672,
+            "max": [
+                1,
+                0.998336,
+                0.999983
+            ],
+            "min": [
+                -1,
+                -0.998336,
+                -0.0576742
+            ],
+            "type": "VEC3"
+        },
+        "accessor_108": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 136704,
+            "byteStride": 8,
+            "componentType": 5126,
+            "count": 672,
+            "max": [
+                0.977046,
+                0.838253
+            ],
+            "min": [
+                0.664878,
+                0.527905
+            ],
+            "type": "VEC2"
+        },
+        "accessor_129": {
+            "bufferView": "bufferView_137",
+            "byteOffset": 0,
+            "byteStride": 0,
+            "componentType": 5123,
+            "count": 2580,
+            "type": "SCALAR"
+        },
+        "accessor_131": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 0,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 2580,
+            "max": [
+                0.0231755,
+                -0.0134768,
+                0.00594675
+            ],
+            "min": [
+                -0.0231755,
+                -0.172165,
+                -0.022725
+            ],
+            "type": "VEC3"
+        },
+        "accessor_133": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 30960,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 2580,
+            "max": [
+                0.995552,
+                0.974688,
+                0.999898
+            ],
+            "min": [
+                -0.995552,
+                -0.999999,
+                -1
+            ],
+            "type": "VEC3"
+        },
+        "accessor_135": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 61920,
+            "byteStride": 8,
+            "componentType": 5126,
+            "count": 2580,
+            "max": [
+                0.662135,
+                0.992119
+            ],
+            "min": [
+                0.0127528,
+                0.0108383
+            ],
+            "type": "VEC2"
+        },
+        "accessor_21": {
+            "bufferView": "bufferView_137",
+            "byteOffset": 6696,
+            "byteStride": 0,
+            "componentType": 5123,
+            "count": 420,
+            "type": "SCALAR"
+        },
+        "accessor_23": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 107136,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 420,
+            "max": [
+                0.00513899,
+                -0.0163673,
+                0.00646013
+            ],
+            "min": [
+                -0.00513899,
+                -0.0266847,
+                0.00317234
+            ],
+            "type": "VEC3"
+        },
+        "accessor_25": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 112176,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 420,
+            "max": [
+                0.993283,
+                0.999907,
+                0.997295
+            ],
+            "min": [
+                -0.993283,
+                -0.967087,
+                -0.0165978
+            ],
+            "type": "VEC3"
+        },
+        "accessor_27": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 117216,
+            "byteStride": 8,
+            "componentType": 5126,
+            "count": 420,
+            "max": [
+                0.163227,
+                0.986901
+            ],
+            "min": [
+                0.0180172,
+                0.841995
+            ],
+            "type": "VEC2"
+        },
+        "accessor_48": {
+            "bufferView": "bufferView_137",
+            "byteOffset": 5160,
+            "byteStride": 0,
+            "componentType": 5123,
+            "count": 768,
+            "type": "SCALAR"
+        },
+        "accessor_50": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 82560,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 768,
+            "max": [
+                0.0234169,
+                -0.0736839,
+                -0.00518232
+            ],
+            "min": [
+                -0.0234169,
+                -0.104016,
+                -0.0191426
+            ],
+            "type": "VEC3"
+        },
+        "accessor_52": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 91776,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 768,
+            "max": [
+                0.999832,
+                0.952505,
+                0.762025
+            ],
+            "min": [
+                -0.999832,
+                -0.943122,
+                -0.995273
+            ],
+            "type": "VEC3"
+        },
+        "accessor_54": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 100992,
+            "byteStride": 8,
+            "componentType": 5126,
+            "count": 768,
+            "max": [
+                0.979402,
+                0.983978
+            ],
+            "min": [
+                0.727275,
+                0.854584
+            ],
+            "type": "VEC2"
+        },
+        "accessor_75": {
+            "bufferView": "bufferView_137",
+            "byteOffset": 8880,
+            "byteStride": 0,
+            "componentType": 5123,
+            "count": 942,
+            "type": "SCALAR"
+        },
+        "accessor_77": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 142080,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 942,
+            "max": [
+                0.00950027,
+                0.00259411,
+                -0.00155437
+            ],
+            "min": [
+                -0.00950027,
+                -0.0163786,
+                -0.0237
+            ],
+            "type": "VEC3"
+        },
+        "accessor_79": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 153384,
+            "byteStride": 12,
+            "componentType": 5126,
+            "count": 942,
+            "max": [
+                0.997657,
+                0.990382,
+                0.0269716
+            ],
+            "min": [
+                -0.997657,
+                -0.99993,
+                -0.977521
+            ],
+            "type": "VEC3"
+        },
+        "accessor_81": {
+            "bufferView": "bufferView_138",
+            "byteOffset": 164688,
+            "byteStride": 8,
+            "componentType": 5126,
+            "count": 942,
+            "max": [
+                0.711018,
+                0.98888
+            ],
+            "min": [
+                0.513103,
+                0.851367
+            ],
+            "type": "VEC2"
+        }
+    },
+    "animations": {},
+    "asset": {
+        "generator": "collada2gltf@cf6371beb0bdc18ba603378d5e40c966da53d385",
+        "premultipliedAlpha": true,
+        "profile": {
+            "api": "WebGL",
+            "version": "1.0.2"
+        },
+        "version": "1.0"
+    },
+    "bufferViews": {
+        "bufferView_137": {
+            "buffer": "controller",
+            "byteLength": 10764,
+            "byteOffset": 0,
+            "target": 34963
+        },
+        "bufferView_138": {
+            "buffer": "controller",
+            "byteLength": 172224,
+            "byteOffset": 10764,
+            "target": 34962
+        }
+    },
+    "buffers": {
+        "controller": {
+            "byteLength": 182988,
+            "type": "arraybuffer",
+            "uri": "controller.bin"
+        }
+    },
+    "extensionsUsed": [
+        "KHR_materials_common"
+    ],
+    "images": {
+        "controller-diffuse": {
+            "name": "controller-diffuse",
+            "uri": "controller-diffuse.jpg"
+        },
+        "controller-specular": {
+            "name": "controller-specular",
+            "uri": "controller-specular.jpg"
+        }
+    },
+    "materials": {
+        "controller-effect": {
+            "extensions": {
+                "KHR_materials_common": {
+                    "doubleSided": false,
+                    "jointCount": 0,
+                    "technique": "PHONG",
+                    "transparent": false,
+                    "values": {
+                        "ambient": [
+                            1,
+                            1,
+                            1,
+                            1
+                        ],
+                        "diffuse": "texture_controller-diffuse",
+                        "emission": [
+                            0,
+                            0,
+                            0,
+                            1
+                        ],
+                        "shininess": 50,
+                        "specular": "texture_controller-specular"
+                    }
+                }
+            },
+            "name": "controller"
+        }
+    },
+    "meshes": {
+        "body-mesh": {
+            "name": "body",
+            "primitives": [
+                {
+                    "attributes": {
+                        "NORMAL": "accessor_133",
+                        "POSITION": "accessor_131",
+                        "TEXCOORD_0": "accessor_135"
+                    },
+                    "indices": "accessor_129",
+                    "material": "controller-effect",
+                    "mode": 4
+                }
+            ]
+        },
+        "grip-mesh": {
+            "name": "grip",
+            "primitives": [
+                {
+                    "attributes": {
+                        "NORMAL": "accessor_52",
+                        "POSITION": "accessor_50",
+                        "TEXCOORD_0": "accessor_54"
+                    },
+                    "indices": "accessor_48",
+                    "material": "controller-effect",
+                    "mode": 4
+                }
+            ]
+        },
+        "menu-mesh": {
+            "name": "menu",
+            "primitives": [
+                {
+                    "attributes": {
+                        "NORMAL": "accessor_25",
+                        "POSITION": "accessor_23",
+                        "TEXCOORD_0": "accessor_27"
+                    },
+                    "indices": "accessor_21",
+                    "material": "controller-effect",
+                    "mode": 4
+                }
+            ]
+        },
+        "touchpad-mesh": {
+            "name": "touchpad",
+            "primitives": [
+                {
+                    "attributes": {
+                        "NORMAL": "accessor_106",
+                        "POSITION": "accessor_104",
+                        "TEXCOORD_0": "accessor_108"
+                    },
+                    "indices": "accessor_102",
+                    "material": "controller-effect",
+                    "mode": 4
+                }
+            ]
+        },
+        "trigger-mesh": {
+            "name": "trigger",
+            "primitives": [
+                {
+                    "attributes": {
+                        "NORMAL": "accessor_79",
+                        "POSITION": "accessor_77",
+                        "TEXCOORD_0": "accessor_81"
+                    },
+                    "indices": "accessor_75",
+                    "material": "controller-effect",
+                    "mode": 4
+                }
+            ]
+        }
+    },
+    "nodes": {
+        "body": {
+            "children": [],
+            "matrix": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1
+            ],
+            "meshes": [
+                "body-mesh"
+            ],
+            "name": "body"
+        },
+        "grip": {
+            "children": [],
+            "matrix": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1
+            ],
+            "meshes": [
+                "grip-mesh"
+            ],
+            "name": "grip"
+        },
+        "menu": {
+            "children": [],
+            "matrix": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1
+            ],
+            "meshes": [
+                "menu-mesh"
+            ],
+            "name": "menu"
+        },
+        "node_5": {
+            "children": [
+                "menu",
+                "grip",
+                "trigger",
+                "touchpad",
+                "body"
+            ],
+            "matrix": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                -1,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1
+            ],
+            "name": "Y_UP_Transform"
+        },
+        "touchpad": {
+            "children": [],
+            "matrix": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1
+            ],
+            "meshes": [
+                "touchpad-mesh"
+            ],
+            "name": "touchpad"
+        },
+        "trigger": {
+            "children": [],
+            "matrix": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                -0.0428566,
+                -0.0069664,
+                1
+            ],
+            "meshes": [
+                "trigger-mesh"
+            ],
+            "name": "trigger"
+        }
+    },
+    "samplers": {
+        "sampler_0": {
+            "magFilter": 9729,
+            "minFilter": 9729,
+            "wrapS": 10497,
+            "wrapT": 10497
+        }
+    },
+    "scene": "defaultScene",
+    "scenes": {
+        "defaultScene": {
+            "nodes": [
+                "node_5"
+            ]
+        }
+    },
+    "skins": {},
+    "textures": {
+        "texture_controller-diffuse": {
+            "format": 6408,
+            "internalFormat": 6408,
+            "sampler": "sampler_0",
+            "source": "controller-diffuse",
+            "target": 3553,
+            "type": 5121
+        },
+        "texture_controller-specular": {
+            "format": 6408,
+            "internalFormat": 6408,
+            "sampler": "sampler_0",
+            "source": "controller-specular",
+            "target": 3553,
+            "type": 5121
+        }
+    }
+}

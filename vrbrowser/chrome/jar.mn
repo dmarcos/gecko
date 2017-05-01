@@ -1,4 +1,4 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
+    # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
@@ -7,9 +7,5 @@ chrome.jar:
 
   content/shell.xul                     (content/shell.xul)
   content/shell.js                      (content/shell.js)
-  content/vrchrome/vrchrome.html        (content/vrchrome/vrchrome.html)
-  content/vrchrome/js/aframe.js         (content/vrchrome/js/aframe.js)
-  content/vrchrome/images/white-hall-sky.jpg        (content/vrchrome/images/white-hall-sky.jpg)
-  content/vrchrome/images/white-hall-floor.png        (content/vrchrome/images/white-hall-floor.png)
-  content/vrchrome/images/white-hall-mountains.png        (content/vrchrome/images/white-hall-mountains.png)
+  content/vrchrome/*
 
