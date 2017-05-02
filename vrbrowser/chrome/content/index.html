@@ -32,15 +32,19 @@
         <a-animation attribute="material.opacity" from="1" to="0" dur="3000" delay="8000" fill="both"></a-animation>
       </a-image>
 
-      <a-entity position="0 1.6 -1.2" scale="2 2 2">
+      <a-entity position="0 1.0 -1.2" scale="2 2 2">
         <a-mixin id="link"
           event-set__mouseenter="_event: mouseenter; scale: 1.2 1.2 1.2"
           event-set__mouseleave="_event: mouseleave; scale: 1 1 1"
           gltf-model="#link"
           simple-link="event: click"></a-mixin>
-        <a-entity mixin="link" position="-0.355 -0.115 0.063" rotation="0 20 0"></a-entity>
-        <a-entity mixin="link" simple-link="href: https://aframe-aincraft.glitch.me/" position="0 -0.115 0"></a-entity>
-        <a-entity mixin="link" position="0.355 -0.115 0.063" rotation="0 -20 0"></a-entity>
+        <a-entity mixin="link" position="-0.355 -0.115 0.063" rotation="0 20 0"
+                  simple-link="href: links/animeui/"
+                  link-portal="bg:assets/links/animeui-bg.png; logo:assets/links/animeui-logo.png"></a-entity>
+        <a-entity mixin="link" simple-link="href: links/animation/" link-portal="bg:assets/links/animation-bg.png; logo:assets/links/animation-logo.png" position="0 -0.115 0"></a-entity>
+        <a-entity mixin="link" position="0.355 -0.115 0.063" rotation="0 -20 0"
+                  link-portal="bg:assets/links/aframe-bg.jpg; logo:assets/links/aframe-logo.png"
+                  simple-link="href: links/aframe/"></a-entity>
         <a-entity mixin="link"
           simple-link="href: links/ablast/"
           link-portal="bg:assets/links/ablast-bg.jpg; logo:assets/links/ablast-logo.png"
