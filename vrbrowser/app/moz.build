@@ -14,7 +14,7 @@ LOCAL_INCLUDES += [
 ]
 
 # Can't link to mozalloc, must have STL, so ...
-DISABLE_STL_WRAPPING = True
+DisableStlWrapping()
 
 JS_PREFERENCE_FILES += [
     'prefs.js',
