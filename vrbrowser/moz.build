@@ -22,6 +22,7 @@ EXPORTS.steam += [
   '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/public/steam/isteammusic.h',
   '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/public/steam/isteammusicremote.h',
   '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/public/steam/isteamnetworking.h',
+  '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/public/steam/isteamparentalsettings.h',
   '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/public/steam/isteamps3overlayrenderer.h',
   '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/public/steam/isteamremotestorage.h',
   '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/public/steam/isteamscreenshots.h',
