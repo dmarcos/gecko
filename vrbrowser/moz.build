@@ -52,7 +52,7 @@ FINAL_TARGET_FILES += [
 
 if CONFIG['OS_ARCH'] == 'WINNT':
   FINAL_TARGET_FILES += [
-    '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/steam_api.dll',
+    '%' + CONFIG['STEAMWORKS_SDK_PATH'] + '/sdk/redistributable_bin/win64/steam_api64.dll',
   ]
 elif CONFIG['OS_ARCH'] == 'Darwin':
   FINAL_TARGET_FILES += [
@@ -60,8 +60,5 @@ elif CONFIG['OS_ARCH'] == 'Darwin':
   ]
 
 Library('vrbrowser')
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
-    SOURCES += [
-        '../other-licenses/nsis/Contrib/CityHash/cityhash/city.cpp',
-    ]
+
 FINAL_LIBRARY = 'xul'
